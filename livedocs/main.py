@@ -3,6 +3,8 @@ from pg import create_pg_cred_dict, parse_pg_query
 from df import run_dataframe_query
 from misc import save_dataframe
 from datetime import datetime
+import os
+
 
 class Lib:
     def __init__(self, bq_creds, pg_creds, secrets_dict, worskpace_id):
@@ -12,6 +14,7 @@ class Lib:
         self.wsid = worskpace_id
         self.bq_client = create_bigquery_client(bq_creds)
         self.curr_run = datetime.now()
+        
 
     
     def parse_bq(query, context, self):
