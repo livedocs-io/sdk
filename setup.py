@@ -13,7 +13,8 @@ setup(
         "requests==2.31.0",
         "psycopg2-binary==2.9.5",
         "jinja2==3.1.2",
-        "pandas==1.4.2"
+        "pandas==1.4.2",
+        "python-dotenv"
     ],
     python_requires=">=3.12",
     classifiers=[

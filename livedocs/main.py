@@ -4,6 +4,7 @@ from df import run_dataframe_query
 from misc import save_dataframe
 from datetime import datetime
 import os
+from dotenv import load_dotenv
 
 
 class Lib:
@@ -21,7 +22,7 @@ class Lib:
         return parse_bq_query(query, context, self.wsid, self.bq_client)
     
     def parse_pg(query,db_name, self):
-
+        load_dotenv()
         return parse_pg_query(query, db_name, self.pg_creds)
     
     def parse_df(query, df):

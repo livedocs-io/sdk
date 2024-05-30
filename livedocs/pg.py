@@ -7,7 +7,6 @@ import requests
 import json
 import os
 
-
 def parse_jinja_expression(expression):
     env = Environment(loader=BaseLoader())
     template = env.from_string(expression)
@@ -76,16 +75,19 @@ def parse_pg_query(query, db_name, pg_creds):
     }
     data = {
         'query': query,
-        'host':current_query_creds.host,
-        'port':current_query_creds.port,
-        'database':current_query_creds.database,
-        'user':current_query_creds.user,
-        'password':current_query_creds.password,
+        'host':current_query_creds["host"],
+        'port':current_query_creds["port"],
+        'database':current_query_creds["database"],
+        'user':current_query_creds["user"],
+        'password':current_query_creds["password"],
     }
-    response = requests.post(os.env.get("PG_BASE_URL_STAGING"), headers=headers, data=json.dumps(data))
-    
+    response = requests.post(os.environ.get("PG_BASE_URL_DEV"), headers=headers, data=json.dumps(data))
+   
     if response.status_code == 200:
-        return response.json()
+        # Convert JSON data to a Pandas DataFrame
+        data = response.json()
+        df = pd.DataFrame(data)
+        return df
     else:
         print(f"Error: {response.status_code} - {response.json().get('error')}")
         return None

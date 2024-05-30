@@ -9,28 +9,35 @@ def parse_jinja_expression(expression):
     variables = template.variable_end_string.split() if template.variable_end_string else []
     return template, variables
 
-def execute_dataframe_query(query, dataframe):
+def preprocess_dataframe(dataframe):
+    # Convert columns with complex types (e.g., lists, dictionaries) to strings
+    for col in dataframe.columns:
+        # If the column contains dicts, lists or other complex types, convert them to strings
+        if dataframe[col].apply(lambda x: isinstance(x, (dict, list, set, tuple))).any():
+            dataframe[col] = dataframe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set, tuple)) else x)
+    return dataframe
+
+def execute_dataframe_query(query,df_name, dataframe):
     try:
-        df = dataframe
-
-        # Convert Polars DataFrame to Pandas DataFrame
-        pandas_df = df.to_pandas()
-
+        # Preprocess the DataFrame to handle unsupported data types
+        dataframe = preprocess_dataframe(dataframe)
+        
         # Create an in-memory SQLite database and load the Pandas DataFrame into it
         conn = sqlite3.connect(':memory:')
-        pandas_df.to_sql('my_table', conn, index=False)
+
+        dataframe.to_sql(df_name, conn, index=False)
 
         # Execute SQL query on the DataFrame
         query_result = pd.read_sql_query(query, conn)
+
+        # Close the connection
+        conn.close()
+
         return query_result
     except Exception as e:
-        print(f"Error executing Polars query: {e}")
+        print(f"Error executing SQL query: {e}")
         return None
 
-def run_dataframe_query(query, dataframe):
-    template, variables = parse_jinja_expression(query)
-    if not variables:
-        return query, None  # No variables to substitute, return original query and None as result
-    rendered_query = template.render()  # Render the template without context (assuming variables are already set in the query)
-    results = execute_dataframe_query(rendered_query, dataframe)
-    return rendered_query, results
+def run_dataframe_query(query,df_name, dataframe):
+    results = execute_dataframe_query(query, df_name, dataframe)
+    return results
