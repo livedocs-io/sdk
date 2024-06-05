@@ -2,6 +2,7 @@ from jinja2 import Environment, BaseLoader
 from google.cloud import bigquery
 from google.oauth2.service_account import Credentials
 import pandas as pd
+import polars as pl
 import os
 import re
 import json
@@ -9,8 +10,7 @@ import json
 def parse_jinja_expression(expression):
     env = Environment(loader=BaseLoader())
     template = env.from_string(expression)
-    
-    # Find all occurrences of '{{ ... }}' blocks in the template source code
+
     variables = re.findall(r'{{\s*(.*?)\s*}}', expression)
 
     return template, variables
@@ -19,7 +19,7 @@ def parse_jinja_expression(expression):
 def evaluate_jinja_expression(expression, context):
     template, variables = parse_jinja_expression(expression)
     if not variables:
-        return expression  # No variables to substitute, return original expression
+        return expression 
     rendered_template = template.render(context)
     return rendered_template
 
@@ -63,7 +63,7 @@ def parse_bq_query(query, context,  wsid, client):
     parsed_exp = evaluate_jinja_expression(query, context)
     parsed_query = split_and_replace_query(parsed_exp, wsid)
     data = run_bigquery_query(parsed_query, client)
-    return data
+    return pl.DataFrame(data) 
 
 def create_bigquery_client(bq_creds):
     # Convert the dictionary to a JSON string

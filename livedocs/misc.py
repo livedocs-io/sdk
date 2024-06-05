@@ -1,4 +1,12 @@
 from google.cloud import bigquery
+import pandas as pd
+import polars as pl
+
+def pandas_to_polars(df: pd.DataFrame) -> pl.DataFrame:
+    return pl.from_pandas(df)
+
+def polars_to_pandas(df: pl.DataFrame) -> pd.DataFrame:
+    return df.to_pandas()
 
 def create_schema_from_dataframe(dataframe):
     schema = []
@@ -22,9 +30,6 @@ def create_schema_from_dataframe(dataframe):
 
 
 def save_dataframe(data, dataset_id, table_id, client):
-    # Define your BigQuery dataset and table ID
-    dataset_id = 'your_dataset_id'
-    table_id = 'your_table_id'
     schema = create_schema_from_dataframe(data)
     # Load data into BigQuery
     job_config = bigquery.LoadJobConfig(schema=schema)

@@ -16,5 +16,5 @@ result = parse_pg_query( "SELECT * FROM ELEMENTS", "db_name", cred )
 
 print(result)
 
-df_res = run_dataframe_query('SELECT * from result' ,"result", result)
+df_res = run_dataframe_query('SELECT id, title from result' ,"result", result)
 print(df_res)

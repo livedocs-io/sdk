@@ -2,6 +2,7 @@ import psycopg2
 from psycopg2 import sql
 from jinja2 import Environment, BaseLoader
 import pandas as pd
+import polars as pl
 import re
 import requests
 import json
@@ -24,12 +25,12 @@ def execute_postgres_query(query, connection):
 def run_postgres_query(query, connection):
     template, variables = parse_jinja_expression(query)
     if not variables:
-        return query, pd.DataFrame()  # No variables to substitute, return original query and an empty DataFrame
+        return query, pl.DataFrame()  # No variables to substitute, return original query and an empty DataFrame
     rendered_query = template.render()  # Render the template without context (assuming variables are already set in the query)
     results, description = execute_postgres_query(rendered_query, connection)
     # Convert results to DataFrame
     columns = [desc[0] for desc in description]
-    results_df = pd.DataFrame(results, columns=columns)
+    results_df = pl.DataFrame(results, columns=columns)
     return rendered_query, results_df
 
 # Connect to PostgreSQL database
@@ -63,13 +64,7 @@ def close_postgres_connection(connection):
 
 def parse_pg_query(query, db_name, pg_creds):
     current_query_creds = pg_creds[db_name]
-    # conn = connect_to_postgres(
-    #     connect_to_postgres.host,
-    #     connect_to_postgres.port,
-    #     connect_to_postgres.database,
-    #     connect_to_postgres.user,
-    #     connect_to_postgres.password,
-    # )
+  
     headers = {
         'Content-Type': 'application/json',
     }
@@ -86,7 +81,7 @@ def parse_pg_query(query, db_name, pg_creds):
     if response.status_code == 200:
         # Convert JSON data to a Pandas DataFrame
         data = response.json()
-        df = pd.DataFrame(data)
+        df = pl.DataFrame(data)
         return df
     else:
         print(f"Error: {response.status_code} - {response.json().get('error')}")
