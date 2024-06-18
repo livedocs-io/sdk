@@ -11,7 +11,11 @@ import os
 def parse_jinja_expression(expression):
     env = Environment(loader=BaseLoader())
     template = env.from_string(expression)
-    variables = template.variable_end_string.split() if template.variable_end_string else []
+    
+    # Determine the undefined variable string
+    undefined_string = template.undefined if hasattr(template, 'undefined') else ''
+    
+    variables = undefined_string.split() if undefined_string else []
     return template, variables
 
 def execute_postgres_query(query, connection):
@@ -24,13 +28,12 @@ def execute_postgres_query(query, connection):
 
 def run_postgres_query(query, connection):
     template, variables = parse_jinja_expression(query)
-    if not variables:
-        return query, pl.DataFrame()  # No variables to substitute, return original query and an empty DataFrame
     rendered_query = template.render()  # Render the template without context (assuming variables are already set in the query)
     results, description = execute_postgres_query(rendered_query, connection)
     # Convert results to DataFrame
     columns = [desc[0] for desc in description]
-    results_df = pl.DataFrame(results, columns=columns)
+    print("results -------------------")
+    results_df = pl.DataFrame(results)
     return rendered_query, results_df
 
 # Connect to PostgreSQL database
@@ -64,36 +67,27 @@ def close_postgres_connection(connection):
 
 def parse_pg_query(query, db_name, pg_creds):
     current_query_creds = pg_creds[db_name]
-  
-    headers = {
-        'Content-Type': 'application/json',
-    }
-    data = {
-        'query': query,
-        'host':current_query_creds["host"],
-        'port':current_query_creds["port"],
-        'database':current_query_creds["database"],
-        'user':current_query_creds["user"],
-        'password':current_query_creds["password"],
-    }
-    response = requests.post(os.environ.get("PG_BASE_URL_DEV"), headers=headers, data=json.dumps(data))
-   
-    if response.status_code == 200:
-        # Convert JSON data to a Pandas DataFrame
-        data = response.json()
-        df = pl.DataFrame(data)
-        return df
-    else:
-        print(f"Error: {response.status_code} - {response.json().get('error')}")
-        return None
-    
+    connection = connect_to_postgres(
+        current_query_creds['connection_details']['host'],
+        current_query_creds['connection_details']['port'],
+        current_query_creds['connection_details']['database'],
+        current_query_creds['connection_details']['user_name'],
+        current_query_creds['connection_details']['password']
+    )
+    print(connection)
+
+    # Execute the query and convert to DataFrame
+    try:
+        rendered_query, results_df = run_postgres_query(query, connection)
+        return results_df
+    finally:
+        close_postgres_connection(connection)
 
 def create_pg_cred_dict(creds_arr):
     creds_dict = {}
     for item in creds_arr:
-        creds_dict[item.db_name] = item
+        creds_dict[item['connection_details']['database']] = item
     return creds_dict
-
 
 def query_flask_server(query, livedocs_env):
     headers = {
@@ -102,7 +96,7 @@ def query_flask_server(query, livedocs_env):
     data = {
         'query': query,
     }
-    response = requests.post(os.env.get("PG_BASE_URL_STAGING"), headers=headers, data=json.dumps(data))
+    response = requests.post(os.getenv("PG_BASE_URL_STAGING"), headers=headers, data=json.dumps(data))
     
     if response.status_code == 200:
         return response.json()

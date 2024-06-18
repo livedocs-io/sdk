@@ -1,5 +1,4 @@
 
-import pandas as pd
 import sqlite3
 from jinja2 import Environment, BaseLoader
 from misc import pandas_to_polars
@@ -23,19 +22,27 @@ def preprocess_polars_dataframe(dataframe):
             dataframe = dataframe.with_column(col, dataframe[col].map(lambda x: str(x) if isinstance(x, (dict, list, set, tuple)) else x, return_dtype=pl.UTF8, skip_nulls=False))
     return dataframe
 
+def transform_to_series( df):
+     
+    if not isinstance(df, pl.DataFrame):
+        raise ValueError("Input must be a Polars DataFrame")
 
+    # Convert the Polars DataFrame to a dictionary
+    result = {col: df[col].to_list() for col in df.columns}
+    return result
 def execute_dataframe_query(query,df_name, dataframe):
     try:
         # Preprocess the DataFrame to handle unsupported data types
-        processed_pl_df = preprocess_polars_dataframe(dataframe)
-
-        result = processed_pl_df.sql(query)
-
-
-
-        # Print the result
-        print(result)
+        # processed_pl_df = transform_to_series(dataframe)
+        # df = pl.LazyFrame(
+        #     processed_pl_df
+        # )
      
+    
+        ctx = pl.SQLContext()
+
+        ctx = ctx.register( df_name,dataframe)
+        result =ctx.execute(query).collect()
 
         return result
     except Exception as e:
@@ -43,5 +50,5 @@ def execute_dataframe_query(query,df_name, dataframe):
         return None
 
 def run_dataframe_query(query,df_name, dataframe):
-    results = execute_dataframe_query(query, df_name, dataframe)
+    results = execute_dataframe_query(query,df_name, dataframe)
     return results

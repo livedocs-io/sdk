@@ -370,9 +370,9 @@ class ChartGenerator:
         int_list = int_series.to_list()
         return int_list
 
-    def generate_highcharts_config(self, data):
-        chart_meta = data.get('chart_meta', {})
-        column_meta = data.get('column_meta', {})
+    def generate_highcharts_config(self,config, data):
+        chart_meta = config.get('chart_meta', {})
+        column_meta = config.get('column_meta', {})
         
         x_axis_label = chart_meta.get('x_axis_label', "")
         y_axis_label = chart_meta.get('y_axis_label', "")
@@ -391,7 +391,8 @@ class ChartGenerator:
             axis_type=axis_type
         )
 
-        internal_data =  pl.read_json("/Users/raahulprem/Documents/master/mission/ods/livedocs/vm-lib/livedocs/test.json")
+        # internal_data =  pl.read_json("/Users/raahulprem/Documents/master/mission/ods/livedocs/vm-lib/livedocs/test.json")
+        internal_data =  data
 
         transformed_internal_data = self.general_data_pre_trasformer(df=internal_data,column_meta=column_meta, chart_type=chart_type)
         series_internal_data = self.transform_to_series(df=transformed_internal_data)

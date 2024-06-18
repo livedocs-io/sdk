@@ -45,7 +45,7 @@ def split_and_replace_query(query, wsid):
         else:
             converted_wsid = wsid.replace("-", "")
 
-            new_source = f"liveocs-dev.s_{converted_wsid}_{current_source}"
+            new_source = f"`livedocs-dev.s_{converted_wsid}_{current_source}`"
         
         # Split the query at the FROM clause
         before_from = query[:match.start()]

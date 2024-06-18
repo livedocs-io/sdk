@@ -3,6 +3,7 @@ import pandas as pd
 import polars as pl
 import requests
 import json
+import os
 
 def get_workspace_connection_details(wsid, auth_token, env):
     # URL of the GraphQL endpoint
@@ -48,12 +49,14 @@ def get_workspace_connection_details(wsid, auth_token, env):
                 type
                 project_id
                 private_key_id
+                private_key
                 client_email
                 client_id
                 auth_uri
                 token_uri
                 auth_provider_x509_cert_url
                 client_x509_cert_url
+                universe_domain
             }
         }
     }
@@ -75,12 +78,17 @@ def get_workspace_connection_details(wsid, auth_token, env):
 
     # Print the response
     if response.status_code == 200:
-        print(response.json()['data']['getWorkspaceConnectionDetails'])
+        # print(response.json())
         return response.json()['data']['getWorkspaceConnectionDetails']
     else:
         print(f"Failed to fetch data. Status code: {response.status_code}")
         print("Response:", response.text)
         return None
+    
+def setup_secrets(secrets_arr):
+    for secret in secrets_arr:
+        os.environ[secret['key']] = secret['value']
+
 
 def pandas_to_polars(df: pd.DataFrame) -> pl.DataFrame:
     return pl.from_pandas(df)

@@ -8,6 +8,7 @@ from chart import ChartGenerator
 import os
 from bq import create_bigquery_client, parse_bq_query
 from misc import get_workspace_connection_details
+from main import Lib
 
 # cred = {
 #         "type": "service_account",
@@ -72,9 +73,75 @@ from misc import get_workspace_connection_details
 
 # parse_bq_query(query2, {}, "ce6a3eab-b5af-4541-8545-8908baa33c40", client)
 
+
+
+
+
+
+
+
+
+
+
+
+
 wsid = '3cdba016-cd57-45bc-a537-6720bf138d76'
-auth_token = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im5wRy1MUi1nblE0NDZUcS1qajBxdSJ9.eyJnaXZlbl9uYW1lIjoiUmFhaHVsIiwiZmFtaWx5X25hbWUiOiJQcmVtIiwibmlja25hbWUiOiJyYWFodWwiLCJuYW1lIjoiUmFhaHVsIFByZW0iLCJwaWN0dXJlIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS01DcmVpWURuekZmanpZUmtvd2lkTmtXSFhPYVlqTjhRdkplTGJ3NUVjMUxoaTZKcz1zOTYtYyIsInVwZGF0ZWRfYXQiOiIyMDI0LTA2LTE2VDEyOjA0OjU2LjEzMVoiLCJlbWFpbCI6InJhYWh1bEBsaXZlZG9jcy5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiaXNzIjoiaHR0cHM6Ly9saXZlZG9jcy1kZXYudXMuYXV0aDAuY29tLyIsImF1ZCI6IndOeGRieWwxS0pzeHZ5NEREQ3ZXaFhsYVFZUDJkY3ptIiwiaWF0IjoxNzE4NTM5NDk4LCJleHAiOjE3MTg3MTIyOTgsInN1YiI6Imdvb2dsZS1vYXV0aDJ8MTAwNjQ5MzU3NTI0ODM5MjAxNTA1Iiwic2lkIjoiaHNhUl9GYUZlRUFmOFNIWW9SaEZLTkZMRTdCMDhCMEQifQ.bI5tH0GKz1qmICnT44u7uziGnYuTS_HyNFQ0dljyvYLWTTNASoBssdd0VFMdWhtGGaJ3zqeuh6E9uiKfLlPOOM-tX9ckDABgagjj6uFkNk31EG2-5ZEZgxC30mEQgiar1_JSFVc2QxSRkMVEHoUeOvxrptRPETI_tYWWjD7_9SZJN9JqkFeZD_4F1LeyvV2M_zIT6HfVArxoJkbSdQNhcf8MiZxlXCCHHxRlTSmbvC6OtTZPQOFVQ5lZ2pnLcedzqwjKjbBYw9ZMfO9wDQCVTvBSIaI5vzak-7qz7TQ4m98iPwE1QQWtGg4knyKQI1jpehNIBFlqOaw9j_1Y-cOWJA'
-response_data = get_workspace_connection_details(wsid=wsid, auth_token=auth_token, env="dev")
+auth_token = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im5wRy1MUi1nblE0NDZUcS1qajBxdSJ9.eyJnaXZlbl9uYW1lIjoiUmFhaHVsIiwiZmFtaWx5X25hbWUiOiJQcmVtIiwibmlja25hbWUiOiJyYWFodWwiLCJuYW1lIjoiUmFhaHVsIFByZW0iLCJwaWN0dXJlIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS01DcmVpWURuekZmanpZUmtvd2lkTmtXSFhPYVlqTjhRdkplTGJ3NUVjMUxoaTZKcz1zOTYtYyIsInVwZGF0ZWRfYXQiOiIyMDI0LTA2LTE4VDEzOjA2OjM0LjgyOVoiLCJlbWFpbCI6InJhYWh1bEBsaXZlZG9jcy5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiaXNzIjoiaHR0cHM6Ly9saXZlZG9jcy1kZXYudXMuYXV0aDAuY29tLyIsImF1ZCI6IndOeGRieWwxS0pzeHZ5NEREQ3ZXaFhsYVFZUDJkY3ptIiwiaWF0IjoxNzE4NzE1OTk2LCJleHAiOjE3MTg4ODg3OTYsInN1YiI6Imdvb2dsZS1vYXV0aDJ8MTAwNjQ5MzU3NTI0ODM5MjAxNTA1Iiwic2lkIjoiaHNhUl9GYUZlRUFmOFNIWW9SaEZLTkZMRTdCMDhCMEQifQ.S2QGEkbZkW764ckblZvnQ-XzLfuea4hRzhBVltMi5YYEFVJqa3BJ6ODG9rz9GBtz4sx43Cp-XT3raySLGjpA5Fp5yy7fLntb2A9pfwhYpTxFCD-oHbmbqRNrKZMGmLv57h8E-jbOL8s8-TTwyFQBhJwhtAFAZ216JJ0QOlCeLSZaHna6YlaCAMucgcT1na-sdXoG-Tygr72UE3cq_2Fi9B6_EvKDJyoF1ALgrzXbCXp73OPTBwmjtcKkW3RU4CmZkzmxNpb1qNl8Tog28HeJGCfAoHmAAYhOICb8bn0fPO0mjSPXC-r-GrYxE65WxtYkDPjvI2WWzQS9mSh8mQd1tg'
+# response_data = get_workspace_connection_details(wsid=wsid, auth_token=auth_token, env="dev")
+
+
+# Initialize the Lib class
+lib = Lib(worskpace_id=wsid, auth_token=auth_token, env="dev")
+
+# print(lib.secrets_arr)
+# print(lib.pg_creds)
+# Example query and usage
+bq_query = '''SELECT * FROM ingestors.epl LIMIT 1000'''
+context = {}  # Define the context if needed
+bq_result = lib.parse_bq(bq_query, context)
+print(bq_result)
+
+pg_query = "SELECT * FROM users"
+db_name = "raahulprem"
+pg_result = lib.parse_pg(pg_query, db_name)
+print(pg_result)
+
+print("\n")
+print("----------------------------------")
+print("\n")
+
+# Assuming you have a DataFrame `df` and a query to run on it
+df_query = "SELECT * FROM df"
+df = pg_result  # Your Polars DataFrame
+df_result = lib.parse_df(df_query,"df", df)
+print(df_result)
+
+# # Save data to BigQuery
+# data_to_save = ...  # Your data to save, e.g., a Pandas or Polars DataFrame
+# dataset_id = "your_dataset_id"
+# table_id = "your_table_id"
+# save_result = lib.save_to_bq(data_to_save, dataset_id, table_id, lib.bq_client)
+# print(save_result)(worskpace_id=workspace_id, auth_token=auth_token, env=env)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # load_dotenv()
 
@@ -92,62 +159,24 @@ response_data = get_workspace_connection_details(wsid=wsid, auth_token=auth_toke
 # print(df_res)
 
 
-# app = Flask(__name__)
-# CORS(app)
-
-# chart_meta =  {
-#     "chart_meta": {
-#         "axis_zooming": True,
-#         "chart_type": "spline",
-#         "x_axis_label": "",
-#         "y_axis_label": "",
-#         "axis_type": "logarithmic",
-#         "pointers": True
-#     },
-#     "column_meta": {
-#         "primaryAxis": {
-#             "column_name": "",
-#             "column_type": "",
-#             "aggregate": "",
-#             "color": "",
-#             "order": "Ascending",
-#             "filter_by": "",
-#             "filter_type": "Show All",
-#             "label": "",
-#             "format": "",
-#             "group_by": ""
-#         },
-#         "secondaryAxis": {
-#             "column_name": "",
-#             "column_type": "",
-#             "aggregate": "average",
-#             "color": "",
-#             "order": "",
-#             "filter_by": "",
-#             "filter_type": "Show All",
-#             "label": "",
-#             "format": "",
-#             "group_by": ""
-#         }
-#     }
-# }
+app = Flask(__name__)
+CORS(app)
 
 
+@app.route('/highcharts', methods=['POST'])
+def highcharts():
+    data = request.get_json()
 
-# @app.route('/highcharts', methods=['POST'])
-# def highcharts():
-#     data = request.get_json()
-
-#     chart_generator = ChartGenerator().generate_highcharts_config(data=data)
-#     return jsonify(chart_generator)
+    chart_generator = ChartGenerator().generate_highcharts_config(config=data, data=bq_result)
+    return jsonify(chart_generator)
  
-# @app.route('/health')
-# def health():
-#     return "This is the health check."
+@app.route('/health')
+def health():
+    return "This is the health check."
 
 
-# if __name__ == '__main__':
-#     app.run(debug=True, port=7000)
+if __name__ == '__main__':
+    app.run(debug=True, port=7000)
 
 
  
