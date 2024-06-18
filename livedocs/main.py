@@ -2,8 +2,9 @@ from bq import  create_bigquery_client, parse_bq_query
 from pg import create_pg_cred_dict, parse_pg_query
 from df import run_dataframe_query
 from misc import save_dataframe, get_workspace_connection_details, setup_secrets
+from chart import ChartGenerator
+from flask import  jsonify
 from datetime import datetime
-import os
 from dotenv import load_dotenv
 
 
@@ -23,6 +24,11 @@ class Lib:
     
     def parse_bq(self, query, context):
         return parse_bq_query(query, context, self.wsid, self.bq_client)
+    
+
+    def parse_chart(self, config, data):
+        chart_generator = ChartGenerator().generate_highcharts_config(config=config, data=data)
+        return jsonify(chart_generator)
     
     def parse_pg(self, query,db_name):
         load_dotenv()
