@@ -45,7 +45,7 @@ def split_and_replace_query(query, wsid):
         else:
             converted_wsid = wsid.replace("-", "")
 
-            new_source = f"liveocs-dev.s_{converted_wsid}_{current_source}"
+            new_source = f"`livedocs-dev.s_{converted_wsid}_{current_source}`"
         
         # Split the query at the FROM clause
         before_from = query[:match.start()]
@@ -53,15 +53,19 @@ def split_and_replace_query(query, wsid):
         
         # Replace the current source with the new source
         new_query = f"{before_from}FROM {new_source} {after_from}"
+        print("new_query")
+        print(new_query)
         
-        return new_query, current_source, new_source
-    
-    return query, None, None
+        return new_query
+    print("query")
+    print(query)
+    return query
 
 
 def parse_bq_query(query, context,  wsid, client):
     parsed_exp = evaluate_jinja_expression(query, context)
-    parsed_query = split_and_replace_query(parsed_exp, wsid)
+    parsed_query= split_and_replace_query(parsed_exp, wsid)
+    print(parse_bq_query)
     data = run_bigquery_query(parsed_query, client)
     return pl.DataFrame(data) 
 
