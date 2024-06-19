@@ -9,14 +9,15 @@ from dotenv import load_dotenv
 
 
 class Lib:
-    def __init__(self, worskpace_id, auth_token, env):
-        connection_details = get_workspace_connection_details(wsid=worskpace_id, auth_token=auth_token, env=env)
+    def __init__(self,  auth_token, env):
+        connection_details = get_workspace_connection_details( auth_token=auth_token, env=env)
+        print(connection_details['workspace_id'])
         setup_secrets(connection_details['workspace_secrets'])
         self.env = env
         self.bq_creds = connection_details['bigquery_creds']
         self.pg_creds = create_pg_cred_dict(connection_details['databases'])
         self.secrets_arr = connection_details['workspace_secrets']
-        self.wsid = worskpace_id
+        self.wsid = connection_details['workspace_id']
         self.bq_client = create_bigquery_client(connection_details['bigquery_creds'])
         self.curr_run = datetime.now()
         

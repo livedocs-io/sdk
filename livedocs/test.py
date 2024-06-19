@@ -86,35 +86,35 @@ from main import Lib
 
 
 wsid = '3cdba016-cd57-45bc-a537-6720bf138d76'
-auth_token = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im5wRy1MUi1nblE0NDZUcS1qajBxdSJ9.eyJnaXZlbl9uYW1lIjoiUmFhaHVsIiwiZmFtaWx5X25hbWUiOiJQcmVtIiwibmlja25hbWUiOiJyYWFodWwiLCJuYW1lIjoiUmFhaHVsIFByZW0iLCJwaWN0dXJlIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jS01DcmVpWURuekZmanpZUmtvd2lkTmtXSFhPYVlqTjhRdkplTGJ3NUVjMUxoaTZKcz1zOTYtYyIsInVwZGF0ZWRfYXQiOiIyMDI0LTA2LTE4VDEzOjA2OjM0LjgyOVoiLCJlbWFpbCI6InJhYWh1bEBsaXZlZG9jcy5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiaXNzIjoiaHR0cHM6Ly9saXZlZG9jcy1kZXYudXMuYXV0aDAuY29tLyIsImF1ZCI6IndOeGRieWwxS0pzeHZ5NEREQ3ZXaFhsYVFZUDJkY3ptIiwiaWF0IjoxNzE4NzE1OTk2LCJleHAiOjE3MTg4ODg3OTYsInN1YiI6Imdvb2dsZS1vYXV0aDJ8MTAwNjQ5MzU3NTI0ODM5MjAxNTA1Iiwic2lkIjoiaHNhUl9GYUZlRUFmOFNIWW9SaEZLTkZMRTdCMDhCMEQifQ.S2QGEkbZkW764ckblZvnQ-XzLfuea4hRzhBVltMi5YYEFVJqa3BJ6ODG9rz9GBtz4sx43Cp-XT3raySLGjpA5Fp5yy7fLntb2A9pfwhYpTxFCD-oHbmbqRNrKZMGmLv57h8E-jbOL8s8-TTwyFQBhJwhtAFAZ216JJ0QOlCeLSZaHna6YlaCAMucgcT1na-sdXoG-Tygr72UE3cq_2Fi9B6_EvKDJyoF1ALgrzXbCXp73OPTBwmjtcKkW3RU4CmZkzmxNpb1qNl8Tog28HeJGCfAoHmAAYhOICb8bn0fPO0mjSPXC-r-GrYxE65WxtYkDPjvI2WWzQS9mSh8mQd1tg'
+auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDA2NDkzNTc1MjQ4MzkyMDE1MDUiLCJ3b3Jrc3BhY2VfaWQiOiIzY2RiYTAxNi1jZDU3LTQ1YmMtYTUzNy02NzIwYmYxMzhkNzYiLCJyZXBvcnRfaWQiOiI2ODlmNjc2NC00ZjU5LTQ1Y2EtODA2Yi1jN2E1OWRhODYzYjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0tNQ3JlaVlEbnpGZmp6WVJrb3dpZE5rV0hYT2FZak44UXZKZUxidzVFYzFMaGk2SnM9czk2LWMiLCJ1c2VyX25hbWUiOiJSYWFodWwgUHJlbSIsImlhdCI6MTcxODgxMjQzNCwiZXhwIjoxNzE4ODQxMjM0fQ.36pFgkw8L2cBPwHYgaaKbeWauJh-hpE-5Q_mHz16Hu4"
 # response_data = get_workspace_connection_details(wsid=wsid, auth_token=auth_token, env="dev")
 
 
 # Initialize the Lib class
-lib = Lib(worskpace_id=wsid, auth_token=auth_token, env="dev")
+lib = Lib( auth_token=auth_token, env="dev")
 
 # print(lib.secrets_arr)
 # print(lib.pg_creds)
 # Example query and usage
-bq_query = '''SELECT * FROM ingestors.epl LIMIT 1000'''
-context = {}  # Define the context if needed
-bq_result = lib.parse_bq(bq_query, context)
-print(bq_result)
+# bq_query = '''SELECT * FROM ingestors.epl LIMIT 1000'''
+# context = {}  # Define the context if needed
+# bq_result = lib.parse_bq(bq_query, context)
+# print(bq_result)
 
-pg_query = "SELECT * FROM users"
-db_name = "raahulprem"
-pg_result = lib.parse_pg(pg_query, db_name)
-print(pg_result)
+# pg_query = "SELECT * FROM users"
+# db_name = "raahulprem"
+# pg_result = lib.parse_pg(pg_query, db_name)
+# print(pg_result)
 
-print("\n")
-print("----------------------------------")
-print("\n")
+# print("\n")
+# print("----------------------------------")
+# print("\n")
 
-# Assuming you have a DataFrame `df` and a query to run on it
-df_query = "SELECT * FROM df"
-df = pg_result  # Your Polars DataFrame
-df_result = lib.parse_df(df_query,"df", df)
-print(df_result)
+# # Assuming you have a DataFrame `df` and a query to run on it
+# df_query = "SELECT * FROM df"
+# df = pg_result  # Your Polars DataFrame
+# df_result = lib.parse_df(df_query,"df", df)
+# print(df_result)
 
 # # Save data to BigQuery
 # data_to_save = ...  # Your data to save, e.g., a Pandas or Polars DataFrame
@@ -159,24 +159,24 @@ print(df_result)
 # print(df_res)
 
 
-app = Flask(__name__)
-CORS(app)
+# app = Flask(__name__)
+# CORS(app)
 
 
-@app.route('/highcharts', methods=['POST'])
-def highcharts():
-    data = request.get_json()
+# @app.route('/highcharts', methods=['POST'])
+# def highcharts():
+#     data = request.get_json()
 
-    chart_generator = ChartGenerator().generate_highcharts_config(config=data, data=bq_result)
-    return jsonify(chart_generator)
+#     chart_generator = ChartGenerator().generate_highcharts_config(config=data, data=bq_result)
+#     return jsonify(chart_generator)
  
-@app.route('/health')
-def health():
-    return "This is the health check."
+# @app.route('/health')
+# def health():
+#     return "This is the health check."
 
 
-if __name__ == '__main__':
-    app.run(debug=True, port=7000)
+# if __name__ == '__main__':
+#     app.run(debug=True, port=7000)
 
 
  
