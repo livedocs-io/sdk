@@ -1,5 +1,4 @@
 from google.cloud import bigquery
-import pandas as pd
 import polars as pl
 import requests
 import json
@@ -35,13 +34,6 @@ def get_workspace_connection_details(auth_token , env):
 def setup_secrets(secrets_arr):
     for secret in secrets_arr:
         os.environ[secret['key']] = secret['value']
-
-
-def pandas_to_polars(df: pd.DataFrame) -> pl.DataFrame:
-    return pl.from_pandas(df)
-
-def polars_to_pandas(df: pl.DataFrame) -> pd.DataFrame:
-    return df.to_pandas()
 
 def create_schema_from_dataframe(dataframe):
     schema = []

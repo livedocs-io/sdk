@@ -1,20 +1,24 @@
 from setuptools import setup
 
+
 setup(
-    name="livedocs-lib",
+    name="livedocs",
     version="0.1",
     packages=["livedocs"],
     description="Ingestor cloud function library",
     author="Livedocs",
     install_requires=[
-        "functions-framework==3.5.0",
         "google-auth==2.29.0",
-        "google-cloud-pubsub==2.21.0",
         "requests==2.31.0",
         "psycopg2-binary==2.9.5",
         "jinja2==3.1.2",
-        "pandas==1.4.2",
-        "python-dotenv"
+        "python-dotenv",
+        "google-cloud-bigquery",
+        "polars==0.20.31",
+        "pandas",
+        "pyarrow",
+        "flask",
+        "db-dtypes"
     ],
     python_requires=">=3.12",
     classifiers=[

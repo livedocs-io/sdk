@@ -1,8 +1,8 @@
-from bq import  BigQueryExecutor
-from pg import PostgresExecutor
-from df import DataFrameQueryExecutor
-from misc import save_dataframe, get_workspace_connection_details, setup_secrets
-from chart import ChartGenerator
+from .bq import  BigQueryExecutor
+from .pg import PostgresExecutor
+from .df import DataFrameQueryExecutor
+from .misc import save_dataframe, get_workspace_connection_details, setup_secrets
+from .chart import ChartGenerator
 from flask import  jsonify
 from datetime import datetime
 from dotenv import load_dotenv

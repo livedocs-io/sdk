@@ -1,6 +1,5 @@
 
 from jinja2 import Environment, BaseLoader
-from misc import pandas_to_polars
 import polars as pl
 
 class DataFrameQueryExecutor:

@@ -1,7 +1,6 @@
 from jinja2 import Environment, BaseLoader
 from google.cloud import bigquery
 from google.oauth2.service_account import Credentials
-import pandas as pd
 import polars as pl
 import re
 import json
