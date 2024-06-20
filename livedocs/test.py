@@ -6,8 +6,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from chart import ChartGenerator
 import os
-from bq import create_bigquery_client, parse_bq_query
-from misc import get_workspace_connection_details
+# from bq import create_bigquery_client, parse_bq_query
+# from misc import get_workspace_connection_details
 from main import Lib
 
 # cred = {
@@ -86,7 +86,7 @@ from main import Lib
 
 
 wsid = '3cdba016-cd57-45bc-a537-6720bf138d76'
-auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDA2NDkzNTc1MjQ4MzkyMDE1MDUiLCJ3b3Jrc3BhY2VfaWQiOiIzY2RiYTAxNi1jZDU3LTQ1YmMtYTUzNy02NzIwYmYxMzhkNzYiLCJyZXBvcnRfaWQiOiI2ODlmNjc2NC00ZjU5LTQ1Y2EtODA2Yi1jN2E1OWRhODYzYjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0tNQ3JlaVlEbnpGZmp6WVJrb3dpZE5rV0hYT2FZak44UXZKZUxidzVFYzFMaGk2SnM9czk2LWMiLCJ1c2VyX25hbWUiOiJSYWFodWwgUHJlbSIsImlhdCI6MTcxODgxMjQzNCwiZXhwIjoxNzE4ODQxMjM0fQ.36pFgkw8L2cBPwHYgaaKbeWauJh-hpE-5Q_mHz16Hu4"
+auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDA2NDkzNTc1MjQ4MzkyMDE1MDUiLCJ3b3Jrc3BhY2VfaWQiOiIzY2RiYTAxNi1jZDU3LTQ1YmMtYTUzNy02NzIwYmYxMzhkNzYiLCJyZXBvcnRfaWQiOiI2ODlmNjc2NC00ZjU5LTQ1Y2EtODA2Yi1jN2E1OWRhODYzYjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0tNQ3JlaVlEbnpGZmp6WVJrb3dpZE5rV0hYT2FZak44UXZKZUxidzVFYzFMaGk2SnM9czk2LWMiLCJ1c2VyX25hbWUiOiJSYWFodWwgUHJlbSIsImlhdCI6MTcxODg3MTY5NSwiZXhwIjoxNzE4OTAwNDk1fQ.VSc4xI9Jw4n9WR5utKa3d1hlDNPXLrVyI5DqzDjL67E"
 # response_data = get_workspace_connection_details(wsid=wsid, auth_token=auth_token, env="dev")
 
 
@@ -96,25 +96,28 @@ lib = Lib( auth_token=auth_token, env="dev")
 # print(lib.secrets_arr)
 # print(lib.pg_creds)
 # Example query and usage
-# bq_query = '''SELECT * FROM ingestors.epl LIMIT 1000'''
-# context = {}  # Define the context if needed
-# bq_result = lib.parse_bq(bq_query, context)
-# print(bq_result)
+bq_query = '''SELECT * FROM ingestors.epl LIMIT 1000'''
+context = {}  # Define the context if needed
+bq_result = lib.run_bigquery(bq_query, context)
+print(bq_result)
 
 # pg_query = "SELECT * FROM users"
 # db_name = "raahulprem"
-# pg_result = lib.parse_pg(pg_query, db_name)
+# pg_result = lib.run_postgres(pg_query, db_name)
 # print(pg_result)
 
-# print("\n")
-# print("----------------------------------")
-# print("\n")
+print("\n")
+print("----------------------------------")
+print("\n")
 
-# # Assuming you have a DataFrame `df` and a query to run on it
-# df_query = "SELECT * FROM df"
-# df = pg_result  # Your Polars DataFrame
-# df_result = lib.parse_df(df_query,"df", df)
-# print(df_result)
+# Assuming you have a DataFrame `df` and a query to run on it
+df_query = "SELECT * FROM df"
+df = bq_result  # Your Polars DataFrame
+df_result = lib.run_dataframe(df_query,"df", df)
+print(df_result)
+
+
+# chart = lib.run_chart(config={}, data=df_result)
 
 # # Save data to BigQuery
 # data_to_save = ...  # Your data to save, e.g., a Pandas or Polars DataFrame
