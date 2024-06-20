@@ -5,81 +5,28 @@ import requests
 import json
 import os
 
-def get_workspace_connection_details(wsid, auth_token, env):
+def get_workspace_connection_details(auth_token , env):
     # URL of the GraphQL endpoint
     url = {
-        "dev": 'http://0.0.0.0:4000/',
-        "staging" : "https://staging.livedocs.com/",
-        "prod": "https://api.livedocs.com/"
+        "dev": 'http://0.0.0.0:4000/api/credentials',
+        "staging" : "https://staging.livedocs.com/api/credentials",
+        "prod": "https://api.livedocs.com/api/credentials"
     }
 
-    # Headers, including your authorization token
+  
     headers = {
-        'authorization': auth_token,
+        'authorization': auth_token ,
         'content-type': 'application/json'
     }
 
-    # GraphQL query
-    query = """
-    query GetWorkspaceConnectionDetails($wsid: String!) {
-        getWorkspaceConnectionDetails(wsid: $wsid) {
-            workspace_secrets {
-                id
-                key
-                value
-            }
-            databases {
-                id
-                name
-                database_type
-                connection_details {
-                    password
-                    host
-                    port
-                    database
-                    user_name
-                    certificate
-                    root_certificate
-                    order
-                    ssl_key
-                    ssl_password
-                }
-            }
-            bigquery_creds {
-                type
-                project_id
-                private_key_id
-                private_key
-                client_email
-                client_id
-                auth_uri
-                token_uri
-                auth_provider_x509_cert_url
-                client_x509_cert_url
-                universe_domain
-            }
-        }
-    }
-    """
-
-    # Variables for the query
-    variables = {
-        'wsid': wsid
-    }
-
-    # Payload for the request
-    payload = {
-        'query': query,
-        'variables': variables
-    }
 
     # Make the request
-    response = requests.post(url[env], headers=headers, data=json.dumps(payload), verify=False)
+    response = requests.get(url[env], headers=headers, verify=False)
 
     # Print the response
     if response.status_code == 200:
         # print(response.json())
-        return response.json()['data']['getWorkspaceConnectionDetails']
+        return response.json()['data']
     else:
         print(f"Failed to fetch data. Status code: {response.status_code}")
         print("Response:", response.text)
@@ -125,3 +72,4 @@ def save_dataframe(data, dataset_id, table_id, client):
         data, f"{dataset_id}.{table_id}", job_config=job_config
     )
     job.result() 
+

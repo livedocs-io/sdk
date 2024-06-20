@@ -1,54 +1,46 @@
 
-import sqlite3
 from jinja2 import Environment, BaseLoader
 from misc import pandas_to_polars
 import polars as pl
 
-def parse_jinja_expression(expression):
-    env = Environment(loader=BaseLoader())
-    template = env.from_string(expression)
-    variables = template.variable_end_string.split() if template.variable_end_string else []
-    return template, variables
+class DataFrameQueryExecutor:
+    def __init__(self):
+        self.env = Environment(loader=BaseLoader())
 
-def preprocess_dataframe(dataframe):
-    for col in dataframe.columns:
-        if dataframe[col].apply(lambda x: isinstance(x, (dict, list, set, tuple))).any():
-            dataframe[col] = dataframe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set, tuple)) else x)
-    return dataframe
+    def parse_jinja_expression(self, expression):
+        template = self.env.from_string(expression)
+        variables = template.variable_end_string.split() if template.variable_end_string else []
+        return template, variables
 
-def preprocess_polars_dataframe(dataframe):
-    for col in dataframe.columns:
-        if dataframe[col].dtype == pl.Object and any(dataframe[col].apply(lambda x: isinstance(x, (dict, list, set, tuple)), return_dtype=pl.Boolean, skip_nulls=False)):
-            dataframe = dataframe.with_column(col, dataframe[col].map(lambda x: str(x) if isinstance(x, (dict, list, set, tuple)) else x, return_dtype=pl.UTF8, skip_nulls=False))
-    return dataframe
+    def preprocess_dataframe(self, dataframe):
+        for col in dataframe.columns:
+            if dataframe[col].apply(lambda x: isinstance(x, (dict, list, set, tuple))).any():
+                dataframe[col] = dataframe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set, tuple)) else x)
+        return dataframe
 
-def transform_to_series( df):
-     
-    if not isinstance(df, pl.DataFrame):
-        raise ValueError("Input must be a Polars DataFrame")
+    def preprocess_polars_dataframe(self, dataframe):
+        for col in dataframe.columns:
+            if dataframe[col].dtype == pl.Object and any(dataframe[col].apply(lambda x: isinstance(x, (dict, list, set, tuple)), return_dtype=pl.Boolean, skip_nulls=False)):
+                dataframe = dataframe.with_column(col, dataframe[col].map(lambda x: str(x) if isinstance(x, (dict, list, set, tuple)) else x, return_dtype=pl.UTF8, skip_nulls=False))
+        return dataframe
 
-    # Convert the Polars DataFrame to a dictionary
-    result = {col: df[col].to_list() for col in df.columns}
-    return result
-def execute_dataframe_query(query,df_name, dataframe):
-    try:
-        # Preprocess the DataFrame to handle unsupported data types
-        # processed_pl_df = transform_to_series(dataframe)
-        # df = pl.LazyFrame(
-        #     processed_pl_df
-        # )
-     
-    
-        ctx = pl.SQLContext()
+    def transform_to_series(self, df):
+        if not isinstance(df, pl.DataFrame):
+            raise ValueError("Input must be a Polars DataFrame")
 
-        ctx = ctx.register( df_name,dataframe)
-        result =ctx.execute(query).collect()
-
+        result = {col: df[col].to_list() for col in df.columns}
         return result
-    except Exception as e:
-        print(f"Error executing SQL query: {e}")
-        return None
 
-def run_dataframe_query(query,df_name, dataframe):
-    results = execute_dataframe_query(query,df_name, dataframe)
-    return results
+    def execute_dataframe_query(self, query, df_name, dataframe):
+        try:
+            ctx = pl.SQLContext()
+            ctx = ctx.register(df_name, dataframe)
+            result = ctx.execute(query).collect()
+            return result
+        except Exception as e:
+            print(f"Error executing SQL query: {e}")
+            return None
+
+    def run_dataframe_query(self, query, df_name, dataframe):
+        results = self.execute_dataframe_query(query, df_name, dataframe)
+        return results
