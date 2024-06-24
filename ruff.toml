@@ -1,0 +1,2 @@
+# Set the Python version to 3.12
+target-version = "py312"
