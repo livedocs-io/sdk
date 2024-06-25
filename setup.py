@@ -1,6 +1,5 @@
 from setuptools import setup
 
-
 setup(
     name="livedocs",
     version="0.1",
@@ -18,7 +17,7 @@ setup(
         "pandas",
         "pyarrow",
         "flask",
-        "db-dtypes"
+        "db-dtypes",
     ],
     python_requires=">=3.12",
     classifiers=[
