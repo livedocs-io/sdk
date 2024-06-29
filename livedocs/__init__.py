@@ -1,3 +1,3 @@
-from .query import query
+from .main import Livedocs
 
-__all__ = ["query"]
+__all__ = ["Livedocs"]

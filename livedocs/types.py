@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict
+from typing import Optional, TypedDict, List
 from enum import Enum
 
 
@@ -9,7 +9,6 @@ class DatabaseType(Enum):
     Postgres = "Postgres"
     Redshift = "Redshift"
     Snowflake = "Snowflake"
-    files = "files"
 
 
 class ElementDatasourceType(Enum):
@@ -17,7 +16,6 @@ class ElementDatasourceType(Enum):
     database_table = "database_table"
     dataframe = "dataframe"
     file = "file"
-    managed = "managed"
 
 
 class DatabaseInfo(TypedDict):
@@ -41,6 +39,8 @@ class FileInfo(TypedDict):
     file_id: str
     file_name: str
     file_url: str
+    file_has_layers: bool
+    layer_name: Optional[str]
 
 
 class ElementDataSource(TypedDict):
@@ -49,6 +49,24 @@ class ElementDataSource(TypedDict):
     dataframeInfo: Optional[DataframeInfo]
     fileInfo: Optional[FileInfo]
     sourceType: ElementDatasourceType
+
+
+class DecryptedSecret(TypedDict):
+    id: str
+    key: str
+    value: str
+
+
+class DatabaseConnector(TypedDict):
+    database_connector_id: str
+    database_name: str
+    connection_details: dict[str, str]
+
+
+class Credentials(TypedDict):
+    workspace_id: str
+    workspace_secrets: List[DecryptedSecret]
+    databases: List[DatabaseConnector]
 
 
 __all__ = [
