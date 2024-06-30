@@ -1,7 +1,16 @@
 from livedocs.manager.duckdb import DuckDBSingleton
-from livedocs.types import Credentials, ElementDataSource, ElementDatasourceType
+from livedocs.types import (
+    Credentials,
+    DatabaseType,
+    ElementDataSource,
+    ElementDatasourceType,
+)
 import pandas as pd
+import polars as pl
 import requests
+import json
+
+from livedocs.utils.postgres import create_postgres_connection_url
 
 """
 This is initialized in the prelude cell of the notebook like this:
@@ -30,7 +39,6 @@ class Livedocs:
                 return "unknown result"
 
     def _fetch_credentials(self, report_id: str, token: str) -> Credentials:
-        print(report_id)
         response = requests.get(
             f"http://localhost:4000/v1/credentials/{report_id}",
             headers={"authorization": token},
@@ -45,17 +53,51 @@ class Livedocs:
     def _query_database(
         self, query: str, datasource: ElementDataSource
     ) -> pd.DataFrame:
-        print(self._credentials)
-        connection_string = "callGetConnectionStringFromCredentials"
-        alias = "alias"
+        match datasource["databaseInfo"]["database_type"]:
+            case DatabaseType.Postgres:
+                return self._query_postgres(query, datasource)
+            case _:
+                return "unknown result"
 
-        # Attach if not already attached
-        self._duckdb.attach_postgres(connection_string, alias)
+    def _query_postgres(
+        self, query: str, datasource: ElementDataSource
+    ) -> pl.DataFrame:
+        try:
+            db_connector_id = datasource["databaseInfo"]["database_connector_id"]
+            credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
 
-        # Execute the query
-        result = self._duckdb.conn.execute(
-            f"SELECT * FROM {alias}.({query})"
-        ).fetch_df()
+        try:
+            parsed_credentials = json.loads(credentials["connection_details"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            connection_string = create_postgres_connection_url(parsed_credentials)
+        except KeyError as e:
+            raise ValueError(f"Missing required database connection detail: {e}")
+
+        # This is to prevent a potential conflict with aliases in the database
+        alias = parsed_credentials["database"] + "_" + db_connector_id.replace("-", "")
+
+        try:
+            self._duckdb.attach_postgres(connection_string, alias)
+        except Exception as e:
+            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
+
+        # Replace table names with full table name
+        full_table_name = query.replace("FROM ", f"FROM {alias}.").replace(
+            "from ", f"from {alias}."
+        )
+
+        try:
+            pandas_df = self._duckdb.conn.execute(
+                f"SELECT * FROM ({full_table_name}) AS subquery"
+            ).fetch_df()
+            result = pl.from_pandas(pandas_df)
+        except Exception as e:
+            raise RuntimeError(f"Error executing query: {e}")
 
         return result
 
