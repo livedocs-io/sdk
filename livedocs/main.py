@@ -1,15 +1,15 @@
+import json
+from typing import Dict
+
+from livedocs.utils.common import _fetch_credentials, _fetch_file_manifest
+import polars as pl
+
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
-    Credentials,
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
 )
-import pandas as pd
-import polars as pl
-import requests
-import json
-
 from livedocs.utils.postgres import create_postgres_connection_url
 
 """
@@ -21,43 +21,53 @@ This is initialized in the prelude cell of the notebook like this:
 
 
 class Livedocs:
+    """
+    On initialization this calls the /v1/credentials endpoint to fetch the
+    DB connection credentials and secrets for the report.
+    """
+
     def __init__(self, report_id: str, token: str):
         self._duckdb = DuckDBSingleton()
-        self._credentials = self._fetch_credentials(report_id, token)
+        self._report_id = report_id
+        self._token = token
+        self._credentials = _fetch_credentials(report_id, token)
+        self._file_manifests: Dict[str, str] = {}
 
-    def query(self, query: str, datasource: ElementDataSource) -> pd.DataFrame:
+    """
+    Central query function. Give it a query and a datasource, and it will return 
+    a Polars DataFrame. Simple. 
+    """
+
+    def query(self, query: str, datasource: ElementDataSource) -> pl.DataFrame:
         match datasource["sourceType"]:
             case ElementDatasourceType.database:
                 return self._query_database(query, datasource)
             case ElementDatasourceType.file:
-                return "file result"
+                return self._query_file(query, datasource)
             case ElementDatasourceType.dataframe:
-                return "df result"
+                return self._query_dataframe(query, datasource)
             case ElementDatasourceType.database_table:
                 return "db table result"
             case _:
                 return "unknown result"
 
-    def _fetch_credentials(self, report_id: str, token: str) -> Credentials:
-        response = requests.get(
-            f"http://localhost:4000/v1/credentials/{report_id}",
-            headers={"authorization": token},
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(
-                f"Failed to fetch credentials. Status code: {response.status_code}"
-            )
+    """
+    Query a database. Currently only supports Postgres. 
+    """
 
     def _query_database(
         self, query: str, datasource: ElementDataSource
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         match datasource["databaseInfo"]["database_type"]:
             case DatabaseType.Postgres:
                 return self._query_postgres(query, datasource)
             case _:
                 return "unknown result"
+
+    """
+    Query a Postgres database. Attaches the database to DuckDB and executes the 
+    query under the alias same as the database name.
+    """
 
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
@@ -92,47 +102,77 @@ class Livedocs:
         )
 
         try:
-            pandas_df = self._duckdb.conn.execute(
+            result = self._duckdb.conn.sql(
                 f"SELECT * FROM ({full_table_name}) AS subquery"
-            ).fetch_df()
-            result = pl.from_pandas(pandas_df)
+            ).pl()
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
 
         return result
 
-    # def __init__(self, auth_token, env):
-    #     connection_details = get_workspace_connection_details(
-    #         auth_token=auth_token, env=env
-    #     )
-    #     setup_secrets(connection_details["workspace_secrets"])
-    #     self.env = env
-    #     self.dataFrameExecutor = DataFrameQueryExecutor()
-    #     self.chart_generator = ChartGenerator()
-    #     self.postgresParser = PostgresExecutor()
-    #     self.bigqueryParser = BigQueryExecutor(connection_details["bigquery_creds"])
-    #     self.pg_creds = self.postgresParser.create_pg_cred_dict(
-    #         connection_details["databases"]
-    #     )
-    #     self.secrets_arr = connection_details["workspace_secrets"]
-    #     self.wsid = connection_details["workspace_id"]
-    #     self.curr_run = datetime.now()
+    """
+    Query a file. Currently supports CSV and XLSX files only. 
+    """
 
-    # def run_bigquery(self, query, context):
-    #     return self.bigqueryParser.parse_bq_query(query, context, self.wsid)
+    def _query_file(self, query: str, datasource: ElementDataSource) -> pl.DataFrame:
+        try:
+            file_info = datasource["fileInfo"]
+            signed_url = self._get_signed_url(file_info["file_id"])
+
+            if file_info["file_type"] == "csv":
+                query_with_url = query.replace(
+                    file_info["file_name"], f"read_csv_auto('{signed_url}')"
+                )
+            elif file_info["file_type"] in ["xls", "xlsx"]:
+                sheet_name = file_info.get("layer_name", "Sheet1")
+                query_with_url = query.replace(
+                    file_info["file_name"],
+                    f"st_read('{signed_url}', layer='{sheet_name}')",
+                )
+            else:
+                raise ValueError(f"Unsupported file type: {file_info['file_type']}")
+
+            result = self._duckdb.conn.sql(query_with_url).pl()
+            return result
+
+        except KeyError as e:
+            raise ValueError(f"Missing required information in datasource: {e}")
+        except Exception as e:
+            raise RuntimeError(f"An error occurred while querying the file: {e}")
+
+    """
+    Query a DataFrame. Currently only supports Pandas and Polars DataFrames. 
+    """
+
+    def _query_dataframe(
+        self, query: str, datasource: ElementDataSource
+    ) -> pl.DataFrame:
+        dataframe_info = datasource.get("dataframeInfo")
+        if dataframe_info is None:
+            raise ValueError("Invalid ElementDataSource")
+
+        try:
+            result = self._duckdb.conn.sql(query).pl()
+        except Exception as e:
+            raise RuntimeError(f"An error occurred while querying the DataFrame: {e}")
+
+        return result
+
+    """
+    Fetches a signed URL from the /v1/manifest endpoint for a file and returns it. 
+    It also stores the signed URL in a dictionary for future use. 
+    """
+
+    def _get_signed_url(self, file_id: str) -> str:
+        if file_id in self._file_manifests:
+            return self._file_manifests[file_id]
+        else:
+            manifest = _fetch_file_manifest(file_id, self._report_id, self._token)
+            self._file_manifests[file_id] = manifest["signed_url"]
+            return manifest["signed_url"]
 
     # def run_chart(self, config, data):
     #     chart_config = self.chart_generator.generate_highcharts_config(
     #         config=config, data=data
     #     )
     #     return jsonify(chart_config)
-
-    # def run_postgres(self, query, db_name):
-    #     # load_dotenv()
-    #     return self.postgresParser.parse_pg_query(query, db_name, self.pg_creds)
-
-    # def run_dataframe(self, query, df_name, df):
-    #     return self.dataFrameExecutor.run_dataframe_query(query, df_name, df)
-
-    # def save_to_bq(self, data, dataset_id, table_id, client):
-    #     return save_dataframe(data, dataset_id, table_id, client)

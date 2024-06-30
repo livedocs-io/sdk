@@ -38,7 +38,7 @@ class DataframeInfo(TypedDict):
 class FileInfo(TypedDict):
     file_id: str
     file_name: str
-    file_url: str
+    file_type: str
     file_has_layers: bool
     layer_name: Optional[str]
 

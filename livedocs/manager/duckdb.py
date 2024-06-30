@@ -9,9 +9,15 @@ class DuckDBSingleton:
             cls._instance = super(DuckDBSingleton, cls).__new__(cls)
             cls._instance.conn = duckdb.connect(":memory:")
 
-            # Load necessary extensions
             cls._instance.conn.install_extension("postgres")
             cls._instance.conn.load_extension("postgres")
+
+            cls._instance.conn.install_extension("httpfs")
+            cls._instance.conn.load_extension("httpfs")
+
+            cls._instance.conn.install_extension("spatial")
+            cls._instance.conn.load_extension("spatial")
+
             cls._instance.postgres_connections = {}
         return cls._instance
 
