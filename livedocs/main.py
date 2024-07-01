@@ -1,4 +1,7 @@
+import os
 import json
+import requests
+import tempfile
 from typing import Dict
 
 from livedocs.utils.common import _fetch_credentials, _fetch_file_manifest
@@ -30,6 +33,7 @@ class Livedocs:
         self._duckdb = DuckDBSingleton()
         self._report_id = report_id
         self._token = token
+        self._file_dir = tempfile.mkdtemp()
         self._credentials = _fetch_credentials(report_id, token)
         self._file_manifests: Dict[str, str] = {}
 
@@ -114,25 +118,32 @@ class Livedocs:
     Query a file. Currently supports CSV and XLSX files only. 
     """
 
-    def _query_file(self, query: str, datasource: ElementDataSource) -> pl.DataFrame:
+    def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         try:
             file_info = datasource["fileInfo"]
-            signed_url = self._get_signed_url(file_info["file_id"])
+            file_id = file_info["file_id"]
+            file_type = file_info["file_type"]
+            file_name = file_info["file_name"]
 
-            if file_info["file_type"] == "csv":
-                query_with_url = query.replace(
-                    file_info["file_name"], f"read_csv_auto('{signed_url}')"
+            temp_file_path = os.path.join(self._file_dir, f"{file_name}")
+
+            if not os.path.exists(temp_file_path):
+                signed_url = self._get_signed_url(file_id)
+                self._download_file(signed_url, temp_file_path)
+
+            if file_type == "csv":
+                query_with_path = query.replace(
+                    file_name, f"read_csv_auto('{temp_file_path}')"
                 )
-            elif file_info["file_type"] in ["xls", "xlsx"]:
+            elif file_type in ["xls", "xlsx"]:
                 sheet_name = file_info.get("layer_name", "Sheet1")
-                query_with_url = query.replace(
-                    file_info["file_name"],
-                    f"st_read('{signed_url}', layer='{sheet_name}')",
+                query_with_path = query.replace(
+                    file_name, f"st_read('{temp_file_path}', layer='{sheet_name}')"
                 )
             else:
-                raise ValueError(f"Unsupported file type: {file_info['file_type']}")
+                raise ValueError(f"Unsupported file type: {file_type}")
 
-            result = self._duckdb.conn.sql(query_with_url).pl()
+            result = self._duckdb.conn.sql(query_with_path).pl()
             return result
 
         except KeyError as e:
@@ -170,6 +181,12 @@ class Livedocs:
             manifest = _fetch_file_manifest(file_id, self._report_id, self._token)
             self._file_manifests[file_id] = manifest["signed_url"]
             return manifest["signed_url"]
+
+    def _download_file(self, signed_url, file_path):
+        response = requests.get(signed_url)
+        response.raise_for_status()
+        with open(file_path, "wb") as f:
+            f.write(response.content)
 
     # def run_chart(self, config, data):
     #     chart_config = self.chart_generator.generate_highcharts_config(
