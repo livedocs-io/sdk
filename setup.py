@@ -1,9 +1,9 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 setup(
     name="livedocs",
     version="0.1",
-    packages=["livedocs"],
+    packages=find_packages(exclude=["tests"]),
     description="Ingestor cloud function library",
     author="Livedocs",
     install_requires=[

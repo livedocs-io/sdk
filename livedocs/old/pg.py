@@ -1,11 +1,8 @@
 import psycopg2
-from psycopg2 import sql
 from jinja2 import Environment, BaseLoader
 import polars as pl
 import re
-import requests
-import json
-import os
+
 
 class PostgresExecutor:
     def __init__(self):
@@ -13,7 +10,7 @@ class PostgresExecutor:
 
     def parse_jinja_expression(self, expression):
         template = self.env.from_string(expression)
-        undefined_string = template.undefined if hasattr(template, 'undefined') else ''
+        undefined_string = template.undefined if hasattr(template, "undefined") else ""
         variables = undefined_string.split() if undefined_string else []
         return template, variables
 
@@ -35,15 +32,11 @@ class PostgresExecutor:
 
     def connect_to_postgres(self, host, port, database, user, password):
         return psycopg2.connect(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
+            host=host, port=port, database=database, user=user, password=password
         )
 
     def choose_db_creds(self, query, creds):
-        from_clause_pattern = r'\bFROM\b\s+([`a-zA-Z0-9_\-\.]+)'
+        from_clause_pattern = r"\bFROM\b\s+([`a-zA-Z0-9_\-\.]+)"
         match = re.search(from_clause_pattern, query, re.IGNORECASE)
         if match:
             current_source = match.group(1)
@@ -57,11 +50,11 @@ class PostgresExecutor:
     def parse_pg_query(self, query, db_name, pg_creds):
         current_query_creds = pg_creds[db_name]
         connection = self.connect_to_postgres(
-            current_query_creds['connection_details']['host'],
-            current_query_creds['connection_details']['port'],
-            current_query_creds['connection_details']['database'],
-            current_query_creds['connection_details']['user_name'],
-            current_query_creds['connection_details']['password']
+            current_query_creds["connection_details"]["host"],
+            current_query_creds["connection_details"]["port"],
+            current_query_creds["connection_details"]["database"],
+            current_query_creds["connection_details"]["user_name"],
+            current_query_creds["connection_details"]["password"],
         )
 
         try:
@@ -73,5 +66,5 @@ class PostgresExecutor:
     def create_pg_cred_dict(self, creds_arr):
         creds_dict = {}
         for item in creds_arr:
-            creds_dict[item['connection_details']['database']] = item
+            creds_dict[item["connection_details"]["database"]] = item
         return creds_dict
