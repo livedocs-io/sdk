@@ -2,6 +2,7 @@ import requests
 
 from livedocs.types import Credentials
 
+# TODO: Change this to the actual URL
 CORE_URL = "http://localhost:4000"
 
 

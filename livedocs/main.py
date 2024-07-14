@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import tempfile
-from typing import Dict
+from typing import Dict, List
 
 from livedocs.utils.common import _fetch_credentials, _fetch_file_manifest
 import polars as pl
@@ -12,8 +12,12 @@ from livedocs.types import (
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
+    Schema,
 )
-from livedocs.utils.postgres import create_postgres_connection_url
+from livedocs.utils.postgres import (
+    create_postgres_connection_url,
+    process_postgres_schema,
+)
 
 """
 This is initialized in the prelude cell of the notebook like this:
@@ -188,8 +192,33 @@ class Livedocs:
         with open(file_path, "wb") as f:
             f.write(response.content)
 
-    # def run_chart(self, config, data):
-    #     chart_config = self.chart_generator.generate_highcharts_config(
-    #         config=config, data=data
-    #     )
-    #     return jsonify(chart_config)
+    """
+    Get the schema of any given data source.
+    """
+
+    def _get_schema(self, datasource: ElementDataSource) -> List[Schema]:
+        match datasource["sourceType"]:
+            case ElementDatasourceType.file:
+                return self._get_file_schema(datasource)
+            case ElementDatasourceType.dataframe:
+                return self._get_dataframe_schema(datasource)
+            case ElementDatasourceType.database_table:
+                return self._get_table_schema(datasource)
+            case ElementDatasourceType.database:
+                return "unknown schema"
+            case _:
+                return "unknown schema"
+
+    def _get_table_schema(self, datasource: ElementDataSource) -> List[Schema]:
+        db_type = DatabaseType(datasource["databaseInfo"]["database_type"])
+        match db_type:
+            case DatabaseType.Postgres:
+                schema_query = f"""
+                    SELECT column_name, udt_name
+                        FROM information_schema.columns
+                    WHERE table_name = '{datasource['databaseTableInfo']['table_name']}'
+                """
+                raw_schema = self._query_postgres(schema_query, datasource)
+                return process_postgres_schema(raw_schema)
+            case _:
+                return "unknown result"

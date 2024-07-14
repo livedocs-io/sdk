@@ -69,6 +69,12 @@ class Credentials(TypedDict):
     databases: List[DatabaseConnector]
 
 
+class Schema(TypedDict):
+    name: str
+    type: str
+    children: List
+
+
 __all__ = [
     "DatabaseType",
     "ElementDatasourceType",
@@ -77,4 +83,5 @@ __all__ = [
     "DataframeInfo",
     "FileInfo",
     "ElementDataSource",
+    "Schema",
 ]
