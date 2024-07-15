@@ -44,11 +44,11 @@ class FileInfo(TypedDict):
 
 
 class ElementDataSource(TypedDict):
-    databaseInfo: Optional[DatabaseInfo]
-    databaseTableInfo: Optional[DatabaseTableInfo]
-    dataframeInfo: Optional[DataframeInfo]
-    fileInfo: Optional[FileInfo]
-    sourceType: ElementDatasourceType
+    database_info: Optional[DatabaseInfo]
+    database_table_info: Optional[DatabaseTableInfo]
+    dataframe_info: Optional[DataframeInfo]
+    file_info: Optional[FileInfo]
+    source_type: ElementDatasourceType
 
 
 class DecryptedSecret(TypedDict):

@@ -24,8 +24,8 @@ livedocs = Livedocs(
 # Postgres datasource
 
 # pg_datasource = {
-#     "sourceType": ElementDatasourceType.database,
-#     "databaseInfo": {
+#     "source_type": ElementDatasourceType.database,
+#     "database_info": {
 #         "database_connector_id": "22c5d054-eb49-415f-af1d-183b834f8fc1",
 #         "database_name": "appstore",
 #         "database_type": DatabaseType.Postgres,
@@ -39,8 +39,8 @@ livedocs = Livedocs(
 # File datasources
 
 csv_datasource = {
-    "sourceType": ElementDatasourceType.file,
-    "fileInfo": {
+    "source_type": ElementDatasourceType.file,
+    "file_info": {
         "file_id": "59158863-440b-4faf-ab25-456a0d748920",
         "file_name": "Random_Numbers_DataFrame.csv",
         "file_type": "csv",
@@ -49,8 +49,8 @@ csv_datasource = {
 }
 
 xlsx_datasource = {
-    "sourceType": ElementDatasourceType.file,
-    "fileInfo": {
+    "source_type": ElementDatasourceType.file,
+    "file_info": {
         "file_id": "c6f8d2ab-4516-4164-b8d3-e9f853188c44",
         "file_name": "Untitled spreadsheet.xlsx",
         "file_type": "xlsx",
@@ -60,8 +60,8 @@ xlsx_datasource = {
 }
 
 # xls_datasource = {
-#     "sourceType": ElementDatasourceType.file,
-#     "fileInfo": {
+#     "source_type": ElementDatasourceType.file,
+#     "file_info": {
 #         "file_id": "fe408b07-42e6-4c6a-bedf-24a5b39ddec0",
 #         "file_name": "xls.xls",
 #         "file_type": "xls",
@@ -95,16 +95,16 @@ df_polars = pl.DataFrame(data_df, schema=headers)
 df_pandas = pd.DataFrame(data_df, columns=headers)
 
 polars_datasource = {
-    "sourceType": ElementDatasourceType.dataframe,
-    "dataframeInfo": {
+    "source_type": ElementDatasourceType.dataframe,
+    "dataframe_info": {
         "df_name": "df_polars",
         "df_element_id": "IRRELEVANT",
     },
 }
 
 pandas_datasource = {
-    "sourceType": ElementDatasourceType.dataframe,
-    "dataframeInfo": {
+    "source_type": ElementDatasourceType.dataframe,
+    "dataframe_info": {
         "df_name": "df_pandas",
         "df_element_id": "IRRELEVANT",
     },
