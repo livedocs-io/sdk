@@ -1,22 +1,29 @@
-import os
 import json
-import requests
+import os
 import tempfile
 from typing import Dict, List
 
-from livedocs.utils.common import _fetch_credentials, _fetch_file_manifest
-from livedocs.vega import _get_altair_datasource_query, auto_visualize
 import polars as pl
-
+import requests
 
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
+    LivedocsChartSpec,
     Schema,
 )
-from livedocs.utils.postgres import create_postgres_connection_url
+from livedocs.utils.common import (
+    _fetch_credentials,
+    _fetch_file_manifest,
+    _get_dataframe_schema,
+)
+from livedocs.utils.postgres import (
+    create_postgres_connection_url,
+    process_postgres_schema,
+)
+from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 
 """
 This is initialized in the prelude cell of the notebook like this:
@@ -56,12 +63,62 @@ class Livedocs:
             case _:
                 return "Unknown ElementDataSource"
 
-    def _get_vega_spec(self, settings: dict, datasource: ElementDataSource) -> dict:
-        data: pl.DataFrame = self.query(
+    """
+    Gets a Vega spec for a given datasource and settings. 
+    """
+
+    def _get_vega_spec(
+        self, settings: LivedocsChartSpec, datasource: ElementDataSource
+    ) -> dict:
+        results: tuple[pl.DataFrame, dict] = self._query_with_schema(
             _get_altair_datasource_query(datasource), datasource
         )
-        chart = auto_visualize(data)
-        return {"spec": chart}
+        return create_vega_spec(results[0], settings, results[1])
+
+    """
+    Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
+    """
+
+    def _query_with_schema(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        match ElementDatasourceType(datasource["source_type"]):
+            case ElementDatasourceType.database_table:
+                return self._query_database_with_schema(query, datasource)
+            case ElementDatasourceType.file:
+                return self._query_file_with_schema(query, datasource)
+            case ElementDatasourceType.dataframe:
+                return self._query_dataframe_with_schema(query, datasource)
+            case _:
+                return "Unknown ElementDataSource"
+
+    """
+    Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
+    """
+
+    def _query_database_with_schema(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        match DatabaseType(datasource["database_info"]["database_type"]):
+            case DatabaseType.Postgres:
+                result = self._query_database(query, datasource)
+
+                schema_query = f"""
+                    SELECT 
+                        column_name, 
+                        udt_name
+                    FROM 
+                        information_schema.columns
+                    WHERE 
+                        table_name = '{datasource["database_table_info"]["table_name"]}'
+                        AND table_schema = '{datasource['database_table_info']['schema_name']}'
+                """
+
+                _schema = self._query_database(schema_query, datasource)
+                schema = process_postgres_schema(_schema)
+                return [result, schema]
+            case _:
+                return "Unknown DatabaseType"
 
     """
     Query a database. Currently only supports Postgres. 
@@ -160,6 +217,17 @@ class Livedocs:
             raise RuntimeError(f"An error occurred while querying the file: {e}")
 
     """
+    Query a file with the schema included in the response. Currently supports CSV and XLSX files only. 
+    """
+
+    def _query_file_with_schema(
+        self, query: str, datasource: dict
+    ) -> tuple[pl.DataFrame, dict]:
+        result = self._query_file(query, datasource)
+        schema = _get_dataframe_schema(result)
+        return [result, schema]
+
+    """
     Query a DataFrame. Currently only supports Pandas and Polars DataFrames. 
     """
 
@@ -176,6 +244,17 @@ class Livedocs:
             raise RuntimeError(f"An error occurred while querying the DataFrame: {e}")
 
         return result
+
+    """
+    Query a DataFrame with the schema included in the response. Currently only supports Pandas and Polars DataFrames.
+    """
+
+    def _query_dataframe_with_schema(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        result = self._query_dataframe(query, datasource)
+        schema = _get_dataframe_schema(result)
+        return [result, schema]
 
     """
     Fetches a signed URL from the /v1/manifest endpoint for a file and returns it. 

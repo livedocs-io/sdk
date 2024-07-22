@@ -1,7 +1,7 @@
-from livedocs.types import ElementDataSource, ElementDatasourceType
 import altair as alt
 import polars as pl
-import pandas as pd
+
+from livedocs.types import ElementDataSource, ElementDatasourceType, LivedocsChartSpec
 
 
 def _get_altair_datasource_query(datasource: ElementDataSource) -> str:
@@ -16,82 +16,74 @@ def _get_altair_datasource_query(datasource: ElementDataSource) -> str:
             return "unknown datasource"
 
 
-def auto_visualize(df: pl.DataFrame):
-    if len(df.columns) < 2:
-        raise ValueError("DataFrame must have at least two columns for visualization")
+def map_datatype_to_scale_type(type: str) -> str:
+    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
+    return type_mapping.get(type, "nominal")
 
-    # Get dtypes of columns
-    dtypes = df.dtypes
 
-    # Identify numeric and categorical columns
-    numeric_columns = [
-        col
-        for col, dtype in zip(df.columns, dtypes)
-        if dtype in [pl.Int64, pl.Int32, pl.Float64, pl.Float32]
-    ]
-    categorical_columns = [
-        col
-        for col, dtype in zip(df.columns, dtypes)
-        if dtype in [pl.Utf8, pl.Categorical]
-    ]
+def create_vega_spec(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict):
+    # Enable the VegaFusion data transformer
+    alt.data_transformers.enable("vegafusion")
 
-    # Convert Polars DataFrame to pandas DataFrame, handling potential nested structures
-    pandas_df = pd.DataFrame()
-    for col in df.columns:
-        try:
-            pandas_df[col] = df[col].to_pandas()
-        except ValueError:
-            # If conversion fails, try converting to string
-            pandas_df[col] = df[col].cast(pl.Utf8).to_pandas()
+    usermeta = settings
+    base = alt.Chart(df).properties(
+        width="container",
+        height="container",
+    )
 
-    if len(numeric_columns) >= 2:
-        # Scatter plot for two numeric columns
-        x = numeric_columns[0]
-        y = numeric_columns[1]
-        chart = (
-            alt.Chart(pandas_df)
-            .mark_circle()
-            .encode(x=x, y=y, tooltip=list(df.columns))
-            .interactive()
-        )
-    elif len(numeric_columns) == 1 and len(categorical_columns) >= 1:
-        # Bar chart for one numeric and one categorical column
-        x = categorical_columns[0]
-        y = numeric_columns[0]
-        chart = (
-            alt.Chart(pandas_df)
-            .mark_bar()
-            .encode(x=x, y=y, tooltip=list(df.columns))
-            .interactive()
-        )
-    elif len(categorical_columns) >= 2:
-        # Heatmap for two categorical columns
-        x = categorical_columns[0]
-        y = categorical_columns[1]
-        chart = (
-            alt.Chart(pandas_df)
-            .mark_rect()
-            .encode(
-                x=x,
-                y=y,
-                color="count()",
-                tooltip=[x, y, alt.Tooltip("count()", title="Count")],
-            )
-            .interactive()
-        )
+    x_field = settings["xAxis"]["field"]
+    x_type = map_datatype_to_scale_type(schema[x_field])
+    x_sort = settings["xAxis"].get("sort", "ascending")
+
+    usermeta["xAxis"] = {"field": x_field, "type": x_type, "sort": x_sort}
+
+    x_encoding = alt.X(f"{x_field}:{x_type}", sort=x_sort)
+
+    # Apply Y-axis settings or create a default one
+    if "yAxis" not in settings or not settings["yAxis"].get("primary"):
+        # Create a default Y-axis with the first suitable field based on the schema
+        y_field, y_type = get_first_field_by_preference(schema)
+        y_encoding = alt.Y(f"{y_field}:{y_type}", title="Value")
+        color = alt.value("steelblue")
+
+        usermeta["yAxis"] = {
+            "primary": [{"field": y_field, "name": y_field, "aggregate": "none"}]
+        }
+
+        chart = base.mark_line().encode(x=x_encoding, y=y_encoding, color=color)
     else:
-        raise ValueError(
-            "Unable to determine appropriate visualization for the given DataFrame"
+        # TODO: Implement custom Y-axis settings
+        # For now, just use the first primary Y-axis series
+        y_series = settings["yAxis"]["primary"][0]
+        y_field, y_frontend_type = y_series["field"].split("$$::$$")
+        y_type = map_datatype_to_scale_type(y_frontend_type)
+        y_aggregate = y_series["aggregate"]
+        y_encoding = alt.Y(
+            f"{y_aggregate}({y_field}):{y_type}", title=y_series.get("name", y_field)
         )
+        chart = base.mark_line().encode(x=x_encoding, y=y_encoding)
 
-    return chart.properties(
-        width=600,
-        height=400,
-        title=f"Automatic Visualization of {', '.join(df.columns)}",
-    ).to_json()
+    chart = chart.properties(usermeta=usermeta)
+    spec = chart.to_json(format="vega")
+    return spec
+
+
+def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
+    type_preference = {
+        "NUMBER": "quantitative",
+        "STRING": "nominal",
+        "DATE": "temporal",
+    }
+
+    for preferred_type in ["NUMBER", "STRING", "DATE"]:
+        for col, col_type in schema.items():
+            if col_type == preferred_type:
+                return col, type_preference[col_type]
+
+    raise ValueError("No suitable field found in the schema")
 
 
 __all__ = [
     "_get_altair_datasource_query",
-    "auto_visualize",
+    "create_vega_spec",
 ]

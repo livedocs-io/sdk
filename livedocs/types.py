@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict, List
+from typing import Literal, Optional, TypedDict, List
 from enum import Enum
 
 
@@ -75,6 +75,41 @@ class Schema(TypedDict):
     children: List
 
 
+# Vega Chart Spec
+
+
+class ColorBy(TypedDict):
+    field: str
+    type: str
+    sort: Literal["ascending", "descending"]
+    aggregate: str
+
+
+class YAxisSeries(TypedDict):
+    field: str
+    aggregate: str
+    mark: str
+    type: str
+    color_by: ColorBy
+    name: Optional[str]
+
+
+class XAxis(TypedDict):
+    field: str
+    type: str
+    sort: Literal["ascending", "descending"]
+
+
+class YAxis(TypedDict):
+    primary: List[YAxisSeries]
+    secondary: Optional[List[YAxisSeries]]
+
+
+class LivedocsChartSpec(TypedDict):
+    xAxis: XAxis
+    yAxis: YAxis
+
+
 __all__ = [
     "DatabaseType",
     "ElementDatasourceType",
@@ -84,4 +119,5 @@ __all__ = [
     "FileInfo",
     "ElementDataSource",
     "Schema",
+    "LivedocsChartSpec",
 ]

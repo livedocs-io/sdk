@@ -1,8 +1,9 @@
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["*"])
 
 
 @app.route("/test-set-datasource", methods=["POST", "OPTIONS"])
@@ -43,4 +44,5 @@ def run_chart():
     )
 
     chart_config = livedocs._get_vega_spec(data["settings"], data["datasource"])
-    return jsonify({"chart_config": chart_config}), 200
+
+    return json.dumps(chart_config), 200, {"Content-Type": "application/json"}
