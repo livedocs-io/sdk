@@ -110,6 +110,43 @@ class LivedocsChartSpec(TypedDict):
     yAxis: YAxis
 
 
+class PieChartColorBy(TypedDict):
+    field: str
+    type: str
+
+
+class PieChartSizeBy(TypedDict):
+    field: str
+    type: str
+    aggregate: Literal["count", "sum", "none"]
+
+
+class PieChartSpec(TypedDict):
+    color_by: PieChartColorBy
+    size_by: PieChartSizeBy
+    show_as: Literal["value", "percentage"]
+    format: str
+
+
+class HistogramBinBy(TypedDict):
+    type: Literal["max_bins", "step_size", "column_value"]
+    value: int
+
+
+class HistogramSpec(TypedDict):
+    field: str
+    format: Literal["count", "percentage"]
+    binBy: HistogramBinBy
+
+
+class Spec(TypedDict):
+    chartType: Literal["main", "histogram", "swapped_main", "pie"]
+    chartSettings: Optional[LivedocsChartSpec]
+    swappedChartSettings: Optional[LivedocsChartSpec]
+    histogramSettings: Optional[HistogramSpec]
+    pieSettings: Optional[PieChartSpec]
+
+
 __all__ = [
     "DatabaseType",
     "ElementDatasourceType",
@@ -120,4 +157,5 @@ __all__ = [
     "ElementDataSource",
     "Schema",
     "LivedocsChartSpec",
+    "Spec",
 ]
