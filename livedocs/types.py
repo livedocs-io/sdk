@@ -1,4 +1,4 @@
-from typing import Literal, Optional, TypedDict, List
+from typing import Dict, Literal, Optional, TypedDict, List
 from enum import Enum
 
 
@@ -78,6 +78,58 @@ class Schema(TypedDict):
 # Vega Chart Spec
 
 
+class AxisStyleSettings(TypedDict, total=False):
+    title: Optional[str]
+    format: Optional[str]
+    min: Optional[float]
+    max: Optional[float]
+    ticks: Optional[int]
+    grid: Optional[Literal["solid", "dashed", "none"]]
+    labelAngle: Optional[int]
+    scale: Optional[Literal["linear", "log", "pow", "sqrt"]]
+
+
+class LegendSettings(TypedDict, total=False):
+    show: Optional[bool]
+    position: Optional[
+        Literal[
+            "top",
+            "right",
+            "bottom",
+            "left",
+            "top-left",
+            "bottom-left",
+            "top-right",
+            "bottom-right",
+        ]
+    ]
+    title: Optional[str]
+
+
+class MarkColorSettings(TypedDict):
+    hex: List[Dict[str, str]]
+    mode: Literal["all_fields"]
+
+
+class MarkOpacitySettings(TypedDict):
+    value: List[Dict[str, float]]
+    mode: Literal["all_fields", "by_field", "based_on_field"]
+
+
+class MarkSettings(TypedDict):
+    color: Optional[MarkColorSettings]
+    opacity: Optional[MarkOpacitySettings]
+
+
+class StyleSettings(TypedDict, total=False):
+    fontSize: Optional[int]
+    tooltip: Optional[bool]
+    legend: Optional[LegendSettings]
+    markSettings: Optional[Dict[str, MarkSettings]]
+    xAxis: Optional[AxisStyleSettings]
+    yAxis: Optional[AxisStyleSettings]
+
+
 class ColorBy(TypedDict):
     field: str
     type: str
@@ -107,6 +159,11 @@ class YAxis(TypedDict):
 
 class LivedocsChartSpec(TypedDict):
     xAxis: XAxis
+    yAxis: YAxis
+
+
+class LivedocsSwappedChartSpec(TypedDict):
+    xAxis: YAxis
     yAxis: YAxis
 
 
@@ -141,8 +198,9 @@ class HistogramSpec(TypedDict):
 
 class Spec(TypedDict):
     chartType: Literal["main", "histogram", "swapped_main", "pie"]
+    styleSettings: Optional[StyleSettings]
     chartSettings: Optional[LivedocsChartSpec]
-    swappedChartSettings: Optional[LivedocsChartSpec]
+    swappedChartSettings: Optional[LivedocsSwappedChartSpec]
     histogramSettings: Optional[HistogramSpec]
     pieSettings: Optional[PieChartSpec]
 

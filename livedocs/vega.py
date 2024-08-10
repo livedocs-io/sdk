@@ -4,7 +4,20 @@ import uuid
 import altair as alt
 import polars as pl
 
-from livedocs.types import HistogramSpec, LivedocsChartSpec, PieChartSpec, Spec
+from livedocs.types import (
+    HistogramSpec,
+    LivedocsChartSpec,
+    LivedocsSwappedChartSpec,
+    PieChartSpec,
+    Spec,
+    StyleSettings,
+)
+from livedocs.utils.common import (
+    _get_color,
+    _get_color_group_key,
+    _get_user_defined_color,
+    _get_user_defined_opacity,
+)
 
 
 def generate_unique_name(prefix: str) -> str:
@@ -35,6 +48,9 @@ def clean_spec_for_logging(spec):
         spec_dict["data"] = {"values": "[data removed for logging]"}
     if "datasets" in spec_dict:
         spec_dict["datasets"] = {"values": "[data removed for logging]"}
+
+    print("return spec")
+    print(spec_dict["usermeta"])
     return json.dumps(spec_dict, indent=2)
 
 
@@ -62,20 +78,31 @@ def dataframe_info(df: pl.DataFrame):
 def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
     # alt.data_transformers.enable("vegafusion")
 
+    style_settings = spec.get("styleSettings", {})
+
     if spec["chartType"] == "main":
-        vega_spec = main_chart(df, spec["chartSettings"], schema)
+        vega_spec = main_chart(df, spec["chartSettings"], schema, style_settings)
+    if spec["chartType"] == "swapped_main":
+        vega_spec = swapped_main_chart(
+            df, spec["swappedChartSettings"], schema, style_settings
+        )
     elif spec["chartType"] == "histogram":
-        vega_spec = histogram(df, spec["histogramSettings"], schema)
+        vega_spec = histogram(df, spec["histogramSettings"], schema, style_settings)
     elif spec["chartType"] == "pie":
-        vega_spec = pie(df, spec["pieSettings"], schema)
+        vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
 
     print(clean_spec_for_logging(vega_spec))
+
     return vega_spec
 
 
-def pie(df: pl.DataFrame, settings: PieChartSpec, schema: dict) -> str:
+def pie(
+    df: pl.DataFrame,
+    settings: PieChartSpec,
+    schema: dict,
+    style_settings: StyleSettings,
+) -> str:
     usermeta = settings
-    print(settings)
     if "color_by" in settings:
         color_by_field = settings["color_by"].get("field", "")
         color_by_type = settings["color_by"].get("type", "")
@@ -102,7 +129,10 @@ def pie(df: pl.DataFrame, settings: PieChartSpec, schema: dict) -> str:
         # Return an empty spec with usermeta if necessary fields are missing
         empty_spec = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "usermeta": usermeta,
+            "usermeta": {
+                "chartType": "pie",
+                "pieSettings": usermeta,
+            },
         }
         return json.dumps(empty_spec)
 
@@ -153,7 +183,7 @@ def pie(df: pl.DataFrame, settings: PieChartSpec, schema: dict) -> str:
                     type="quantitative",
                     aggregate=size_by_aggregate
                     if size_by_aggregate != "none"
-                    else None,
+                    else alt.Undefined,
                     title="Count of Records"
                     if size_by_aggregate == "count"
                     else size_by_field,
@@ -171,7 +201,11 @@ def pie(df: pl.DataFrame, settings: PieChartSpec, schema: dict) -> str:
     final_chart = alt.layer(outer_layer).properties(
         width="container",
         height="container",
-        usermeta={"chartType": "pie", "pieSettings": usermeta},
+        usermeta={
+            "chartType": "pie",
+            "pieSettings": usermeta,
+            "styleSettings": style_settings,
+        },
     )
 
     # Convert the chart to Vega-Lite JSON spec
@@ -179,7 +213,22 @@ def pie(df: pl.DataFrame, settings: PieChartSpec, schema: dict) -> str:
     return vega_spec
 
 
-def histogram(df: pl.DataFrame, settings: HistogramSpec, schema: dict) -> str:
+def histogram(
+    df: pl.DataFrame,
+    settings: HistogramSpec,
+    schema: dict,
+    style_settings: StyleSettings,
+) -> str:
+    if "field" not in settings:
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "chartType": "histogram",
+                "histogramSettings": settings,
+            },
+        }
+        return json.dumps(empty_chart)
+
     field = settings["field"]
     bin_type = settings.get("binBy", {}).get("type", "max_bins")
     bin_value = settings.get("binBy", {}).get("value", 10)
@@ -268,16 +317,43 @@ def histogram(df: pl.DataFrame, settings: HistogramSpec, schema: dict) -> str:
     chart = alt.layer(outer_layer).properties(
         width="container",
         height="container",
-        usermeta={"chartType": "histogram", "histogramSettings": usermeta},
+        usermeta={
+            "chartType": "histogram",
+            "histogramSettings": usermeta,
+            "styleSettings": style_settings,
+        },
     )
 
-    vega_spec = chart.to_json(format="vega")
+    vega_spec = chart.to_json()
     return vega_spec
 
 
-def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> str:
+def main_chart(
+    df: pl.DataFrame,
+    settings: LivedocsChartSpec,
+    schema: dict,
+    style_settings: StyleSettings,
+) -> str:
     usermeta = settings
+
     print(settings)
+
+    legend_show = style_settings.get("legend", {}).get("show", True)
+    legend_position = style_settings.get("legend", {}).get("position", "right")
+    legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
+    legend_font_size = style_settings.get("fontSize", 10)
+
+    if "xAxis" not in settings or not settings["xAxis"].get("field"):
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "chartSettings": usermeta,
+                "styleSettings": style_settings,
+                "chartType": "main",
+            },
+        }
+        return json.dumps(empty_chart)
+
     if (
         "yAxis" not in settings
         or not settings["yAxis"].get("primary")
@@ -288,7 +364,7 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
             "primary": [
                 {
                     "field": default_y_field,
-                    "name": default_y_field,
+                    "name": "line layer 1",
                     "aggregate": "none",
                     "mark": "line",
                     "type": default_y_type,
@@ -303,6 +379,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
+
+    color_groups = {}
 
     usermeta["xAxis"] = {
         "field": x_field,
@@ -327,40 +405,118 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
     transform.append({"filter": f"isValid(datum['{x_field}'])"})
 
     inner_layers = []
-    for y_series in settings["yAxis"]["primary"]:
+
+    color_groups = {}
+
+    for index, y_series in enumerate(settings["yAxis"]["primary"]):
+        print(y_series)
+        color_index = index
+        series_color_name = y_series.get("name", "no-name-found-livedocs")
+        print("series_color_name", series_color_name)
+        custom_key = (
+            f"{y_series['mark']} layer {index + 1}"
+            if not series_color_name
+            or series_color_name == "no-name-found-livedocs"
+            or series_color_name == ""
+            else series_color_name
+        )
+
         y_field = y_series["field"]
         y_type = y_series.get("type") or map_datatype_to_scale_type(schema[y_field])
         y_aggregate = y_series.get("aggregate", "sum")
         mark_type = y_series.get("mark", "line")
         y_temporal_format = y_series.get("temporalFormat")
 
-        y_encoding = create_y_encoding(y_field, y_type, y_aggregate, y_temporal_format)
-        x_encoding = create_x_encoding(x_field, x_type, x_sort, x_temporal_format)
+        y_encoding = create_y_encoding(
+            y_field, y_type, y_aggregate, y_temporal_format, style_settings
+        )
+        x_encoding = create_x_encoding(
+            x_field, x_type, x_sort, x_temporal_format, style_settings
+        )
 
         color_by_encoding = None
+
         if y_series.get("color_by"):
             color_by_field = y_series["color_by"]["field"]
+            unique_values = (
+                df.select(pl.col(color_by_field).unique()).to_series().to_list()
+            )
+            color_groups[custom_key] = {
+                _get_color_group_key(value): _get_user_defined_color(
+                    custom_key,
+                    _get_color_group_key(value),
+                    style_settings,
+                    color_index + i,
+                )
+                for i, value in enumerate(unique_values)
+            }
+
             color_by_type = map_datatype_to_scale_type(
                 y_series["color_by"].get("type") or schema[color_by_field]
             )
+
+            usermeta["yAxis"]["primary"][index]["color_by"]["type"] = color_by_type
+
             color_by_sort = y_series["color_by"].get("sort", "ascending")
             color_by_aggregate = y_series["color_by"].get("aggregate", "none")
 
-            if color_by_aggregate != "none":
-                color_by_encoding = alt.Color(
-                    field=color_by_field,
-                    type=color_by_type,
-                    sort=color_by_sort,
-                    aggregate=color_by_aggregate,
-                    title=color_by_field,
+            legend = None
+            if legend_show:
+                legend = alt.Legend(
+                    labelFontSize=legend_font_size,
+                    titleFontSize=legend_font_size,
+                    title=legend_title
+                    if legend_show and legend_title
+                    else (color_by_field if legend_show else alt.Undefined),
+                    orient=legend_position,
                 )
-            else:
-                color_by_encoding = alt.Color(
-                    field=color_by_field,
-                    type=color_by_type,
-                    sort=color_by_sort,
-                    title=color_by_field,
-                )
+
+            color_by_encoding = alt.Color(
+                field=color_by_field,
+                type=color_by_type,
+                sort=color_by_sort,
+                aggregate=color_by_aggregate
+                if color_by_aggregate != "none"
+                else alt.Undefined,
+                title=legend_title
+                if legend_show and legend_title
+                else (color_by_field if legend_show else alt.Undefined),
+                scale=alt.Scale(
+                    domain=[_get_color_group_key(value) for value in unique_values],
+                    range=[
+                        _get_user_defined_color(
+                            custom_key,
+                            _get_color_group_key(value),
+                            style_settings,
+                            color_index + i,
+                        )
+                        for i, value in enumerate(unique_values)
+                    ],
+                ),
+                legend=legend,
+            )
+        else:
+            default_color = (
+                style_settings.get("markSettings", {})
+                .get(custom_key, {})
+                .get("color", {})
+                .get("hex", {})
+                .get("default", _get_color(color_index))
+            )
+            color_by_encoding = alt.value(default_color)
+            color_groups[custom_key] = default_color
+
+        opacity_encoding = _get_user_defined_opacity(
+            custom_key, style_settings, get_first_field_by_preference(schema)
+        )
+
+        if (
+            not usermeta["yAxis"]["primary"][index].get("name")
+            or usermeta["yAxis"]["primary"][index]["name"] == ""
+        ):
+            usermeta["yAxis"]["primary"][index]["name"] = (
+                f"{y_series.get('mark', 'line')} layer {index + 1}"
+            )
 
         # Create the appropriate mark type
         if mark_type == "bar" or (
@@ -372,8 +528,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
-                    color=color_by_encoding or alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                 )
             )
         elif mark_type == "grouped_column" and color_by_aggregate:
@@ -383,8 +539,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
-                    color=color_by_encoding or alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                     xOffset=alt.XOffset(field=color_by_field)
                     if color_by_encoding
                     else None,
@@ -435,14 +591,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                         ),
                     ),
                     y2=f"{norm_end}:Q",
-                    color=alt.Color(
-                        field=color_by_field if color_by_field else None,
-                        title=color_by_field if color_by_field else None,
-                        legend=alt.Legend(symbolOpacity=1) if color_by_field else None,
-                    )
-                    if color_by_field
-                    else alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                 )
                 .transform_timeunit(as_=x_field_name, field=x_field, timeUnit="year")
                 .transform_aggregate(
@@ -479,8 +629,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
-                    color=color_by_encoding or alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                 )
             )
         elif mark_type == "point":
@@ -488,10 +638,11 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                 alt.Chart(df)
                 .mark_point(clip=True, cursor="crosshair")
                 .encode(
+                    clip=True,
                     x=x_encoding,
                     y=y_encoding,
-                    color=color_by_encoding or alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                 )
             )
         elif mark_type == "area":
@@ -507,8 +658,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
-                    color=color_by_encoding or alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                 )
             )
         else:
@@ -523,8 +674,8 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
-                    color=color_by_encoding or alt.value("#4C78A8"),
-                    opacity=alt.value(1),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
                 )
             )
 
@@ -545,44 +696,371 @@ def main_chart(df: pl.DataFrame, settings: LivedocsChartSpec, schema: dict) -> s
     chart = chart.properties(
         width="container",
         height="container",
-        usermeta={"chartType": "main", "chartSettings": usermeta},
+        usermeta={
+            "chartType": "main",
+            "chartSettings": usermeta,
+            "styleSettings": style_settings,
+            "colorGroups": color_groups,
+        },
     )
 
-    vega_spec = chart.to_json(format="vega")
+    vega_spec = chart.to_json()
     return vega_spec
 
 
-def create_x_encoding(field: str, type: str, sort: str, temporal_format: str):
-    tick_count_expr = "length(domain('x')) > 0 ? min(ceil(width / 40), ceil((domain('x')[1] - domain('x')[0]) / 7884000000)) : ceil(width / 40)"
+def swapped_main_chart(
+    df: pl.DataFrame,
+    settings: LivedocsSwappedChartSpec,
+    schema: dict,
+    style_settings: StyleSettings,
+) -> str:
+    usermeta = settings
 
-    axis_props = alt.Axis(title=field, tickCount=alt.expr(tick_count_expr))
+    legend_show = style_settings.get("legend", {}).get("show", True)
+    legend_position = style_settings.get("legend", {}).get("position", "right")
+    legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
+    legend_font_size = style_settings.get("fontSize", 10)
+
+    if "yAxis" not in settings or not settings["yAxis"].get("field"):
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "swappedChartSettings": usermeta,
+                "styleSettings": style_settings,
+                "chartType": "swapped_main",
+            },
+        }
+        return json.dumps(empty_chart)
+
+    if "xAxis" not in settings or not settings["xAxis"].get("field"):
+        default_x_field, default_x_type = get_first_field_by_preference(schema)
+        settings["xAxis"] = {
+            "field": default_x_field,
+            "name": "bar layer 1",
+            "aggregate": "none",
+            "mark": "bar",
+            "type": default_x_type,
+            "temporalFormat": None,
+            "color_by": None,
+        }
+        usermeta["yAxis"] = settings["yAxis"]
+
+    x_field = settings["xAxis"]["field"]
+    x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
+    x_sort = settings["xAxis"].get("sort", "ascending")
+    x_temporal_format = settings["xAxis"].get("temporalFormat")
+    x_aggregate = settings["xAxis"].get("aggregate", "sum")
+    x_color_by = settings["xAxis"].get("color_by")
+
+    y_field = settings["yAxis"]["field"]
+    y_type = settings["yAxis"].get("type", map_datatype_to_scale_type(schema[y_field]))
+    # y_sort = settings["yAxis"].get("sort", "ascending")
+    y_temporal_format = settings["yAxis"].get("temporalFormat")
+    mark_type = settings["yAxis"].get("mark", "grouped_bar")
+    y_aggregate = settings["yAxis"].get("aggregate", "none")
+
+    transform = []
+    if y_type == "temporal":
+        transform.append({"calculate": f"toDate(datum['{y_field}'])", "as": y_field})
+
+    if x_type == "temporal":
+        transform.append({"calculate": f"toDate(datum['{x_field}'])", "as": x_field})
+
+    transform.append({"filter": f"isValid(datum['{y_field}'])"})
+
+    color_index = 0
+    custom_key = f"{mark_type} layer 1"
+
+    color_by_encoding = None
+    color_by_field = None
+
+    if x_color_by:
+        color_by_field = x_color_by["field"]
+        unique_values = df.select(pl.col(color_by_field).unique()).to_series().to_list()
+        color_by_type = map_datatype_to_scale_type(
+            x_color_by.get("type") or schema[color_by_field]
+        )
+        color_by_sort = x_color_by.get("sort", "ascending")
+        color_by_aggregate = x_color_by.get("aggregate", "none")
+
+        usermeta["xAxis"]["color_by"]["type"] = color_by_type
+
+        legend = None
+        if legend_show:
+            legend = alt.Legend(
+                labelFontSize=legend_font_size,
+                titleFontSize=legend_font_size,
+                title=legend_title
+                if legend_show and legend_title
+                else (color_by_field if legend_show else alt.Undefined),
+                orient=legend_position,
+            )
+
+        color_by_encoding = alt.Color(
+            field=color_by_field,
+            type=color_by_type,
+            sort=color_by_sort,
+            aggregate=color_by_aggregate
+            if color_by_aggregate != "none"
+            else alt.Undefined,
+            title=legend_title
+            if legend_show and legend_title
+            else (color_by_field if legend_show else alt.Undefined),
+            scale=alt.Scale(
+                domain=[_get_color_group_key(value) for value in unique_values],
+                range=[
+                    _get_user_defined_color(
+                        custom_key,
+                        _get_color_group_key(value),
+                        style_settings,
+                        color_index + i,
+                    )
+                    for i, value in enumerate(unique_values)
+                ],
+            ),
+            legend=legend,
+        )
+    else:
+        default_color = (
+            style_settings.get("markSettings", {})
+            .get(custom_key, {})
+            .get("color", {})
+            .get("hex", {})
+            .get("default", _get_color(color_index))
+        )
+        color_by_encoding = alt.value(default_color)
+
+    opacity_encoding = _get_user_defined_opacity(
+        custom_key, style_settings, get_first_field_by_preference(schema)
+    )
+
+    y_encoding = create_y_encoding(
+        y_field, y_type, y_aggregate, y_temporal_format, style_settings
+    )
+    x_encoding = create_x_encoding(
+        x_field,
+        x_type,
+        x_sort,
+        x_temporal_format,
+        style_settings,
+        x_aggregate,
+        horizontal=True,
+    )
+
+    print("encodings")
+    print(mark_type)
+
+    if mark_type == "grouped_bar":
+        if color_by_field:
+            base_layer = (
+                alt.Chart(df)
+                .mark_bar(clip=True, filled=True, cursor="pointer")
+                .encode(
+                    x=x_encoding,
+                    y=y_encoding,
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
+                    yOffset=alt.YOffset(field=color_by_field)
+                    if color_by_field
+                    else alt.Undefined,
+                    # tooltip=[
+                    #     alt.Tooltip(
+                    #         field=y_field,
+                    #         type=y_type,
+                    #         title=y_field,
+                    #     ),
+                    #     alt.Tooltip(
+                    #         field=x_field,
+                    #         type=x_field,
+                    #         title=x_field,
+                    #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
+                    #     ),
+                    # ]
+                )
+            )
+        else:
+            print("no color by")
+            base_layer = (
+                alt.Chart(df)
+                .mark_bar(clip=True, filled=True, cursor="pointer")
+                .encode(
+                    x=x_encoding,
+                    y=y_encoding,
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
+                    # tooltip=[
+                    #     alt.Tooltip(
+                    #         field=y_field,
+                    #         type=y_type,
+                    #         title=y_field,
+                    #     ),
+                    #     alt.Tooltip(
+                    #         field=x_field,
+                    #         type=x_field,
+                    #         title=x_field,
+                    #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
+                    #     ),
+                    # ]
+                )
+            )
+    elif mark_type == "stacked_bar":
+        base_layer = (
+            alt.Chart(df)
+            .mark_bar(clip=True, filled=True, cursor="pointer")
+            .encode(
+                x=x_encoding,
+                y=y_encoding,
+                color=color_by_encoding,
+                opacity=opacity_encoding,
+                # tooltip=[
+                #     alt.Tooltip(
+                #         field=y_field,
+                #         type=y_type,
+                #         title=y_field,
+                #     ),
+                #     alt.Tooltip(
+                #         field=x_field,
+                #         type=x_type,
+                #         title=x_field,
+                #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
+                #     ),
+                # ]
+            )
+        )
+
+    chart = alt.layer(base_layer)
+
+    for t in transform:
+        if "calculate" in t:
+            chart = chart.transform_calculate(**t)
+        if "filter" in t:
+            chart = chart.transform_filter(t["filter"])
+
+    chart = chart.resolve_scale(color="independent", y="shared")
+
+    chart = chart.properties(
+        width="container",
+        height="container",
+        usermeta={
+            "chartType": "swapped_main",
+            "swappedChartSettings": usermeta,
+            "styleSettings": style_settings,
+        },
+    )
+
+    vega_spec = chart.to_json()
+    return vega_spec
+
+
+def create_x_encoding(
+    field: str,
+    type: str,
+    sort: str,
+    temporal_format: str,
+    style: StyleSettings,
+    x_aggregate: str = "none",
+    horizontal: bool = False,
+):
+    tick_count_expr = "length(domain('x')) > 0 ? min(ceil(width / 40), ceil((domain('x')[1] - domain('x')[0]) / 7884000000)) : ceil(width / 40)"
+    axis_settings = style.get("xAxis", {})
+
+    axis_props = alt.Axis(
+        title=field if "xAxis" not in style else style["xAxis"].get("title", field),
+        titleFontSize=style.get("fontSize", 10),
+        labelFontSize=style.get("fontSize", 10),
+        labelAngle=axis_settings.get("labelAngle", alt.Undefined),
+        tickCount=axis_settings.get(
+            "ticks", alt.expr(tick_count_expr) if not horizontal else alt.Undefined
+        ),
+        grid=True if axis_settings.get("grid", "none") != "none" else False,
+        gridDash=[4, 4]
+        if axis_settings.get("grid", "none") == "dashed"
+        else alt.Undefined,
+    )
 
     if type == "temporal" and temporal_format and temporal_format != "none":
         axis_props.format = get_axis_format(temporal_format)
         return alt.X(
-            f"{field}:O",
+            f"{x_aggregate}({field}):{type}"
+            if x_aggregate != "none"
+            else f"{field}:{type}",
             timeUnit=temporal_format,
             bandPosition=0,
+            aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
             sort=sort,
             axis=axis_props,
+            scale=alt.Scale(
+                domainMax=int(axis_settings["max"])
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=int(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", "linear"),
+            ),
         )
     else:
-        return alt.X(f"{field}:{type}", sort=sort, axis=axis_props)
+        return alt.X(
+            f"{x_aggregate}({field}):{type}"
+            if x_aggregate != "none"
+            else f"{field}:{type}",
+            sort=sort,
+            aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
+            axis=axis_props,
+        )
 
 
-def create_y_encoding(field: str, type: str, aggregate: str, temporal_format: str):
+def create_y_encoding(
+    field: str, type: str, aggregate: str, temporal_format: str, style: StyleSettings
+):
+    axis_settings = style.get("yAxis", {})
+
     if type == "temporal" and temporal_format and temporal_format != "none":
         return alt.Y(
             f"{aggregate}({field}):T" if aggregate != "none" else f"{field}:T",
             timeUnit=temporal_format,
-            axis=alt.Axis(title=field, format=get_axis_format(temporal_format)),
+            axis=alt.Axis(
+                title=field
+                if "yAxis" not in style
+                else style["yAxis"].get("title", field),
+                format=get_axis_format(temporal_format),
+                titleFontSize=style.get("fontSize", 10),
+                labelFontSize=style.get("fontSize", 10),
+                labelAngle=axis_settings.get("labelAngle", alt.Undefined),
+                tickCount=axis_settings.get("ticks", alt.Undefined),
+                grid=True if axis_settings.get("grid", "none") != "none" else True,
+                gridDash=[4, 4]
+                if axis_settings.get("grid", "none") == "dashed"
+                else alt.Undefined,
+            ),
         )
     else:
         return alt.Y(
             f"{aggregate}({field}):{type}"
             if aggregate != "none"
             else f"{field}:{type}",
-            axis=alt.Axis(title=field),
+            axis=alt.Axis(
+                title=field
+                if "yAxis" not in style
+                else style["yAxis"].get("title", field),
+                titleFontSize=style.get("fontSize", 10),
+                labelFontSize=style.get("fontSize", 10),
+                labelAngle=axis_settings.get("labelAngle", alt.Undefined),
+                tickCount=axis_settings.get("ticks", alt.Undefined),
+                grid=True if axis_settings.get("grid", "none") != "none" else True,
+                gridDash=[4, 4]
+                if axis_settings.get("grid", "none") == "dashed"
+                else alt.Undefined,
+            ),
+            scale=alt.Scale(
+                domainMax=int(axis_settings["max"])
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=int(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", "linear"),
+            ),
         )
 
 
@@ -607,6 +1085,17 @@ def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
         "DATE": "temporal",
     }
 
+    # Find non-ID fields first
+    for preferred_type in ["NUMBER", "STRING", "DATE"]:
+        for col, col_type in schema.items():
+            if (
+                col_type == preferred_type
+                and col.lower() != "id"
+                and not col.lower().endswith("id")
+            ):
+                return col, type_preference[col_type]
+
+    # Fall back to any field
     for preferred_type in ["NUMBER", "STRING", "DATE"]:
         for col, col_type in schema.items():
             if col_type == preferred_type:

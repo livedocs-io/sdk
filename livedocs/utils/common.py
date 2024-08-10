@@ -2,8 +2,66 @@ from typing import Dict
 import requests
 from datetime import datetime
 import polars as pl
+import altair as alt
 
 from livedocs.types import Credentials
+
+_LIVEDOCS_COLORS = [
+    "#0094ff",
+    "#079250",
+    "#dc6903",
+    "#d92d21",
+    "#6938ef",
+    "#e04f15",
+    "#ca8505",
+    "#ba24d5",
+    "#434ce7",
+    "#109384",
+    "#e31a54",
+    "#068ab2",
+    "#dd2690",
+    "#4ca30e",
+    "#7839ee",
+]
+
+
+def _get_color(index: int) -> str:
+    return _LIVEDOCS_COLORS[index % len(_LIVEDOCS_COLORS)]
+
+
+def _get_color_group_key(value):
+    if value is None or value == "":
+        return "Unnamed"
+    return str(value)
+
+
+def _get_user_defined_color(custom_key, value, style_settings, color_index) -> str:
+    mark_settings = style_settings.get("markSettings", {})
+    color_settings = mark_settings.get(custom_key, {}).get("color", {})
+
+    if color_settings.get("mode") == "all_fields":
+        return color_settings.get("hex", {}).get(value, _get_color(color_index))
+    return _get_color(color_index)
+
+
+def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
+    mark_settings = style_settings.get("markSettings", {})
+    opacity_settings = mark_settings.get(custom_key, {}).get("opacity", {})
+
+    if opacity_settings.get("mode") == "all_fields":
+        return alt.value(int(opacity_settings.get("value", "100")) / 100)
+    elif opacity_settings.get("mode") == "based_on_field":
+        opacity_field = opacity_settings.get("field", "no-field-found")
+        return alt.Opacity(
+            field=opacity_field
+            if opacity_field != "" or opacity_field != "no-field-found"
+            else fallback_field[0],
+            type="quantitative"
+            if opacity_field != "" or opacity_field != "no-field-found"
+            else fallback_field[1],
+        )
+    return alt.value(1)
+
 
 # TODO: Change this to the actual URL
 CORE_URL = "http://localhost:4000"
@@ -112,4 +170,9 @@ __all__ = [
     "_fetch_credentials",
     "_fetch_file_manifest",
     "_get_dataframe_schema",
+    "_LIVEDOCS_COLORS",
+    "_get_color",
+    "_get_color_group_key",
+    "_get_user_defined_color",
+    "_get_user_defined_opacity",
 ]
