@@ -5,6 +5,7 @@ import altair as alt
 import polars as pl
 
 from livedocs.types import (
+    ElementDataSource,
     HistogramSpec,
     LivedocsChartSpec,
     LivedocsSwappedChartSpec,
@@ -19,26 +20,10 @@ from livedocs.utils.common import (
     _get_user_defined_opacity,
 )
 
-
-def generate_unique_name(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex}"
-
-
-def _get_altair_datasource_query(datasource):
-    match datasource["source_type"]:
-        case "file":
-            return f"SELECT * FROM {datasource['file_info']['file_name']} limit 5000"
-        case "dataframe":
-            return f"SELECT * FROM {datasource['dataframe_info']['df_name']} limit 5000"
-        case "database_table":
-            return f"SELECT * FROM {datasource['database_table_info']['table_name']} limit 5000"
-        case _:
-            return "unknown datasource"
-
-
-def map_datatype_to_scale_type(type: str) -> str:
-    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
-    return type_mapping.get(type, "nominal")
+"""
+Helper function, never used in production environments. 
+It removes the data key from the vega spec dict for clearer logging. 
+"""
 
 
 def clean_spec_for_logging(spec):
@@ -49,13 +34,18 @@ def clean_spec_for_logging(spec):
     if "datasets" in spec_dict:
         spec_dict["datasets"] = {"values": "[data removed for logging]"}
 
-    print("return spec")
     print(spec_dict["usermeta"])
     return json.dumps(spec_dict, indent=2)
 
 
+"""
+Helper function, never used in a production environment. 
+It returns a string that contains information about a polars dataframe 
+in the absence of a Polars info() method like Pandas. 
+"""
+
+
 def dataframe_info(df: pl.DataFrame):
-    """Return a string with information about the Polars DataFrame."""
     info = [
         f"Polars DataFrame with {df.shape[0]} rows and {df.shape[1]} columns.",
         "Columns:",
@@ -75,25 +65,85 @@ def dataframe_info(df: pl.DataFrame):
     return "\n".join(info)
 
 
+"""
+Adds a UUIDV4 prefix to layer names
+"""
+
+
+def generate_unique_name(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+"""
+Prepares the DuckDB query for each datasource
+"""
+
+
+def _get_altair_datasource_query(datasource: ElementDataSource):
+    match datasource["source_type"]:
+        case "file":
+            return f"SELECT * FROM {datasource['file_info']['file_name']} limit 5000"
+        case "dataframe":
+            return f"SELECT * FROM {datasource['dataframe_info']['df_name']} limit 5000"
+        case "database_table":
+            return f"SELECT * FROM {datasource['database_table_info']['table_name']} limit 5000"
+        case _:
+            return "unknown datasource"
+
+
+"""
+Maps the Livedocs primitive type to it's respective Vega field type
+"""
+
+
+def map_datatype_to_scale_type(type: str) -> str:
+    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
+    return type_mapping.get(type, "nominal")
+
+
+"""
+Returns a Vega spec for a given Livedocs chart configuration and a dataframe
+retrieved using _get_altair_datasource_query method. In production, the vegafusion
+data transformer should be enabled, although that obscures the spec. 
+
+This method only delegates the spec generation to other more specific functions
+based on the chartType parameter of the Livedocs chart config. 
+"""
+
+
 def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
     # alt.data_transformers.enable("vegafusion")
 
     style_settings = spec.get("styleSettings", {})
 
-    if spec["chartType"] == "main":
-        vega_spec = main_chart(df, spec["chartSettings"], schema, style_settings)
-    if spec["chartType"] == "swapped_main":
-        vega_spec = swapped_main_chart(
-            df, spec["swappedChartSettings"], schema, style_settings
-        )
-    elif spec["chartType"] == "histogram":
-        vega_spec = histogram(df, spec["histogramSettings"], schema, style_settings)
-    elif spec["chartType"] == "pie":
-        vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
+    if spec.get("chartType"):
+        if spec["chartType"] == "main":
+            vega_spec = main_chart(df, spec["chartSettings"], schema, style_settings)
+        if spec["chartType"] == "swapped_main":
+            vega_spec = swapped_main_chart(
+                df, spec["swappedChartSettings"], schema, style_settings
+            )
+        elif spec["chartType"] == "histogram":
+            vega_spec = histogram(df, spec["histogramSettings"], schema, style_settings)
+        elif spec["chartType"] == "pie":
+            vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
 
-    print(clean_spec_for_logging(vega_spec))
+        print(clean_spec_for_logging(vega_spec))
+        return vega_spec
+    else:
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "styleSettings": style_settings,
+                "chartType": "main",
+            },
+        }
+        return json.dumps(empty_chart)
 
-    return vega_spec
+
+"""
+Generates the Vega spec from a pie chart configuration. 
+"""
 
 
 def pie(
@@ -213,6 +263,11 @@ def pie(
     return vega_spec
 
 
+"""
+Generates the Vega spec from a histogram chart configuration. 
+"""
+
+
 def histogram(
     df: pl.DataFrame,
     settings: HistogramSpec,
@@ -328,6 +383,15 @@ def histogram(
     return vega_spec
 
 
+"""
+Generates the Vega spec from a chart configuration for:
+- Line charts
+- Area, stacked area charts
+- Column charts (grouped, stacked, and full stacked)
+- Scatter charts
+"""
+
+
 def main_chart(
     df: pl.DataFrame,
     settings: LivedocsChartSpec,
@@ -336,14 +400,22 @@ def main_chart(
 ) -> str:
     usermeta = settings
 
-    print(settings)
-
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
     legend_font_size = style_settings.get("fontSize", 10)
 
     if "xAxis" not in settings or not settings["xAxis"].get("field"):
+        # Set the right inferred type for the color by field
+        if "yAxis" in settings and settings["yAxis"].get("primary"):
+            for index, y_series in enumerate(settings["yAxis"]["primary"]):
+                if y_series.get("color_by") and y_series["color_by"].get("field"):
+                    usermeta["yAxis"]["primary"][index]["color_by"]["type"] = (
+                        map_datatype_to_scale_type(
+                            schema[y_series["color_by"]["field"]]
+                        )
+                    )
+
         empty_chart = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "usermeta": {
@@ -405,14 +477,11 @@ def main_chart(
     transform.append({"filter": f"isValid(datum['{x_field}'])"})
 
     inner_layers = []
-
     color_groups = {}
 
     for index, y_series in enumerate(settings["yAxis"]["primary"]):
-        print(y_series)
         color_index = index
         series_color_name = y_series.get("name", "no-name-found-livedocs")
-        print("series_color_name", series_color_name)
         custom_key = (
             f"{y_series['mark']} layer {index + 1}"
             if not series_color_name
@@ -708,6 +777,13 @@ def main_chart(
     return vega_spec
 
 
+"""
+Generates the Vega spec from a chart configuration where the UI indicates
+that the Axes of the chart have been swapped. Eg: Horizontal bar chart, 
+grouped, stacked, and full stacked.  
+"""
+
+
 def swapped_main_chart(
     df: pl.DataFrame,
     settings: LivedocsSwappedChartSpec,
@@ -847,9 +923,6 @@ def swapped_main_chart(
         horizontal=True,
     )
 
-    print("encodings")
-    print(mark_type)
-
     if mark_type == "grouped_bar":
         if color_by_field:
             base_layer = (
@@ -879,7 +952,6 @@ def swapped_main_chart(
                 )
             )
         else:
-            print("no color by")
             base_layer = (
                 alt.Chart(df)
                 .mark_bar(clip=True, filled=True, cursor="pointer")
@@ -1076,6 +1148,11 @@ def get_axis_format(timeunit: str) -> str:
         "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
     }
     return format_map.get(timeunit, "")
+
+
+"""
+Picks a random field from a given schema to be used in a secondary axis
+"""
 
 
 def get_first_field_by_preference(schema: dict) -> tuple[str, str]:

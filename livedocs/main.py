@@ -76,6 +76,16 @@ class Livedocs:
         return create_vega_spec(results[0], settings, results[1])
 
     """
+    Gets a polars table for a given datasource. 
+    """
+
+    def _get_table_response(self, datasource: ElementDataSource) -> pl.DataFrame:
+        results: tuple[pl.DataFrame, dict] = self._query_with_schema(
+            _get_altair_datasource_query(datasource), datasource
+        )
+        return results[0]
+
+    """
     Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
     """
 
