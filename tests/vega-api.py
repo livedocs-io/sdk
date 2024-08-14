@@ -1,8 +1,9 @@
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["*"])
 
 
 @app.route("/test-set-datasource", methods=["POST", "OPTIONS"])
@@ -20,7 +21,10 @@ def set_datasource():
         data["idToken"],
     )
 
-    schema = livedocs._get_table_schema(data["datasource"])
+    schema = []
+    if data["datasource"]["source_type"] == "dataframe":
+        schema = livedocs._get_dataframe_schema(data["datasource"])
+
     return jsonify({"schema": schema}), 200
 
 
@@ -39,5 +43,6 @@ def run_chart():
         data["idToken"],
     )
 
-    chart_config = livedocs.run_chart(data["config"], data["data"])
-    return jsonify({"chart_config": chart_config}), 200
+    chart_config = livedocs._get_vega_spec(data["settings"], data["datasource"])
+
+    return json.dumps(chart_config), 200, {"Content-Type": "application/json"}

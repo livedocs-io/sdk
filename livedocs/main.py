@@ -1,23 +1,29 @@
-import os
 import json
-import requests
+import os
 import tempfile
 from typing import Dict, List
 
-from livedocs.utils.common import _fetch_credentials, _fetch_file_manifest
 import polars as pl
+import requests
 
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
+    LivedocsChartSpec,
     Schema,
+)
+from livedocs.utils.common import (
+    _fetch_credentials,
+    _fetch_file_manifest,
+    _get_dataframe_schema,
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
     process_postgres_schema,
 )
+from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 
 """
 This is initialized in the prelude cell of the notebook like this:
@@ -47,17 +53,82 @@ class Livedocs:
     """
 
     def query(self, query: str, datasource: ElementDataSource) -> pl.DataFrame:
-        match datasource["sourceType"]:
-            case ElementDatasourceType.database:
+        match ElementDatasourceType(datasource["source_type"]):
+            case ElementDatasourceType.database | ElementDatasourceType.database_table:
                 return self._query_database(query, datasource)
             case ElementDatasourceType.file:
                 return self._query_file(query, datasource)
             case ElementDatasourceType.dataframe:
                 return self._query_dataframe(query, datasource)
-            case ElementDatasourceType.database_table:
-                return "db table result"
             case _:
-                return "unknown result"
+                return "Unknown ElementDataSource"
+
+    """
+    Gets a Vega spec for a given datasource and settings. 
+    """
+
+    def _get_vega_spec(
+        self, settings: LivedocsChartSpec, datasource: ElementDataSource
+    ) -> dict:
+        results: tuple[pl.DataFrame, dict] = self._query_with_schema(
+            _get_altair_datasource_query(datasource), datasource
+        )
+        return create_vega_spec(results[0], settings, results[1])
+
+    """
+    Gets a polars table for a given datasource. 
+    """
+
+    def _get_table_response(self, datasource: ElementDataSource) -> pl.DataFrame:
+        results: tuple[pl.DataFrame, dict] = self._query_with_schema(
+            _get_altair_datasource_query(datasource), datasource
+        )
+        return results[0]
+
+    """
+    Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
+    """
+
+    def _query_with_schema(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        match ElementDatasourceType(datasource["source_type"]):
+            case ElementDatasourceType.database_table:
+                return self._query_database_with_schema(query, datasource)
+            case ElementDatasourceType.file:
+                return self._query_file_with_schema(query, datasource)
+            case ElementDatasourceType.dataframe:
+                return self._query_dataframe_with_schema(query, datasource)
+            case _:
+                return "Unknown ElementDataSource"
+
+    """
+    Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
+    """
+
+    def _query_database_with_schema(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        match DatabaseType(datasource["database_info"]["database_type"]):
+            case DatabaseType.Postgres:
+                result = self._query_database(query, datasource)
+
+                schema_query = f"""
+                    SELECT 
+                        column_name, 
+                        udt_name
+                    FROM 
+                        information_schema.columns
+                    WHERE 
+                        table_name = '{datasource["database_table_info"]["table_name"]}'
+                        AND table_schema = '{datasource['database_table_info']['schema_name']}'
+                """
+
+                _schema = self._query_database(schema_query, datasource)
+                schema = process_postgres_schema(_schema)
+                return [result, schema]
+            case _:
+                return "Unknown DatabaseType"
 
     """
     Query a database. Currently only supports Postgres. 
@@ -66,11 +137,11 @@ class Livedocs:
     def _query_database(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
-        match datasource["databaseInfo"]["database_type"]:
+        match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
                 return self._query_postgres(query, datasource)
             case _:
-                return "unknown result"
+                return "Unknown DatabaseType"
 
     """
     Query a Postgres database. Attaches the database to DuckDB and executes the 
@@ -81,7 +152,7 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
         try:
-            db_connector_id = datasource["databaseInfo"]["database_connector_id"]
+            db_connector_id = datasource["database_info"]["database_connector_id"]
             credentials = self._credentials["databases"][db_connector_id]
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
@@ -124,7 +195,7 @@ class Livedocs:
 
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         try:
-            file_info = datasource["fileInfo"]
+            file_info = datasource["file_info"]
             file_id = file_info["file_id"]
             file_type = file_info["file_type"]
             file_name = file_info["file_name"]
@@ -156,13 +227,24 @@ class Livedocs:
             raise RuntimeError(f"An error occurred while querying the file: {e}")
 
     """
+    Query a file with the schema included in the response. Currently supports CSV and XLSX files only. 
+    """
+
+    def _query_file_with_schema(
+        self, query: str, datasource: dict
+    ) -> tuple[pl.DataFrame, dict]:
+        result = self._query_file(query, datasource)
+        schema = _get_dataframe_schema(result)
+        return [result, schema]
+
+    """
     Query a DataFrame. Currently only supports Pandas and Polars DataFrames. 
     """
 
     def _query_dataframe(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
-        dataframe_info = datasource.get("dataframeInfo")
+        dataframe_info = datasource.get("dataframe_info")
         if dataframe_info is None:
             raise ValueError("Invalid ElementDataSource")
 
@@ -172,6 +254,17 @@ class Livedocs:
             raise RuntimeError(f"An error occurred while querying the DataFrame: {e}")
 
         return result
+
+    """
+    Query a DataFrame with the schema included in the response. Currently only supports Pandas and Polars DataFrames.
+    """
+
+    def _query_dataframe_with_schema(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        result = self._query_dataframe(query, datasource)
+        schema = _get_dataframe_schema(result)
+        return [result, schema]
 
     """
     Fetches a signed URL from the /v1/manifest endpoint for a file and returns it. 
@@ -196,29 +289,17 @@ class Livedocs:
     Get the schema of any given data source.
     """
 
-    def _get_schema(self, datasource: ElementDataSource) -> List[Schema]:
-        match datasource["sourceType"]:
-            case ElementDatasourceType.file:
-                return self._get_file_schema(datasource)
-            case ElementDatasourceType.dataframe:
-                return self._get_dataframe_schema(datasource)
-            case ElementDatasourceType.database_table:
-                return self._get_table_schema(datasource)
-            case ElementDatasourceType.database:
-                return "unknown schema"
-            case _:
-                return "unknown schema"
-
-    def _get_table_schema(self, datasource: ElementDataSource) -> List[Schema]:
-        db_type = DatabaseType(datasource["databaseInfo"]["database_type"])
-        match db_type:
-            case DatabaseType.Postgres:
-                schema_query = f"""
-                    SELECT column_name, udt_name
-                        FROM information_schema.columns
-                    WHERE table_name = '{datasource['databaseTableInfo']['table_name']}'
-                """
-                raw_schema = self._query_postgres(schema_query, datasource)
-                return process_postgres_schema(raw_schema)
-            case _:
-                return "unknown result"
+    def _get_dataframe_schema(self, datasource: ElementDataSource) -> List[Schema]:
+        schema_query = """SELECT column_name as name,
+                CASE 
+                    WHEN data_type IN ('INTEGER', 'BIGINT', 'DOUBLE', 'FLOAT') THEN 'NUMBER'
+                    WHEN data_type IN ('DATE', 'TIMESTAMP') THEN 'DATE'
+                    ELSE 'STRING'
+                END as type
+            FROM information_schema.columns
+            WHERE table_name = 'df'
+            ORDER BY column_index"""
+        raw_schema = self._query_dataframe(schema_query, datasource)
+        return [
+            {"name": name, "type": type, "children": []} for name, type in raw_schema
+        ]

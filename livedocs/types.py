@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict, List
+from typing import Dict, Literal, Optional, TypedDict, List
 from enum import Enum
 
 
@@ -44,11 +44,11 @@ class FileInfo(TypedDict):
 
 
 class ElementDataSource(TypedDict):
-    databaseInfo: Optional[DatabaseInfo]
-    databaseTableInfo: Optional[DatabaseTableInfo]
-    dataframeInfo: Optional[DataframeInfo]
-    fileInfo: Optional[FileInfo]
-    sourceType: ElementDatasourceType
+    database_info: Optional[DatabaseInfo]
+    database_table_info: Optional[DatabaseTableInfo]
+    dataframe_info: Optional[DataframeInfo]
+    file_info: Optional[FileInfo]
+    source_type: ElementDatasourceType
 
 
 class DecryptedSecret(TypedDict):
@@ -75,6 +75,136 @@ class Schema(TypedDict):
     children: List
 
 
+# Vega Chart Spec
+
+
+class AxisStyleSettings(TypedDict, total=False):
+    title: Optional[str]
+    format: Optional[str]
+    min: Optional[float]
+    max: Optional[float]
+    ticks: Optional[int]
+    grid: Optional[Literal["solid", "dashed", "none"]]
+    labelAngle: Optional[int]
+    scale: Optional[Literal["linear", "log", "pow", "sqrt"]]
+
+
+class LegendSettings(TypedDict, total=False):
+    show: Optional[bool]
+    position: Optional[
+        Literal[
+            "top",
+            "right",
+            "bottom",
+            "left",
+            "top-left",
+            "bottom-left",
+            "top-right",
+            "bottom-right",
+        ]
+    ]
+    title: Optional[str]
+
+
+class MarkColorSettings(TypedDict):
+    hex: List[Dict[str, str]]
+    mode: Literal["all_fields"]
+
+
+class MarkOpacitySettings(TypedDict):
+    value: List[Dict[str, float]]
+    mode: Literal["all_fields", "by_field", "based_on_field"]
+
+
+class MarkSettings(TypedDict):
+    color: Optional[MarkColorSettings]
+    opacity: Optional[MarkOpacitySettings]
+
+
+class StyleSettings(TypedDict, total=False):
+    fontSize: Optional[int]
+    tooltip: Optional[bool]
+    legend: Optional[LegendSettings]
+    markSettings: Optional[Dict[str, MarkSettings]]
+    xAxis: Optional[AxisStyleSettings]
+    yAxis: Optional[AxisStyleSettings]
+
+
+class ColorBy(TypedDict):
+    field: str
+    type: str
+    sort: Literal["ascending", "descending"]
+    aggregate: str
+
+
+class YAxisSeries(TypedDict):
+    field: str
+    aggregate: str
+    mark: str
+    type: str
+    color_by: ColorBy
+    name: Optional[str]
+
+
+class XAxis(TypedDict):
+    field: str
+    type: str
+    sort: Literal["ascending", "descending"]
+
+
+class YAxis(TypedDict):
+    primary: List[YAxisSeries]
+    secondary: Optional[List[YAxisSeries]]
+
+
+class LivedocsChartSpec(TypedDict):
+    xAxis: XAxis
+    yAxis: YAxis
+
+
+class LivedocsSwappedChartSpec(TypedDict):
+    xAxis: YAxis
+    yAxis: YAxis
+
+
+class PieChartColorBy(TypedDict):
+    field: str
+    type: str
+
+
+class PieChartSizeBy(TypedDict):
+    field: str
+    type: str
+    aggregate: Literal["count", "sum", "none"]
+
+
+class PieChartSpec(TypedDict):
+    color_by: PieChartColorBy
+    size_by: PieChartSizeBy
+    show_as: Literal["value", "percentage"]
+    format: str
+
+
+class HistogramBinBy(TypedDict):
+    type: Literal["max_bins", "step_size", "column_value"]
+    value: int
+
+
+class HistogramSpec(TypedDict):
+    field: str
+    format: Literal["count", "percentage"]
+    binBy: HistogramBinBy
+
+
+class Spec(TypedDict):
+    chartType: Literal["main", "histogram", "swapped_main", "pie"]
+    styleSettings: Optional[StyleSettings]
+    chartSettings: Optional[LivedocsChartSpec]
+    swappedChartSettings: Optional[LivedocsSwappedChartSpec]
+    histogramSettings: Optional[HistogramSpec]
+    pieSettings: Optional[PieChartSpec]
+
+
 __all__ = [
     "DatabaseType",
     "ElementDatasourceType",
@@ -84,4 +214,6 @@ __all__ = [
     "FileInfo",
     "ElementDataSource",
     "Schema",
+    "LivedocsChartSpec",
+    "Spec",
 ]

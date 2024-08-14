@@ -1,7 +1,5 @@
-from typing import Dict, List
+from typing import Dict
 import polars as pl
-
-from livedocs.types import Schema
 
 
 def create_postgres_connection_url(details: Dict[str, str]) -> str:
@@ -35,60 +33,18 @@ def map_postgres_type(pg_type: str) -> str:
     elif pg_type in ("date", "time", "timestamp", "timestamptz", "interval"):
         return "DATE"
     # String and character types
-    elif pg_type in ("char", "varchar", "text"):
-        return "STRING"
-    # Boolean type
-    elif pg_type == "boolean":
-        return "STRING"  # You might want to map this differently
-    # Binary data types
-    elif pg_type in ("bytea", "bit", "bit varying"):
-        return "STRING"  # Typically stored as hex strings
-    # Network address types
-    elif pg_type in ("cidr", "inet", "macaddr"):
-        return "STRING"
-    # Geometric types
-    elif pg_type in ("point", "line", "lseg", "box", "path", "polygon", "circle"):
-        return "STRING"  # These are typically stored as text representations
-    # JSON types
-    elif pg_type in ("json", "jsonb"):
-        return "STRING"
-    # Arrays
-    elif pg_type.endswith("[]"):
-        return "STRING"  # Arrays are typically stored as text representations
-    # UUID type
-    elif pg_type == "uuid":
-        return "STRING"
-    # XML type
-    elif pg_type == "xml":
-        return "STRING"
-    # Range types
-    elif pg_type.startswith("range"):
-        return "STRING"
-    # Everything else is user-defined
     else:
-        return "USER-DEFINED"
+        return "STRING"
 
 
-def process_postgres_schema(schema_data: pl.DataFrame) -> List[Schema]:
+def process_postgres_schema(schema_data: pl.DataFrame) -> dict:
     required_columns = ["column_name", "udt_name"]
     if not all(col in schema_data.columns for col in required_columns):
         raise ValueError(
             f"DataFrame must contain columns: {', '.join(required_columns)}"
         )
 
-    processed_schema = []
+    processed_schema = {}
     for row in schema_data.iter_rows(named=True):
-        column_name = row["column_name"]
-        udt_name = row["udt_name"]
-
-        mapped_type = map_postgres_type(udt_name)
-
-        if mapped_type != "USER-DEFINED":
-            schema_entry: Schema = {
-                "name": column_name,
-                "type": mapped_type,
-                "children": [],
-            }
-            processed_schema.append(schema_entry)
-
+        processed_schema[row["column_name"]] = map_postgres_type(row["udt_name"])
     return processed_schema
