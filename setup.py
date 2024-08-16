@@ -18,6 +18,8 @@ setup(
         "pyarrow",
         "flask",
         "db-dtypes",
+        "duckdb",
+        "altair",
     ],
     python_requires=">=3.12",
     classifiers=[
