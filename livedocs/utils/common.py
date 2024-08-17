@@ -1,3 +1,4 @@
+import os
 from typing import Dict
 import requests
 from datetime import datetime
@@ -63,8 +64,9 @@ def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
     return alt.value(1)
 
 
-# TODO: Change this to the actual URL
-CORE_URL = "http://localhost:4000"
+CORE_URL = os.getenv("CORE_BASE_URL")
+if not CORE_URL:
+    raise ValueError("CORE_BASE_URL environment variable not set")
 
 
 def _fetch_credentials(report_id: str, token: str) -> Credentials:
