@@ -16,10 +16,8 @@ def set_datasource():
     # This goes in the header cell
     from livedocs import Livedocs
 
-    livedocs = Livedocs(
-        data["report_id"],
-        data["idToken"],
-    )
+    livedocs = Livedocs()
+    livedocs.initialize(data["report_id"], data["idToken"])
 
     schema = []
     if data["datasource"]["source_type"] == "dataframe":
@@ -38,10 +36,8 @@ def run_chart():
     # This goes in the header cell
     from livedocs import Livedocs
 
-    livedocs = Livedocs(
-        data["report_id"],
-        data["idToken"],
-    )
+    livedocs = Livedocs()
+    livedocs.initialize(data["report_id"], data["idToken"])
 
     chart_config = livedocs._get_vega_spec(data["settings"], data["datasource"])
 

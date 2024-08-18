@@ -14,10 +14,8 @@ import pandas as pd
 import polars as pl
 import numpy as np
 
-livedocs = Livedocs(
-    "156144d8-9e59-4815-b11a-fd8952b83369",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIxYWFhMGJmZC01MWEzLTRlZDktOWYwMy1iNzVmMzZhMjdkNDEiLCJyZXBvcnRfaWQiOiIxNTYxNDRkOC05ZTU5LTQ4MTUtYjExYS1mZDg5NTJiODMzNjkiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcxOTgyNjMzNywiZXhwIjoxNzE5ODU1MTM3fQ.cup-fZLUV0VzeiJEG9vVVcoEXnYHEtaozJURwPikMFA",
-)
+livedocs = Livedocs()
+livedocs.initialize("report_id", "token")
 
 # User code (i.e, the test)
 
