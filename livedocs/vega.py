@@ -34,7 +34,6 @@ def clean_spec_for_logging(spec):
     if "datasets" in spec_dict:
         spec_dict["datasets"] = {"values": "[data removed for logging]"}
 
-    print(spec_dict["usermeta"])
     return json.dumps(spec_dict, indent=2)
 
 
@@ -128,7 +127,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
         elif spec["chartType"] == "pie":
             vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
 
-        print(clean_spec_for_logging(vega_spec))
+        # print(clean_spec_for_logging(vega_spec))
         return vega_spec
     else:
         empty_chart = {
