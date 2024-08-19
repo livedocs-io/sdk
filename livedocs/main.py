@@ -28,24 +28,35 @@ from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 """
 This is initialized in the prelude cell of the notebook like this:
     
-    livedocs = Livedocs(report_id, session_token)
+    livedocs = Livedocs()
+    livedocs.initialize(report_id, session_token)
 
 """
 
 
 class Livedocs:
     """
-    On initialization this calls the /v1/credentials endpoint to fetch the
+    On initialization this sets up everything that can be used by the library without
+    having a report_id and token.
+    """
+
+    def __init__(self):
+        self._duckdb = DuckDBSingleton()
+        self._file_dir = tempfile.mkdtemp()
+        self._file_manifests: Dict[str, str] = {}
+        self.is_initialized = False
+
+    """
+    Called when the pod is initialized. Fetches the credentials and sets the 
+    is_initialized flag to True. The /v1/credentials endpoint is called to fetch the
     DB connection credentials and secrets for the report.
     """
 
-    def __init__(self, report_id: str, token: str):
-        self._duckdb = DuckDBSingleton()
+    def initialize(self, report_id: str, token: str):
         self._report_id = report_id
         self._token = token
-        self._file_dir = tempfile.mkdtemp()
         self._credentials = _fetch_credentials(report_id, token)
-        self._file_manifests: Dict[str, str] = {}
+        self.is_initialized = True
 
     """
     Central query function. Give it a query and a datasource, and it will return 
