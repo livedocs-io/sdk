@@ -77,6 +77,7 @@ def _fetch_credentials(report_id: str, token: str) -> Credentials:
     if response.status_code == 200:
         return response.json()
     else:
+        print("Error")
         raise Exception(
             f"Failed to fetch credentials. Status code: {response.status_code}"
         )

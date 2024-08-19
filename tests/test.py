@@ -15,7 +15,10 @@ import polars as pl
 import numpy as np
 
 livedocs = Livedocs()
-livedocs.initialize("report_id", "token")
+livedocs.initialize(
+    "59fe9072-533a-4a05-b599-6e40b1f112e4",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIyOTQzNTg0ZC05YTQxLTRlZWYtYjhmYi1mN2E2ODAwZTU3OTUiLCJyZXBvcnRfaWQiOiI1OWZlOTA3Mi01MzNhLTRhMDUtYjU5OS02ZTQwYjFmMTEyZTQiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNDA2OTEyOSwiZXhwIjoxNzI0MDk3OTI5fQ._EUC37S5A086qDJ6uPkhlvyTLKmdmIEwTvI-UYrTISA",
+)
 
 # User code (i.e, the test)
 
@@ -39,23 +42,23 @@ livedocs.initialize("report_id", "token")
 csv_datasource = {
     "source_type": ElementDatasourceType.file,
     "file_info": {
-        "file_id": "59158863-440b-4faf-ab25-456a0d748920",
-        "file_name": "Random_Numbers_DataFrame.csv",
+        "file_id": "e6699ed1-3b74-4ddc-b836-802fff4404df",
+        "file_name": "data.csv",
         "file_type": "csv",
         "file_has_layers": False,
     },
 }
 
-xlsx_datasource = {
-    "source_type": ElementDatasourceType.file,
-    "file_info": {
-        "file_id": "c6f8d2ab-4516-4164-b8d3-e9f853188c44",
-        "file_name": "Untitled spreadsheet.xlsx",
-        "file_type": "xlsx",
-        "file_has_layers": True,
-        "layer_name": "Sheet1",
-    },
-}
+# xlsx_datasource = {
+#     "source_type": ElementDatasourceType.file,
+#     "file_info": {
+#         "file_id": "c6f8d2ab-4516-4164-b8d3-e9f853188c44",
+#         "file_name": "Untitled spreadsheet.xlsx",
+#         "file_type": "xlsx",
+#         "file_has_layers": True,
+#         "layer_name": "Sheet1",
+#     },
+# }
 
 # xls_datasource = {
 #     "source_type": ElementDatasourceType.file,
@@ -68,16 +71,14 @@ xlsx_datasource = {
 #     },
 # }
 
-csv_result = livedocs.query(
-    "select * from Random_Numbers_DataFrame.csv limit 10", csv_datasource
-)
-xlsx_result = livedocs.query(
-    "select * from Untitled spreadsheet.xlsx limit 10", xlsx_datasource
-)
+csv_result = livedocs.query("select * from data.csv limit 100", csv_datasource)
+# xlsx_result = livedocs.query(
+#     "select * from Untitled spreadsheet.xlsx limit 10", xlsx_datasource
+# )
 # xls_result = livedocs.query("select * from xls.xls limit 10", xls_datasource)
 
 print(csv_result)
-print(xlsx_result)
+# print(xlsx_result)
 # print(xls_result)
 
 
