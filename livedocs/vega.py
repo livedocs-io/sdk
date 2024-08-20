@@ -127,7 +127,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
         elif spec["chartType"] == "pie":
             vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
 
-        # print(clean_spec_for_logging(vega_spec))
+        print(clean_spec_for_logging(vega_spec))
         return vega_spec
     else:
         empty_chart = {
@@ -503,8 +503,11 @@ def main_chart(
         )
 
         color_by_encoding = None
+        color_by_aggregate = None
 
-        if y_series.get("color_by"):
+        print(y_series["color_by"])
+
+        if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"]["field"]
             unique_values = (
                 df.select(pl.col(color_by_field).unique()).to_series().to_list()
@@ -519,14 +522,20 @@ def main_chart(
                 for i, value in enumerate(unique_values)
             }
 
-            color_by_type = map_datatype_to_scale_type(
-                y_series["color_by"].get("type") or schema[color_by_field]
-            )
-
-            usermeta["yAxis"]["primary"][index]["color_by"]["type"] = color_by_type
-
             color_by_sort = y_series["color_by"].get("sort", "ascending")
             color_by_aggregate = y_series["color_by"].get("aggregate", "none")
+
+            color_by_type = (
+                map_datatype_to_scale_type(
+                    y_series["color_by"].get("type") or schema[color_by_field]
+                )
+                if color_by_aggregate == "none"
+                else "quantitative"
+            )
+
+            usermeta["yAxis"]["primary"][index]["color_by"]["type"] = (
+                color_by_type if color_by_aggregate == "none" else "quantitative"
+            )
 
             legend = None
             if legend_show:
@@ -541,7 +550,7 @@ def main_chart(
 
             color_by_encoding = alt.Color(
                 field=color_by_field,
-                type=color_by_type,
+                type=color_by_type if color_by_aggregate == "none" else "quantitative",
                 sort=color_by_sort,
                 aggregate=color_by_aggregate
                 if color_by_aggregate != "none"
@@ -587,34 +596,85 @@ def main_chart(
             )
 
         # Create the appropriate mark type
-        if mark_type == "bar" or (
-            mark_type == "grouped_column" and not color_by_encoding
-        ):
-            base_layer = (
-                alt.Chart(df)
-                .mark_bar(clip=True)
-                .encode(
-                    x=x_encoding,
-                    y=y_encoding,
-                    color=color_by_encoding,
-                    opacity=opacity_encoding,
-                )
+        if mark_type == "grouped_column":
+            brush = alt.selection_interval(encodings=["x"], empty=False)
+            select = alt.selection_point(name="select", on="click")
+            highlight = alt.selection_point(
+                name="highlight", on="pointerover", empty=False
             )
-        elif mark_type == "grouped_column" and color_by_aggregate:
-            base_layer = (
-                alt.Chart(df)
-                .mark_bar(clip=True)
-                .encode(
-                    x=x_encoding,
-                    y=y_encoding,
-                    color=color_by_encoding,
-                    opacity=opacity_encoding,
-                    xOffset=alt.XOffset(field=color_by_field)
-                    if color_by_encoding
-                    else None,
+
+            if color_by_aggregate:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_bar(clip=True)
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding,
+                        color=color_by_encoding,
+                        opacity=opacity_encoding,
+                        xOffset=alt.XOffset(field=color_by_field)
+                        if color_by_encoding
+                        else None,
+                        fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                            alt.Tooltip(
+                                field=color_by_field,
+                                type=color_by_type,
+                                title=color_by_field,
+                                aggregate=color_by_aggregate
+                                if color_by_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
+                    .add_params(select, highlight, brush)
                 )
-            )
-        elif mark_type == "stacked_column":
+            else:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_bar(clip=True, cursor="crosshair")
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding,
+                        color=color_by_encoding,
+                        opacity=opacity_encoding,
+                        fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
+                    .add_params(select, highlight, brush)
+                )
+        elif mark_type == "full_stacked_column":
             norm_start = generate_unique_name("norm_start")
             norm_end = generate_unique_name("norm_end")
             x_field_name = generate_unique_name("xAxis")
@@ -702,9 +762,10 @@ def main_chart(
                 )
             )
         elif mark_type == "point":
+            print("point")
             base_layer = (
                 alt.Chart(df)
-                .mark_point(clip=True, cursor="crosshair")
+                .mark_point(cursor="crosshair")
                 .encode(
                     clip=True,
                     x=x_encoding,
@@ -849,6 +910,8 @@ def swapped_main_chart(
     color_by_encoding = None
     color_by_field = None
 
+    print(color_by_field)
+
     if x_color_by:
         color_by_field = x_color_by["field"]
         unique_values = df.select(pl.col(color_by_field).unique()).to_series().to_list()
@@ -935,19 +998,21 @@ def swapped_main_chart(
                     yOffset=alt.YOffset(field=color_by_field)
                     if color_by_field
                     else alt.Undefined,
-                    # tooltip=[
-                    #     alt.Tooltip(
-                    #         field=y_field,
-                    #         type=y_type,
-                    #         title=y_field,
-                    #     ),
-                    #     alt.Tooltip(
-                    #         field=x_field,
-                    #         type=x_field,
-                    #         title=x_field,
-                    #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
-                    #     ),
-                    # ]
+                    tooltip=[
+                        alt.Tooltip(
+                            field=y_field,
+                            type=y_type,
+                            title=y_field,
+                        ),
+                        alt.Tooltip(
+                            field=x_field,
+                            type=x_field,
+                            title=x_field,
+                            aggregate=x_aggregate
+                            if x_aggregate != "none"
+                            else alt.Undefined,
+                        ),
+                    ],
                 )
             )
         else:
@@ -1067,7 +1132,7 @@ def create_x_encoding(
                 domainMin=int(axis_settings["min"])
                 if "min" in axis_settings
                 else alt.Undefined,
-                type=axis_settings.get("scale", "linear"),
+                type=axis_settings.get("scale", alt.Undefined),
             ),
         )
     else:
@@ -1130,7 +1195,7 @@ def create_y_encoding(
                 domainMin=int(axis_settings["min"])
                 if "min" in axis_settings
                 else alt.Undefined,
-                type=axis_settings.get("scale", "linear"),
+                type=axis_settings.get("scale", alt.Undefined),
             ),
         )
 
