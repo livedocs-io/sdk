@@ -55,7 +55,6 @@ class Livedocs:
     def initialize(self, report_id: str, token: str):
         self._report_id = report_id
         self._token = token
-        print(report_id, token)
         self._credentials = _fetch_credentials(report_id, token)
         self.is_initialized = True
 
