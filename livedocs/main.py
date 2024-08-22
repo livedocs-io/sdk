@@ -69,13 +69,12 @@ class Livedocs:
     a Polars DataFrame. Simple. 
     """
 
-    def query(self, query: str, str_datasource: str) -> pl.DataFrame:
-        display("I'm running!")
-
+    def query(self, query: str, str_datasource: str, context: dict) -> pl.DataFrame:
         # try:
-        final_query = self.add_jinja_vars(query)
-        display(final_query)
         datasource: ElementDataSource = json.loads(str_datasource)
+
+        final_query = self.add_jinja_vars(query, context)
+        display(final_query)
 
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database | ElementDatasourceType.database_table:
@@ -93,10 +92,9 @@ class Livedocs:
     Adds the local variables to the query. 
     """
 
-    def add_jinja_vars(self, query: str) -> str:
-        display("I'm adding vars")
+    def add_jinja_vars(self, query: str, context: dict) -> str:
         template = Template(query)
-        return template.render(locals())
+        return template.render(context)
 
     """
     Gets a Vega spec for a given datasource and settings. 
