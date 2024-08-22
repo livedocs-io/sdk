@@ -2,6 +2,10 @@ import json
 import os
 import tempfile
 from typing import Dict, List
+from IPython.display import display
+
+
+from jinja2 import Template
 
 import polars as pl
 import requests
@@ -41,6 +45,7 @@ class Livedocs:
     """
 
     def __init__(self):
+        print("VM-LIB __INIT__")
         self._duckdb = DuckDBSingleton()
         self._file_dir = tempfile.mkdtemp()
         self._file_manifests: Dict[str, str] = {}
@@ -53,6 +58,7 @@ class Livedocs:
     """
 
     def initialize(self, report_id: str, token: str):
+        print("VM-LIB INITIALIZED")
         self._report_id = report_id
         self._token = token
         self._credentials = _fetch_credentials(report_id, token)
@@ -63,16 +69,34 @@ class Livedocs:
     a Polars DataFrame. Simple. 
     """
 
-    def query(self, query: str, datasource: ElementDataSource) -> pl.DataFrame:
+    def query(self, query: str, str_datasource: str) -> pl.DataFrame:
+        display("I'm running!")
+
+        # try:
+        final_query = self.add_jinja_vars(query)
+        display(final_query)
+        datasource: ElementDataSource = json.loads(str_datasource)
+
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database | ElementDatasourceType.database_table:
-                return self._query_database(query, datasource)
+                return self._query_database(final_query, datasource)
             case ElementDatasourceType.file:
-                return self._query_file(query, datasource)
+                return self._query_file(final_query, datasource)
             case ElementDatasourceType.dataframe:
-                return self._query_dataframe(query, datasource)
+                return self._query_dataframe(final_query, datasource)
             case _:
                 return "Unknown ElementDataSource"
+        # except Exception as e:
+        #     raise RuntimeError(f"An error occurred while querying the database: {e}")
+
+    """
+    Adds the local variables to the query. 
+    """
+
+    def add_jinja_vars(self, query: str) -> str:
+        display("I'm adding vars")
+        template = Template(query)
+        return template.render(locals())
 
     """
     Gets a Vega spec for a given datasource and settings. 
