@@ -9,45 +9,46 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 # Setup a dummy prelude cell
 
 from livedocs import Livedocs
-from livedocs.types import ElementDatasourceType
+from livedocs.types import DatabaseType, ElementDatasourceType
 import pandas as pd
 import polars as pl
 import numpy as np
+import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "59fe9072-533a-4a05-b599-6e40b1f112e4",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIyOTQzNTg0ZC05YTQxLTRlZWYtYjhmYi1mN2E2ODAwZTU3OTUiLCJyZXBvcnRfaWQiOiI1OWZlOTA3Mi01MzNhLTRhMDUtYjU5OS02ZTQwYjFmMTEyZTQiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNDA2OTEyOSwiZXhwIjoxNzI0MDk3OTI5fQ._EUC37S5A086qDJ6uPkhlvyTLKmdmIEwTvI-UYrTISA",
+    "9b6940fe-5478-4a11-a63c-08162de84c5c",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIyOTQzNTg0ZC05YTQxLTRlZWYtYjhmYi1mN2E2ODAwZTU3OTUiLCJyZXBvcnRfaWQiOiI5YjY5NDBmZS01NDc4LTRhMTEtYTYzYy0wODE2MmRlODRjNWMiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNDg3NjM2MCwiZXhwIjoxNzI0OTA1MTYwfQ.3MeCglL4WrPuvOJ1z5g8RJSwxhj3woUzn4uFgUV1hFQ"
 )
 
 # User code (i.e, the test)
 
 # Postgres datasource
 
-# pg_datasource = {
-#     "source_type": ElementDatasourceType.database,
-#     "database_info": {
-#         "database_connector_id": "22c5d054-eb49-415f-af1d-183b834f8fc1",
-#         "database_name": "appstore",
-#         "database_type": DatabaseType.Postgres,
-#     },
-# }
+pg_datasource = {
+    "source_type": "database",
+    "database_info": {
+        "database_connector_id": "6684d3fb-b995-489f-a5c3-2d16d7a82069",
+        "database_name": "Appstore",
+        "database_type": "Postgres",
+    },
+}
 
-# pg_result = livedocs.query("select * from users limit 10", pg_datasource)
+pg_result = livedocs.query("select * from Appstore limit 10", json.dumps(pg_datasource), {})
 
 # print(pg_result)
 
 # File datasources
 
-csv_datasource = {
-    "source_type": ElementDatasourceType.file,
-    "file_info": {
-        "file_id": "e6699ed1-3b74-4ddc-b836-802fff4404df",
-        "file_name": "data.csv",
-        "file_type": "csv",
-        "file_has_layers": False,
-    },
-}
+# csv_datasource = {
+#     "source_type": ElementDatasourceType.file,
+#     "file_info": {
+#         "file_id": "e6699ed1-3b74-4ddc-b836-802fff4404df",
+#         "file_name": "data.csv",
+#         "file_type": "csv",
+#         "file_has_layers": False,
+#     },
+# }
 
 # xlsx_datasource = {
 #     "source_type": ElementDatasourceType.file,
@@ -71,13 +72,13 @@ csv_datasource = {
 #     },
 # }
 
-csv_result = livedocs.query("select * from data.csv limit 100", csv_datasource)
+# csv_result = livedocs.query("select * from data.csv limit 100", csv_datasource)
 # xlsx_result = livedocs.query(
 #     "select * from Untitled spreadsheet.xlsx limit 10", xlsx_datasource
 # )
 # xls_result = livedocs.query("select * from xls.xls limit 10", xls_datasource)
 
-print(csv_result)
+# print(csv_result)
 # print(xlsx_result)
 # print(xls_result)
 
@@ -85,29 +86,29 @@ print(csv_result)
 # Dataframe datasources
 
 # Create a 20x20 array of random numbers
-data_df = np.random.rand(20, 20)
+# data_df = np.random.rand(20, 20)
 
 # Create headers
-headers = [f"col{i}" for i in range(20)]
+# headers = [f"col{i}" for i in range(20)]
 
-df_polars = pl.DataFrame(data_df, schema=headers)
-df_pandas = pd.DataFrame(data_df, columns=headers)
+# df_polars = pl.DataFrame(data_df, schema=headers)
+# df_pandas = pd.DataFrame(data_df, columns=headers)
 
-polars_datasource = {
-    "source_type": ElementDatasourceType.dataframe,
-    "dataframe_info": {
-        "df_name": "df_polars",
-        "df_element_id": "IRRELEVANT",
-    },
-}
+# polars_datasource = {
+#     "source_type": ElementDatasourceType.dataframe,
+#     "dataframe_info": {
+#         "df_name": "df_polars",
+#         "df_element_id": "IRRELEVANT",
+#     },
+# }
 
-pandas_datasource = {
-    "source_type": ElementDatasourceType.dataframe,
-    "dataframe_info": {
-        "df_name": "df_pandas",
-        "df_element_id": "IRRELEVANT",
-    },
-}
+# pandas_datasource = {
+#     "source_type": ElementDatasourceType.dataframe,
+#     "dataframe_info": {
+#         "df_name": "df_pandas",
+#         "df_element_id": "IRRELEVANT",
+#     },
+# }
 
 
 # polars_result = livedocs.query("select * from df_polars limit 10", polars_datasource)

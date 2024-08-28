@@ -5,6 +5,8 @@ from datetime import datetime
 import polars as pl
 import altair as alt
 
+from datetime import date
+
 from livedocs.types import Credentials
 
 _LIVEDOCS_COLORS = [
@@ -167,6 +169,12 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
 
     return column_types
 
+"""JSON serializer for objects not serializable by default json code"""
+def _datetime_json_serializer(obj):
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
+
 
 __all__ = [
     "_fetch_credentials",
@@ -177,4 +185,5 @@ __all__ = [
     "_get_color_group_key",
     "_get_user_defined_color",
     "_get_user_defined_opacity",
+    "_datetime_json_serializer",
 ]

@@ -767,14 +767,14 @@ def main_chart(
                 alt.Chart(df)
                 .mark_point(cursor="crosshair")
                 .encode(
-                    clip=True,
+                    # clip=True,
                     x=x_encoding,
                     y=y_encoding,
                     color=color_by_encoding,
                     opacity=opacity_encoding,
                 )
             )
-        elif mark_type == "area":
+        elif mark_type == "stacked_area":
             base_layer = (
                 alt.Chart(df)
                 .mark_area(

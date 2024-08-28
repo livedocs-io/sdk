@@ -2,12 +2,12 @@ import json
 import os
 import tempfile
 from typing import Dict, List
-from IPython.display import display
-
 
 from jinja2 import Template
 
 import polars as pl
+import gzip
+import base64
 import requests
 
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -18,7 +18,9 @@ from livedocs.types import (
     LivedocsChartSpec,
     Schema,
 )
+from duckdb import CatalogException
 from livedocs.utils.common import (
+    _datetime_json_serializer,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
@@ -45,7 +47,6 @@ class Livedocs:
     """
 
     def __init__(self):
-        print("VM-LIB __INIT__")
         self._duckdb = DuckDBSingleton()
         self._file_dir = tempfile.mkdtemp()
         self._file_manifests: Dict[str, str] = {}
@@ -58,7 +59,6 @@ class Livedocs:
     """
 
     def initialize(self, report_id: str, token: str):
-        print("VM-LIB INITIALIZED")
         self._report_id = report_id
         self._token = token
         self._credentials = _fetch_credentials(report_id, token)
@@ -69,24 +69,26 @@ class Livedocs:
     a Polars DataFrame. Simple. 
     """
 
-    def query(self, query: str, str_datasource: str, context: dict) -> pl.DataFrame:
-        # try:
+    def query(self, query: str, str_datasource: str, context: dict) -> tuple[pl.DataFrame, str]:
         datasource: ElementDataSource = json.loads(str_datasource)
-
         final_query = self.add_jinja_vars(query, context)
-        display(final_query)
+
+        df: pl.DataFrame = pl.DataFrame()
 
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database | ElementDatasourceType.database_table:
-                return self._query_database(final_query, datasource)
+                df = self._query_database(final_query, datasource)
             case ElementDatasourceType.file:
-                return self._query_file(final_query, datasource)
+                df = self._query_file(final_query, datasource)
             case ElementDatasourceType.dataframe:
-                return self._query_dataframe(final_query, datasource)
+                df = self._query_dataframe(final_query, datasource)
             case _:
-                return "Unknown ElementDataSource"
-        # except Exception as e:
-        #     raise RuntimeError(f"An error occurred while querying the database: {e}")
+                raise ValueError(f"Unknown ElementDataSource: {datasource['source_type']}")
+            
+        json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
+        compressed = gzip.compress(json_string.encode('utf-8'))
+        encoded = base64.b64encode(compressed).decode('ascii')
+        return (df, encoded)
 
     """
     Adds the local variables to the query. 
@@ -199,24 +201,19 @@ class Livedocs:
             connection_string = create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
-
-        # This is to prevent a potential conflict with aliases in the database
-        alias = parsed_credentials["database"] + "_" + db_connector_id.replace("-", "")
+        
+        # This is unique to the workspace, so no chance of conflict
+        alias = credentials["db_name"] 
 
         try:
             self._duckdb.attach_postgres(connection_string, alias)
         except Exception as e:
             raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
 
-        # Replace table names with full table name
-        full_table_name = query.replace("FROM ", f"FROM {alias}.").replace(
-            "from ", f"from {alias}."
-        )
-
         try:
-            result = self._duckdb.conn.sql(
-                f"SELECT * FROM ({full_table_name}) AS subquery"
-            ).pl()
+            result = self._duckdb.conn.sql(query).pl()
+        except CatalogException as e:
+            raise RuntimeError("CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')")
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
 
@@ -238,7 +235,7 @@ class Livedocs:
             if not os.path.exists(temp_file_path):
                 signed_url = self._get_signed_url(file_id)
                 self._download_file(signed_url, temp_file_path)
-
+                
             if file_type == "csv":
                 query_with_path = query.replace(
                     file_name, f"read_csv_auto('{temp_file_path}')"
