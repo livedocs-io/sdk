@@ -100,6 +100,11 @@ def map_datatype_to_scale_type(type: str) -> str:
     return type_mapping.get(type, "nominal")
 
 
+def convert_datetime_to_iso(df):
+    for column in df.select_dtypes(include=['datetime64']).columns:
+        df[column] = df[column].dt.strftime('%Y-%m-%dT%H:%M:%S')
+    return df
+
 """
 Returns a Vega spec for a given Livedocs chart configuration and a dataframe
 retrieved using _get_altair_datasource_query method. In production, the vegafusion
@@ -111,9 +116,11 @@ based on the chartType parameter of the Livedocs chart config.
 
 
 def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
-    # alt.data_transformers.enable("vegafusion")
+    alt.data_transformers.enable("vegafusion")
 
     style_settings = spec.get("styleSettings", {})
+
+    # df = convert_datetime_to_iso(df)
 
     if spec.get("chartType"):
         if spec["chartType"] == "main":
@@ -258,7 +265,7 @@ def pie(
     )
 
     # Convert the chart to Vega-Lite JSON spec
-    vega_spec = final_chart.to_json()
+    vega_spec = final_chart.to_json(format="vega")
     return vega_spec
 
 
@@ -378,7 +385,7 @@ def histogram(
         },
     )
 
-    vega_spec = chart.to_json()
+    vega_spec = chart.to_json(format="vega")
     return vega_spec
 
 
@@ -833,7 +840,7 @@ def main_chart(
         },
     )
 
-    vega_spec = chart.to_json()
+    vega_spec = chart.to_json(format="vega")
     return vega_spec
 
 
@@ -1084,7 +1091,7 @@ def swapped_main_chart(
         },
     )
 
-    vega_spec = chart.to_json()
+    vega_spec = chart.to_json(format="vega")
     return vega_spec
 
 
