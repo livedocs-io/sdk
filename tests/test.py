@@ -16,27 +16,27 @@ import numpy as np
 import json
 
 livedocs = Livedocs()
-livedocs, secrets = livedocs.initialize(
-    "66fe9f9c-9a34-4c9d-9608-16345fc87f07",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJiZTZmMjJlNi01NDJiLTQ2MzgtYWEzZC1mMWQxYmVmODJmNzYiLCJyZXBvcnRfaWQiOiI2NmZlOWY5Yy05YTM0LTRjOWQtOTYwOC0xNjM0NWZjODdmMDciLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTI2ODkyNSwiZXhwIjoxNzI1Mjk3NzI1fQ.5cRjVtEC1QJm-ifhargA8VxVZWX-Bh8_VcYeHYMC2NI"
+livedocs.initialize(
+    "219141ef-b707-4d24-ac0f-f6fd52aeca34",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJiZTZmMjJlNi01NDJiLTQ2MzgtYWEzZC1mMWQxYmVmODJmNzYiLCJyZXBvcnRfaWQiOiIyMTkxNDFlZi1iNzA3LTRkMjQtYWMwZi1mNmZkNTJhZWNhMzQiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTMwMzg3NywiZXhwIjoxNzI1MzMyNjc3fQ.1cc-TZ_UU74ts8F7TF5TZo7XdyYwpNp-emw1UjgUNbo"
 )
 
 # User code (i.e, the test)
 
 # Postgres datasource
 
-# pg_datasource = {
-#     "source_type": "database",
-#     "database_info": {
-#         "database_connector_id": "6684d3fb-b995-489f-a5c3-2d16d7a82069",
-#         "database_name": "Appstore",
-#         "database_type": "Postgres",
-#     },
-# }
+pg_datasource = {
+    "source_type": "database",
+    "database_info": {
+        "database_connector_id": "7ff3aee7-59c5-4934-89c1-4a77715774d3",
+        "database_name": "appstore",
+        "database_type": "Postgres",
+    },
+}
 
-# pg_result = livedocs.query("select * from Appstore limit 10", json.dumps(pg_datasource), {})
+pg_result = livedocs.query("select * from Appstore.public.users limit 10", json.dumps(pg_datasource), {})
 
-# print(pg_result)
+print(pg_result)
 
 # File datasources
 
@@ -86,21 +86,21 @@ livedocs, secrets = livedocs.initialize(
 # Dataframe datasources
 
 # Create a 20x20 array of random numbers
-data_df = np.random.rand(20, 20)
+# data_df = np.random.rand(20, 20)
 
 # Create headers
-headers = [f"col{i}" for i in range(20)]
+# headers = [f"col{i}" for i in range(20)]
 
-df_polars = pl.DataFrame(data_df, schema=headers)
+# df_polars = pl.DataFrame(data_df, schema=headers)
 # df_pandas = pd.DataFrame(data_df, columns=headers)
 
-polars_datasource = {
-    "source_type": "dataframe",
-    "dataframe_info": {
-        "df_name": "df_polars",
-        "df_element_id": "IRRELEVANT",
-    },
-}
+# polars_datasource = {
+#     "source_type": "dataframe",
+#     "dataframe_info": {
+#         "df_name": "df_polars",
+#         "df_element_id": "IRRELEVANT",
+#     },
+# }
 
 # pandas_datasource = {
 #     "source_type": ElementDatasourceType.dataframe,
@@ -111,9 +111,12 @@ polars_datasource = {
 # }
 
 
-polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {})
+# polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {})
 # pandas_result = livedocs.query("select * from df_pandas limit 10", pandas_datasource)
 
-print(polars_result)
-# print(secrets['CLIENT_ID'])
+# print(polars_result)
 # print(pandas_result)
+
+# print(livedocs.secrets('CLIENT_ID', 'not the actual value'))
+# print(livedocs.secrets('UNKNOWN', 'not the actual value'))
+# print(livedocs.secrets('UNKNOWN'))

@@ -50,6 +50,7 @@ class Livedocs:
         self._duckdb = DuckDBSingleton()
         self._file_dir = tempfile.mkdtemp()
         self._file_manifests: Dict[str, str] = {}
+        self._secrets = {}
         self.is_initialized = False
 
     """
@@ -66,8 +67,23 @@ class Livedocs:
 
         secrets = self._credentials.get('workspace_secrets', {})
         secrets_dict = {key: secret_info['value'] for key, secret_info in secrets.items()}
+        self._secrets = secrets_dict
 
-        return self, secrets_dict
+    """
+    Accessor for user-defined secrets. Use this like:
+
+    livedocs.secrets('CLIENT_ID', 'default_value (optional)')
+
+    """
+    def secrets(self, key, default_value = "") -> str:
+        if self._secrets.get(key):
+            return self._secrets.get(key)
+        else:
+            result = _fetch_credentials(self._report_id, self._token)
+            secrets = result.get('workspace_secrets', {})
+            secrets_dict = {key: secret_info['value'] for key, secret_info in secrets.items()}
+            self._secrets = secrets_dict
+            return self._secrets.get(key, default_value)
 
     """
     Central query function. Give it a query and a datasource, and it will return 
@@ -149,21 +165,14 @@ class Livedocs:
     ) -> tuple[pl.DataFrame, dict]:
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
-                result = self._query_database(query, datasource)
-
-                schema_query = f"""
-                    SELECT 
-                        column_name, 
-                        udt_name
-                    FROM 
-                        information_schema.columns
-                    WHERE 
-                        table_name = '{datasource["database_table_info"]["table_name"]}'
-                        AND table_schema = '{datasource['database_table_info']['schema_name']}'
-                """
-
+                # Get the schema directly from the query
+                schema_query = f"DESCRIBE {query}"
                 _schema = self._query_database(schema_query, datasource)
+                print(_schema)
                 schema = process_postgres_schema(_schema)
+                
+                # Execute the original query
+                result = self._query_database(query, datasource)
                 return [result, schema]
             case _:
                 return "Unknown DatabaseType"
@@ -191,7 +200,13 @@ class Livedocs:
     ) -> pl.DataFrame:
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials = self._credentials["databases"][db_connector_id]
+            # This won't throw an error if the credentials are not found
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                # This will throw an error if the credentials are not found
+                credentials = self._credentials["databases"][db_connector_id]
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
