@@ -500,11 +500,7 @@ def main_chart(
         y_type = y_series.get("type") or map_datatype_to_scale_type(schema[y_field])
         y_aggregate = y_series.get("aggregate", "sum")
         mark_type = y_series.get("mark", "line")
-        # y_temporal_format = settings["yAxis"].get("temporalFormat") #added by matt troubleshooting
         y_temporal_format = y_series.get("temporalFormat")
-
-        # print(f"y temporal format:{y_temporal_format}")
-        # print(f"x_temporal format:{x_temporal_format}")
 
         y_encoding = create_y_encoding(
             y_field, y_type, y_aggregate, y_temporal_format, style_settings
@@ -666,25 +662,24 @@ def main_chart(
                         color=color_by_encoding,
                         opacity=opacity_encoding,
                         fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
-                        # tooltip=[
-                        #     alt.Tooltip(
-                        #         field=x_field,
-                        #         type=x_type,
-                        #         title=x_field,
-                        #         timeUnit=x_temporal_format
-                        #     ),
-                        #     alt.Tooltip(
-                        #         field=y_field,
-                        #         type=y_type,
-                        #         timeUnit=x_temporal_format,
-                        #         title=y_field
-                        #         if y_aggregate == "none"
-                        #         else f"{y_aggregate} of {y_field}",
-                        #         aggregate=y_aggregate
-                        #         if y_aggregate != "none"
-                        #         else alt.Undefined,
-                        #     ),
-                        # ],
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -899,6 +894,7 @@ def swapped_main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
+
     x_aggregate = settings["xAxis"].get("aggregate", "sum")
     x_color_by = settings["xAxis"].get("color_by")
 
