@@ -58,11 +58,16 @@ class Livedocs:
     DB connection credentials and secrets for the report.
     """
 
-    def initialize(self, report_id: str, token: str):
+    def initialize(self, report_id: str, token: str) ->  tuple[object, dict]:
         self._report_id = report_id
         self._token = token
         self._credentials = _fetch_credentials(report_id, token)
         self.is_initialized = True
+
+        secrets = self._credentials.get('workspace_secrets', {})
+        secrets_dict = {key: secret_info['value'] for key, secret_info in secrets.items()}
+
+        return self, secrets_dict
 
     """
     Central query function. Give it a query and a datasource, and it will return 
