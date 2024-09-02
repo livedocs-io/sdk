@@ -752,6 +752,7 @@ def main_chart(
             bar_series_layer = alt.layer(base_layer)
 
             inner_layers.append(bar_series_layer)
+
         elif mark_type == "line":
             base_layer = (
                 alt.Chart(df)
@@ -759,8 +760,8 @@ def main_chart(
                     clip=True,
                     strokeCap="square",
                     strokeJoin="round",
-                    cursor="crosshair",
-                )
+                    cursor="crosshair"
+                    )
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
@@ -768,6 +769,80 @@ def main_chart(
                     opacity=opacity_encoding,
                 )
             )
+
+
+            ## Selectors and layers for line chart
+            nearest = alt.selection_point(
+                    nearest=True, 
+                    on="pointerover",
+                    empty=False,
+                    encodings=['x'],
+                    fields=[x_field]
+                    )
+            
+            points1 = alt.Chart(df).mark_point(
+                cursor="crosshair"
+                ).encode(
+                    x=x_encoding,
+                    opacity=alt.value(0),
+                    tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    ).add_selection(
+                    nearest)
+            
+            
+            rules = alt.Chart(df).mark_rule(
+                    color="gray",
+                    cursor="crosshair"
+            ).encode(
+                    x=x_encoding,
+                    tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    opacity=alt.condition(nearest, 
+                                          alt.value(1), 
+                                          alt.value(0))
+            )
+
+            
+            base_layer = alt.layer(base_layer, 
+                                   points1, 
+                                #    points2, 
+                                   rules
+                                #    text
+                                   )
+
         elif mark_type == "point":
             print("point")
             base_layer = (
