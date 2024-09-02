@@ -74,17 +74,8 @@ class Livedocs:
         final_query = self.add_jinja_vars(query, context)
 
         df: pl.DataFrame = pl.DataFrame()
+        (df, schema) = self._query_with_schema(final_query, datasource)
 
-        match ElementDatasourceType(datasource["source_type"]):
-            case ElementDatasourceType.database | ElementDatasourceType.database_table:
-                df = self._query_database(final_query, datasource)
-            case ElementDatasourceType.file:
-                df = self._query_file(final_query, datasource)
-            case ElementDatasourceType.dataframe:
-                df = self._query_dataframe(final_query, datasource)
-            case _:
-                raise ValueError(f"Unknown ElementDataSource: {datasource['source_type']}")
-            
         json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
         compressed = gzip.compress(json_string.encode('utf-8'))
         encoded = base64.b64encode(compressed).decode('ascii')
@@ -114,11 +105,18 @@ class Livedocs:
     Gets a polars table for a given datasource. 
     """
 
-    def _get_table_response(self, datasource: ElementDataSource) -> pl.DataFrame:
+    def _get_table_response(self, str_datasource: ElementDataSource) -> pl.DataFrame:
+        datasource: ElementDataSource = json.loads(str_datasource)
         results: tuple[pl.DataFrame, dict] = self._query_with_schema(
             _get_altair_datasource_query(datasource), datasource
         )
-        return results[0]
+
+        (df, schema) = results
+
+        json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
+        compressed = gzip.compress(json_string.encode('utf-8'))
+        encoded = base64.b64encode(compressed).decode('ascii')
+        return encoded
 
     """
     Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
@@ -128,7 +126,7 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> tuple[pl.DataFrame, dict]:
         match ElementDatasourceType(datasource["source_type"]):
-            case ElementDatasourceType.database_table:
+            case ElementDatasourceType.database | ElementDatasourceType.database_table:
                 return self._query_database_with_schema(query, datasource)
             case ElementDatasourceType.file:
                 return self._query_file_with_schema(query, datasource)
