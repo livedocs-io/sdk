@@ -632,6 +632,7 @@ def main_chart(
                             alt.Tooltip(
                                 field=y_field,
                                 type=y_type,
+                                
                                 title=y_field
                                 if y_aggregate == "none"
                                 else f"{y_aggregate} of {y_field}",
@@ -666,6 +667,7 @@ def main_chart(
                                 field=x_field,
                                 type=x_type,
                                 title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
                             ),
                             alt.Tooltip(
                                 field=y_field,
@@ -892,6 +894,7 @@ def swapped_main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
+
     x_aggregate = settings["xAxis"].get("aggregate", "sum")
     x_color_by = settings["xAxis"].get("color_by")
 
