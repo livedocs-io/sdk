@@ -836,12 +836,7 @@ def main_chart(
             )
 
             
-            base_layer = alt.layer(base_layer, 
-                                   points1, 
-                                #    points2, 
-                                   rules
-                                #    text
-                                   )
+            base_layer = alt.layer(base_layer, points1, rules)
 
         elif mark_type == "point":
             print("point")
