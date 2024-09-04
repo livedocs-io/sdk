@@ -135,6 +135,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
             vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
 
         print(clean_spec_for_logging(vega_spec))
+    
         return vega_spec
     else:
         empty_chart = {
@@ -684,71 +685,50 @@ def main_chart(
                     .add_params(select, highlight, brush)
                 )
         elif mark_type == "full_stacked_column":
+            print(mark_type)
             norm_start = generate_unique_name("norm_start")
             norm_end = generate_unique_name("norm_end")
             x_field_name = generate_unique_name("xAxis")
             agg_name = generate_unique_name("agg")
-
-            # Adjust transformation for color_by field if it exists
-            color_by_field = None
-
-            if color_by_encoding:
-                color_by_field = y_series["color_by"]["field"]
+            
 
             # Generate the base layer chart
             base_layer = (
                 alt.Chart(df)
-                .mark_bar(clip=True, filled=True, cursor="pointer")
+                .mark_bar(clip=True, 
+                          filled=True, 
+                          cursor="pointer")
                 .encode(
-                    x=alt.X(
-                        f"{x_field_name}:T",
-                        title=f"{x_field} (year)",
-                        timeUnit="year",
-                        bandPosition=0,
-                        axis=alt.Axis(
-                            grid=True,
-                            ticks=True,
-                            tickCount=alt.ExprRef(
-                                "length(domain('x')) > 0 ? min(ceil(width / 40), ceil((domain('x')[1] - domain('x')[0]) / 31536000000)) : ceil(width / 40)"
-                            ),
-                            labels=True,
-                            labelFlush=False,
-                        ),
-                    ),
-                    y=alt.Y(
-                        f"{norm_start}:Q",
-                        title=f"Sum of {y_field}",
-                        scale=alt.Scale(domainMax=1),
-                        axis=alt.Axis(
-                            grid=True,
-                            ticks=True,
-                            labels=True,
-                            labelFlush=False,
-                            # format="PERCENT"
-                        ),
-                    ),
-                    y2=f"{norm_end}:Q",
                     color=color_by_encoding,
                     opacity=opacity_encoding,
+                    x=x_encoding,
+                    y=y_encoding.stack("normalize"),
+                    tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
+                            ),
+
+                            alt.Tooltip(
+                                    field=color_by_field if 'color_by_field' in locals() else alt.Undefined,
+                                    type=color_by_type if 'color_by_type' in locals() else alt.Undefined,
+                                    title=color_by_field if 'color_by_field' in locals() else alt.Undefined
+                                ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
                 )
-                .transform_timeunit(as_=x_field_name, field=x_field, timeUnit="year")
-                .transform_aggregate(
-                    aggregate=[{"op": "sum", "as": agg_name, "field": y_field}],
-                    groupby=[x_field_name, f"{x_field_name}_end"]
-                    + ([color_by_field] if color_by_field else []),
-                )
-                .transform_stack(
-                    stack=agg_name,
-                    groupby=[x_field_name],
-                    offset="normalize",
-                    sort=[],
-                    as_=[norm_start, norm_end],
-                )
-                .transform_calculate(
-                    as_="norm_delta",
-                    calculate=f"datum['{norm_end}'] - datum['{norm_start}']",
-                )
-            )
 
             # Create nested layer structure
             bar_series_layer = alt.layer(base_layer)
@@ -768,7 +748,7 @@ def main_chart(
                     x=x_encoding,
                     y=y_encoding,
                     color=color_by_encoding,
-                    opacity=opacity_encoding,
+                    # opacity=opacity_encoding,
                 )
             )
 
