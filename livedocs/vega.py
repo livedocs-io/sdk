@@ -688,7 +688,7 @@ def main_chart(
 
 
         elif mark_type == "stacked_column":
-            brush = alt.selection_interval(encodings=["x"], empty=False)
+            brush = alt.selection_interval(encodings=["x"])
             select = alt.selection_point(name="select", on="click")
             highlight = alt.selection_point(
                 name="highlight", on="pointerover", empty=False
@@ -701,7 +701,7 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        color=color_by_encoding,
+                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
                         opacity=opacity_encoding,
                         fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
                         tooltip=[
@@ -740,7 +740,7 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        color=color_by_encoding,
+                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
                         opacity=opacity_encoding,
                         fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
                         tooltip=[
