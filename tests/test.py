@@ -17,26 +17,26 @@ import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "219141ef-b707-4d24-ac0f-f6fd52aeca34",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJiZTZmMjJlNi01NDJiLTQ2MzgtYWEzZC1mMWQxYmVmODJmNzYiLCJyZXBvcnRfaWQiOiIyMTkxNDFlZi1iNzA3LTRkMjQtYWMwZi1mNmZkNTJhZWNhMzQiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTMwMzg3NywiZXhwIjoxNzI1MzMyNjc3fQ.1cc-TZ_UU74ts8F7TF5TZo7XdyYwpNp-emw1UjgUNbo"
+    "16c458bb-d5a0-48c5-aa4e-15ef342c9fff",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJiZTZmMjJlNi01NDJiLTQ2MzgtYWEzZC1mMWQxYmVmODJmNzYiLCJyZXBvcnRfaWQiOiIxNmM0NThiYi1kNWEwLTQ4YzUtYWE0ZS0xNWVmMzQyYzlmZmYiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTM1Mzc5OSwiZXhwIjoxNzI1MzgyNTk5fQ.YrVnWcQCbrJJ3DV3W6wYxZeUAtzqfFnMLEYyLRnJ6hs"
 )
 
 # User code (i.e, the test)
 
 # Postgres datasource
 
-pg_datasource = {
-    "source_type": "database",
-    "database_info": {
-        "database_connector_id": "7ff3aee7-59c5-4934-89c1-4a77715774d3",
-        "database_name": "appstore",
-        "database_type": "Postgres",
-    },
-}
+# pg_datasource = {
+#     "source_type": "database",
+#     "database_info": {
+#         "database_connector_id": "7ff3aee7-59c5-4934-89c1-4a77715774d3",
+#         "database_name": "appstore",
+#         "database_type": "Postgres",
+#     },
+# }
 
-pg_result = livedocs.query("select * from Appstore.public.users limit 10", json.dumps(pg_datasource), {})
+# pg_result = livedocs.query("select * from Appstore.public.users limit 10", json.dumps(pg_datasource), {})
 
-print(pg_result)
+# print(pg_result)
 
 # File datasources
 

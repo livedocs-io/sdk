@@ -10,6 +10,8 @@ import gzip
 import base64
 import requests
 
+from IPython.display import display
+
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     DatabaseType,
@@ -101,13 +103,22 @@ class Livedocs:
         compressed = gzip.compress(json_string.encode('utf-8'))
         encoded = base64.b64encode(compressed).decode('ascii')
         return (df, encoded)
+    
 
+    """
+    Plugs Jinja variables into a raw HTML string for a text element
+    """
+    def process_raw_text(self, str_src: str, context: dict) -> str:
+        src = json.loads(str_src)
+        return self.add_jinja_vars(src["html"], context)
+
+   
     """
     Adds the local variables to the query. 
     """
 
-    def add_jinja_vars(self, query: str, context: dict) -> str:
-        template = Template(query)
+    def add_jinja_vars(self, text: str, context: dict) -> str:
+        template = Template(text)
         return template.render(context)
 
     """
