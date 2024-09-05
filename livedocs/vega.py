@@ -684,8 +684,89 @@ def main_chart(
                     )
                     .add_params(select, highlight, brush)
                 )
+
+
+
+        elif mark_type == "stacked_column":
+            brush = alt.selection_interval(encodings=["x"])
+            select = alt.selection_point(name="select", on="click")
+            highlight = alt.selection_point(
+                name="highlight", on="pointerover", empty=False
+            )
+
+            if color_by_aggregate:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_bar(clip=True)
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding,
+                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
+                        opacity=opacity_encoding,
+                        fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined   
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                            alt.Tooltip(
+                                field=color_by_field,
+                                type=color_by_type,
+                                title=color_by_field,
+                                aggregate=color_by_aggregate
+                                if color_by_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
+                    .add_params(select, highlight, brush)
+                )
+            else:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_bar(clip=True, cursor="crosshair")
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding,
+                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
+                        opacity=opacity_encoding,
+                        fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
+                    .add_params(select, highlight, brush)
+                )
+
+
         elif mark_type == "full_stacked_column":
-            print(mark_type)
             norm_start = generate_unique_name("norm_start")
             norm_end = generate_unique_name("norm_end")
             x_field_name = generate_unique_name("xAxis")
@@ -734,6 +815,8 @@ def main_chart(
             bar_series_layer = alt.layer(base_layer)
 
             inner_layers.append(bar_series_layer)
+
+        
 
         elif mark_type == "line":
             base_layer = (
