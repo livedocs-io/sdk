@@ -933,6 +933,26 @@ def main_chart(
                     opacity=opacity_encoding,
                 )
             )
+
+        elif mark_type == "full_stacked_area":
+            base_layer = (
+                alt.Chart(df)
+                .mark_area(
+                    clip=True,
+                    point=False,
+                    line=True,
+                    strokeJoin="round",
+                    cursor="crosshair",
+                )
+                .encode(
+                    x=x_encoding,
+                    y=y_encoding.stack("normalize"),
+                    color=color_by_encoding,
+                    opacity=opacity_encoding,
+                )
+            )
+
+
         else:
             base_layer = (
                 alt.Chart(df)
