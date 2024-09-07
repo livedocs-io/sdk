@@ -1248,22 +1248,37 @@ def swapped_main_chart(
             )
         )
     elif mark_type == "full_stacked_bar":
+
         brush = alt.selection_interval(encodings=["y"])
         select = alt.selection_point(name="select", on="click")
         highlight = alt.selection_point(
-        name="highlight", on="pointerover", empty=False
+            name="highlight", 
+            on="pointerover", 
+            empty=False
         )
 
+        conditional_stroke = {
+            "condition": [
+                {"param": "select", "empty": False, "value": 2},
+                {"param": "highlight", "empty": False, "value": 1},
+                        ],
+            "value": 0,
+        }
+        
         if color_by_field:
             base_layer = (
                 alt.Chart(df)
-                .mark_bar(clip=True, filled=True, cursor="pointer")
+                .mark_bar(clip=True, 
+                          filled=True, 
+                          cursor="pointer",
+                          stroke="black")
                 .encode(
                     x=x_encoding.stack("normalize"),
                     y=y_encoding,
                     color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
                     opacity=opacity_encoding,
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                    strokeWidth=conditional_stroke,
                     tooltip=[
                         alt.Tooltip(
                             field=y_field,
