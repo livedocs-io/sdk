@@ -633,7 +633,6 @@ def main_chart(
                             alt.Tooltip(
                                 field=y_field,
                                 type=y_type,
-                                
                                 title=y_field
                                 if y_aggregate == "none"
                                 else f"{y_aggregate} of {y_field}",
@@ -1159,22 +1158,49 @@ def swapped_main_chart(
                     color=color_by_encoding,
                     opacity=opacity_encoding,
                     yOffset=alt.YOffset(field=color_by_field)
-                    if color_by_field
-                    else alt.Undefined,
+                    if color_by_encoding
+                    else None,
                     tooltip=[
                         alt.Tooltip(
                             field=y_field,
                             type=y_type,
                             title=y_field,
+                            timeUnit=y_temporal_format if y_temporal_format else alt.Undefined                                
+
                         ),
                         alt.Tooltip(
                             field=x_field,
-                            type=x_field,
-                            title=x_field,
+                            type=x_type,
+                            title=x_field
+                            if x_aggregate == "none"
+                            else f'{x_aggregate} of  {x_field}',
                             aggregate=x_aggregate
                             if x_aggregate != "none"
                             else alt.Undefined,
                         ),
+                        # alt.Tooltip(
+                        #     field=y_field,
+                        #     type=y_type,
+                        #     title=y_field
+                        #     if y_aggregate == "none"
+                        #     else f"{y_aggregate} of {y_field}",
+                        #     aggregate=y_aggregate
+                        #     if y_aggregate != "none"
+                        #     else alt.Undefined,
+                        # ),
+                        alt.Tooltip(
+                            field=color_by_field,
+                            type=color_by_type,
+                            title=color_by_field,
+                            aggregate=color_by_aggregate
+                            if color_by_aggregate != "none"
+                            else alt.Undefined,
+
+                        # alt.Tooltip(
+                        #     field=color_by_field,
+                        #     type=color_by_type,
+                        #     title=color_by_field
+                        )
                     ],
                 )
             )
@@ -1187,19 +1213,23 @@ def swapped_main_chart(
                     y=y_encoding,
                     color=color_by_encoding,
                     opacity=opacity_encoding,
-                    # tooltip=[
-                    #     alt.Tooltip(
-                    #         field=y_field,
-                    #         type=y_type,
-                    #         title=y_field,
-                    #     ),
-                    #     alt.Tooltip(
-                    #         field=x_field,
-                    #         type=x_field,
-                    #         title=x_field,
-                    #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
-                    #     ),
-                    # ]
+                    tooltip=[
+                        alt.Tooltip(
+                            field=y_field,
+                            type=y_type,
+                            title=y_field,
+                            timeUnit=y_temporal_format if y_temporal_format else alt.Undefined                                
+
+                        ),
+                        alt.Tooltip(
+                            field=x_field,
+                            type=x_type,
+                            title=x_field,
+                            aggregate=x_aggregate
+                            if x_aggregate != "none"
+                            else alt.Undefined
+                        )
+                    ],
                 )
             )
     elif mark_type == "stacked_bar":
