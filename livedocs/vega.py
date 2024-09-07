@@ -629,6 +629,8 @@ def main_chart(
                                 field=x_field,
                                 type=x_type,
                                 title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
+
                             ),
                             alt.Tooltip(
                                 field=y_field,
