@@ -603,27 +603,41 @@ def main_chart(
                 f"{y_series.get('mark', 'line')} layer {index + 1}"
             )
 
+        # Create selectors
+        brush = alt.selection_interval(encodings=["x"])
+        select = alt.selection_point(name="select", on="click")
+        highlight = alt.selection_point(
+            name="highlight", 
+            on="pointerover", 
+            empty=False
+        )
+
+        conditional_stroke = {
+            "condition": [
+                {"param": "select", "empty": False, "value": 2},
+                {"param": "highlight", "empty": False, "value": 1},
+                        ],
+            "value": 0,
+        }
+
         # Create the appropriate mark type
         if mark_type == "grouped_column":
-            brush = alt.selection_interval(encodings=["x"], empty=False)
-            select = alt.selection_point(name="select", on="click")
-            highlight = alt.selection_point(
-                name="highlight", on="pointerover", empty=False
-            )
 
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
-                    .mark_bar(clip=True)
+                    .mark_bar(clip=True,
+                              stroke="black")
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        color=color_by_encoding,
+                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
                         opacity=opacity_encoding,
+                        fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                        strokeWidth=conditional_stroke,
                         xOffset=alt.XOffset(field=color_by_field)
                         if color_by_encoding
                         else None,
-                        fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -657,13 +671,15 @@ def main_chart(
             else:
                 base_layer = (
                     alt.Chart(df)
-                    .mark_bar(clip=True, cursor="crosshair")
+                    .mark_bar(clip=True, 
+                              stroke="black")
                     .encode(
                         x=x_encoding,
-                        y=y_encoding,
-                        color=color_by_encoding,
+                        y=y_encoding,                  
                         opacity=opacity_encoding,
-                        fillOpacity=alt.condition(select, alt.value(1), alt.value(0.3)),
+                        fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                        strokeWidth=conditional_stroke,
+                        color=alt.condition(brush, color_by_encoding,alt.value('lightgray')),
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
