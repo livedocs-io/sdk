@@ -945,17 +945,84 @@ def main_chart(
             base_layer = alt.layer(base_layer, points1, rules)
 
         elif mark_type == "point":
-            print("point")
-            base_layer = (
-                alt.Chart(df)
-                .mark_point()
-                .encode(
-                    x=x_encoding,
-                    y=y_encoding,
-                    color=color_by_encoding,
-                    opacity=opacity_encoding,
+            
+            brush=alt.selection_interval()
+
+            if color_by_aggregate:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_circle(stroke="black", 
+                                 size=30)
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding,
+                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
+                        opacity=opacity_encoding,
+                        fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                        strokeWidth=conditional_stroke,
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                            alt.Tooltip(
+                                field=color_by_field,
+                                type=color_by_type,
+                                title=color_by_field,
+                                aggregate=color_by_aggregate
+                                if color_by_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    ).add_params(select, highlight, brush)
                 )
-            )
+
+            else:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_circle(stroke="black",
+                                 size=30)
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding,                  
+                        opacity=opacity_encoding,
+                        fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                        strokeWidth=conditional_stroke,
+                        color=alt.condition(brush, color_by_encoding,alt.value('lightgray')),
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined                                
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
+                    .add_params(select, highlight, brush)
+                )
+
         elif mark_type == "stacked_area":
 
             if color_by_aggregate:
