@@ -1035,22 +1035,80 @@ def main_chart(
 
 
         elif mark_type == "full_stacked_area":
-            base_layer = (
-                alt.Chart(df)
-                .mark_area(
-                    clip=True,
-                    point=False,
-                    line=True,
-                    strokeJoin="round",
-                    cursor="crosshair",
+            if color_by_aggregate:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_area(
+                        clip=True,
+                        strokeJoin="round",
+                    )
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding.stack("normalize"),
+                        color=color_by_encoding,
+                        opacity=opacity_encoding,
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined   
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                            alt.Tooltip(
+                                field=color_by_field,
+                                type=color_by_type,
+                                title=color_by_field,
+                                aggregate=color_by_aggregate
+                                if color_by_aggregate != "none"
+                                else alt.Undefined,
+                            ),
+                        ],
+                    )
                 )
-                .encode(
-                    x=x_encoding,
-                    y=y_encoding.stack("normalize"),
-                    color=color_by_encoding,
-                    opacity=opacity_encoding,
+
+            else:
+                base_layer = (
+                    alt.Chart(df)
+                    .mark_area(
+                        clip=True,
+                        line=True,
+                        strokeJoin="round",
+                    )
+                    .encode(
+                        x=x_encoding,
+                        y=y_encoding.stack("normalize"),
+                        color=color_by_encoding,
+                        opacity=opacity_encoding,
+                        tooltip=[
+                            alt.Tooltip(
+                                field=x_field,
+                                type=x_type,
+                                title=x_field,
+                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined   
+                            ),
+                            alt.Tooltip(
+                                field=y_field,
+                                type=y_type,
+                                title=y_field
+                                if y_aggregate == "none"
+                                else f"{y_aggregate} of {y_field}",
+                                aggregate=y_aggregate
+                                if y_aggregate != "none"
+                                else alt.Undefined
+                            ),
+                        ],
+                    )
                 )
-            )
 
 
         else:
