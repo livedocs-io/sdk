@@ -873,7 +873,6 @@ def main_chart(
                     x=x_encoding,
                     y=y_encoding,
                     color=color_by_encoding,
-                    # opacity=opacity_encoding,
                 )
             )
 
@@ -1014,8 +1013,10 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
-
-    chart = alt.layer(*inner_layers)
+    if mark_type=="line":
+        chart = alt.layer(*inner_layers).configure(alt.AreaConfig(cursor="crosshair"))
+    else:
+        chart = alt.layer(*inner_layers)
 
     for t in transform:
         if "calculate" in t:
@@ -1190,23 +1191,38 @@ def swapped_main_chart(
         horizontal=True,
     )
 
+        # Create selectors
+    brush = alt.selection_interval(encodings=["y"])
+    select = alt.selection_point(name="select", on="click")
+    highlight = alt.selection_point(
+        name="highlight", 
+        on="pointerover", 
+        empty=False
+    )
+
+    conditional_stroke = {
+        "condition": [
+            {"param": "select", "empty": False, "value": 2},
+            {"param": "highlight", "empty": False, "value": 1},
+                    ],
+        "value": 0,
+    }
+
     if mark_type == "grouped_bar":
-        brush = alt.selection_interval(encodings=["y"])
-        select = alt.selection_point(name="select", on="click")
-        highlight = alt.selection_point(
-        name="highlight", on="pointerover", empty=False
-        )
 
         if color_by_field:
             base_layer = (
                 alt.Chart(df)
-                .mark_bar(clip=True, filled=True, cursor="pointer")
+                .mark_bar(clip=True, 
+                          filled=True, 
+                          stroke="black")
                 .encode(
                     x=x_encoding,
                     y=y_encoding,
                     color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
                     opacity=opacity_encoding,
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                    strokeWidth=conditional_stroke,
                     yOffset=alt.YOffset(field=color_by_field)
                     if color_by_encoding
                     else None,
@@ -1236,18 +1252,22 @@ def swapped_main_chart(
                             else alt.Undefined,
                         )
                     ],
-                )
-            ).add_params(select, highlight, brush)
+                ).add_params(select, highlight, brush)
+            )
 
         else:
             base_layer = (
                 alt.Chart(df)
-                .mark_bar(clip=True, filled=True, cursor="pointer")
+                .mark_bar(clip=True, 
+                          filled=True, 
+                          stroke="black")
                 .encode(
                     x=x_encoding,
-                    y=y_encoding,
-                    color=color_by_encoding,
+                    y=y_encoding,                  
                     opacity=opacity_encoding,
+                    fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
+                    strokeWidth=conditional_stroke,
+                    color=alt.condition(brush, color_by_encoding,alt.value('lightgray')),
                     tooltip=[
                         alt.Tooltip(
                             field=y_field,
@@ -1264,8 +1284,9 @@ def swapped_main_chart(
                             else alt.Undefined
                         )
                     ],
-                )
+                ).add_params(select, highlight, brush)
             )
+
     elif mark_type == "stacked_bar":
         base_layer = (
             alt.Chart(df)
