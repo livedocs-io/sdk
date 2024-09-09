@@ -17,8 +17,8 @@ import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "16c458bb-d5a0-48c5-aa4e-15ef342c9fff",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJiZTZmMjJlNi01NDJiLTQ2MzgtYWEzZC1mMWQxYmVmODJmNzYiLCJyZXBvcnRfaWQiOiIxNmM0NThiYi1kNWEwLTQ4YzUtYWE0ZS0xNWVmMzQyYzlmZmYiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTM1Mzc5OSwiZXhwIjoxNzI1MzgyNTk5fQ.YrVnWcQCbrJJ3DV3W6wYxZeUAtzqfFnMLEYyLRnJ6hs"
+    "ec443da2-4d48-4d6f-9b83-06fdba60db13",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiI2ZDk4YTVhOC01OWNjLTQ5Y2YtYTMyMS0wMTY2NjE3ODdiMDciLCJyZXBvcnRfaWQiOiJlYzQ0M2RhMi00ZDQ4LTRkNmYtOWI4My0wNmZkYmE2MGRiMTMiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTcyMjg1MywiZXhwIjoxNzI1NzUxNjUzfQ.I3hWl7-muHbx71Fi9xTTQDdn6a7K2SIA90gPVraSlrA"
 )
 
 # User code (i.e, the test)
@@ -86,29 +86,17 @@ livedocs.initialize(
 # Dataframe datasources
 
 # Create a 20x20 array of random numbers
-# data_df = np.random.rand(20, 20)
+data_df = np.random.rand(20, 20)
 
 # Create headers
-# headers = [f"col{i}" for i in range(20)]
+headers = [f"col{i}" for i in range(20)]
 
-# df_polars = pl.DataFrame(data_df, schema=headers)
-# df_pandas = pd.DataFrame(data_df, columns=headers)
+df_polars = pl.DataFrame(data_df, schema=headers)
+df_pandas = pd.DataFrame(data_df, columns=headers)
 
-# polars_datasource = {
-#     "source_type": "dataframe",
-#     "dataframe_info": {
-#         "df_name": "df_polars",
-#         "df_element_id": "IRRELEVANT",
-#     },
-# }
 
-# pandas_datasource = {
-#     "source_type": ElementDatasourceType.dataframe,
-#     "dataframe_info": {
-#         "df_name": "df_pandas",
-#         "df_element_id": "IRRELEVANT",
-#     },
-# }
+livedocs._get_dataframe_schema(df_polars)
+livedocs._get_dataframe_schema(df_pandas)
 
 
 # polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {})

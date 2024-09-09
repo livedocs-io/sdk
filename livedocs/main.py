@@ -4,6 +4,7 @@ import tempfile
 from typing import Dict, List
 
 from jinja2 import Template
+import pandas as pd
 
 import polars as pl
 import gzip
@@ -126,8 +127,13 @@ class Livedocs:
     """
 
     def _get_vega_spec(
-        self, settings: LivedocsChartSpec, datasource: ElementDataSource
+        self, settings_str: str, datasource_str: str
     ) -> dict:
+        settings: LivedocsChartSpec = json.loads(settings_str)
+        datasource: ElementDataSource = json.loads(datasource_str)
+
+        display("_get_vega_spec")
+
         results: tuple[pl.DataFrame, dict] = self._query_with_schema(
             _get_altair_datasource_query(datasource), datasource
         )
@@ -179,7 +185,6 @@ class Livedocs:
                 # Get the schema directly from the query
                 schema_query = f"DESCRIBE {query}"
                 _schema = self._query_database(schema_query, datasource)
-                print(_schema)
                 schema = process_postgres_schema(_schema)
                 
                 # Execute the original query
@@ -304,6 +309,8 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
         dataframe_info = datasource.get("dataframe_info")
+        display("_query_dataframe")
+
         if dataframe_info is None:
             raise ValueError("Invalid ElementDataSource")
 
@@ -345,20 +352,46 @@ class Livedocs:
             f.write(response.content)
 
     """
-    Get the schema of any given data source.
+    Get the schema of any given dataframe
     """
-
-    def _get_dataframe_schema(self, datasource: ElementDataSource) -> List[Schema]:
-        schema_query = """SELECT column_name as name,
-                CASE 
-                    WHEN data_type IN ('INTEGER', 'BIGINT', 'DOUBLE', 'FLOAT') THEN 'NUMBER'
-                    WHEN data_type IN ('DATE', 'TIMESTAMP') THEN 'DATE'
-                    ELSE 'STRING'
-                END as type
-            FROM information_schema.columns
-            WHERE table_name = 'df'
-            ORDER BY column_index"""
-        raw_schema = self._query_dataframe(schema_query, datasource)
-        return [
-            {"name": name, "type": type, "children": []} for name, type in raw_schema
-        ]
+    def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
+        schema = []
+            
+        if isinstance(df, pd.DataFrame):
+            for column in df.columns:
+                dtype = df[column].dtype
+                if pd.api.types.is_numeric_dtype(dtype):
+                    col_type = "NUMBER"
+                elif pd.api.types.is_datetime64_any_dtype(dtype):
+                    col_type = "DATE"
+                else:
+                    col_type = "STRING"
+                
+                schema.append({
+                    "name": column,
+                    "livedocs_type": col_type,
+                    "children": []
+                })
+        
+        elif isinstance(df, pl.DataFrame):
+            for column in df.columns:
+                dtype = df[column].dtype
+                if isinstance(dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64, 
+                      pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64, 
+                      pl.Float32, pl.Float64)):
+                    col_type = "NUMBER"
+                elif isinstance(dtype, (pl.Date, pl.Datetime, pl.Time)):
+                    col_type = "DATE"
+                else:
+                    col_type = "STRING"
+                
+                schema.append({
+                    "name": column,
+                    "livedocs_type": col_type,
+                    "children": []
+                })
+        
+        else:
+            raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
+        
+        return json.dumps(schema, default=str)

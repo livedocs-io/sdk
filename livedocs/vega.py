@@ -134,7 +134,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
         elif spec["chartType"] == "pie":
             vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
 
-        print(clean_spec_for_logging(vega_spec))
+        # print(clean_spec_for_logging(vega_spec))
     
         return vega_spec
     else:
@@ -512,8 +512,6 @@ def main_chart(
 
         color_by_encoding = None
         color_by_aggregate = None
-
-        print(y_series["color_by"])
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"]["field"]
@@ -945,9 +943,7 @@ def main_chart(
             base_layer = alt.layer(base_layer, points1, rules)
 
         elif mark_type == "point":
-            
             brush=alt.selection_interval()
-
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -988,7 +984,6 @@ def main_chart(
                         ],
                     ).add_params(select, highlight, brush)
                 )
-
             else:
                 base_layer = (
                     alt.Chart(df)
@@ -1296,8 +1291,6 @@ def swapped_main_chart(
 
     color_by_encoding = None
     color_by_field = None
-
-    print(color_by_field)
 
     if x_color_by:
         color_by_field = x_color_by["field"]
