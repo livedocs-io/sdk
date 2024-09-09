@@ -137,7 +137,13 @@ class Livedocs:
         results: tuple[pl.DataFrame, dict] = self._query_with_schema(
             _get_altair_datasource_query(datasource), datasource
         )
-        return create_vega_spec(results[0], settings, results[1])
+
+        vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
+        compressed = gzip.compress(vega_spec_json_str.encode('utf-8'))
+        encoded = base64.b64encode(compressed).decode('ascii')
+        
+        return encoded
+
 
     """
     Gets a polars table for a given datasource. 
