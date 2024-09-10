@@ -17,8 +17,8 @@ import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "ec443da2-4d48-4d6f-9b83-06fdba60db13",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiI2ZDk4YTVhOC01OWNjLTQ5Y2YtYTMyMS0wMTY2NjE3ODdiMDciLCJyZXBvcnRfaWQiOiJlYzQ0M2RhMi00ZDQ4LTRkNmYtOWI4My0wNmZkYmE2MGRiMTMiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTcyMjg1MywiZXhwIjoxNzI1NzUxNjUzfQ.I3hWl7-muHbx71Fi9xTTQDdn6a7K2SIA90gPVraSlrA"
+    "66de1ead-1031-43dc-a35f-b071248bfc3c",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiI2ZDk4YTVhOC01OWNjLTQ5Y2YtYTMyMS0wMTY2NjE3ODdiMDciLCJyZXBvcnRfaWQiOiI2NmRlMWVhZC0xMDMxLTQzZGMtYTM1Zi1iMDcxMjQ4YmZjM2MiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTk1ODY1OSwiZXhwIjoxNzI1OTg3NDU5fQ.lHspGGbzA8CdMG9MloHeyQzdZQ2c4TvKfWDlbvTBpII"
 )
 
 # User code (i.e, the test)
@@ -85,6 +85,22 @@ livedocs.initialize(
 
 # Dataframe datasources
 
+polars_datasource = {
+    "source_type": "dataframe",
+    "dataframe_info": {
+        "df_name": "df_polars",
+        "df_element_id": "IRRELEVANT",
+    },
+}
+
+pandas_datasource = {
+    "source_type": "dataframe",
+    "dataframe_info": {
+        "df_name": "df_pandas",
+        "df_element_id": "IRRELEVANT",
+    },
+}
+
 # Create a 20x20 array of random numbers
 data_df = np.random.rand(20, 20)
 
@@ -95,14 +111,16 @@ df_polars = pl.DataFrame(data_df, schema=headers)
 df_pandas = pd.DataFrame(data_df, columns=headers)
 
 
-livedocs._get_dataframe_schema(df_polars)
-livedocs._get_dataframe_schema(df_pandas)
+# livedocs._get_dataframe_schema(df_polars)
+# livedocs._get_dataframe_schema(df_pandas)
 
 
-# polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {})
-# pandas_result = livedocs.query("select * from df_pandas limit 10", pandas_datasource)
+polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {}, df_polars)
+pandas_result = livedocs.query("select * from df_pandas limit 10", json.dumps(pandas_datasource), {}, df_pandas)
 
-# print(polars_result)
+
+# print(pandas_result)
+print(polars_result)
 # print(pandas_result)
 
 # print(livedocs.secrets('CLIENT_ID', 'not the actual value'))

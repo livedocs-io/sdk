@@ -11,8 +11,6 @@ import gzip
 import base64
 import requests
 
-from IPython.display import display
-
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     DatabaseType,
@@ -93,12 +91,12 @@ class Livedocs:
     a Polars DataFrame. Simple. 
     """
 
-    def query(self, query: str, str_datasource: str, context: dict) -> tuple[pl.DataFrame, str]:
+    def query(self, query: str, str_datasource: str, context: dict, dataframe = None) -> tuple[pl.DataFrame, str]:
         datasource: ElementDataSource = json.loads(str_datasource)
         final_query = self.add_jinja_vars(query, context)
 
         df: pl.DataFrame = pl.DataFrame()
-        (df, schema) = self._query_with_schema(final_query, datasource)
+        (df, schema) = self._query_with_schema(final_query, datasource, dataframe)
 
         json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
         compressed = gzip.compress(json_string.encode('utf-8'))
@@ -127,15 +125,13 @@ class Livedocs:
     """
 
     def _get_vega_spec(
-        self, settings_str: str, datasource_str: str
+        self, settings_str: str, datasource_str: str, dataframe = None
     ) -> dict:
         settings: LivedocsChartSpec = json.loads(settings_str)
         datasource: ElementDataSource = json.loads(datasource_str)
 
-        display("_get_vega_spec")
-
         results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-            _get_altair_datasource_query(datasource), datasource
+            _get_altair_datasource_query(datasource), datasource, dataframe
         )
 
         vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
@@ -149,10 +145,10 @@ class Livedocs:
     Gets a polars table for a given datasource. 
     """
 
-    def _get_table_response(self, str_datasource: ElementDataSource) -> pl.DataFrame:
+    def _get_table_response(self, str_datasource: ElementDataSource, dataframe = None) -> pl.DataFrame:
         datasource: ElementDataSource = json.loads(str_datasource)
         results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-            _get_altair_datasource_query(datasource), datasource
+            _get_altair_datasource_query(datasource), datasource, dataframe
         )
 
         (df, schema) = results
@@ -167,7 +163,8 @@ class Livedocs:
     """
 
     def _query_with_schema(
-        self, query: str, datasource: ElementDataSource
+        self, query: str, datasource: ElementDataSource,
+        dataframe = None,
     ) -> tuple[pl.DataFrame, dict]:
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database | ElementDatasourceType.database_table:
@@ -175,6 +172,8 @@ class Livedocs:
             case ElementDatasourceType.file:
                 return self._query_file_with_schema(query, datasource)
             case ElementDatasourceType.dataframe:
+                if dataframe is not None:
+                    self._duckdb.conn.register(datasource["dataframe_info"]['df_name'], dataframe)
                 return self._query_dataframe_with_schema(query, datasource)
             case _:
                 return "Unknown ElementDataSource"
@@ -315,7 +314,6 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
         dataframe_info = datasource.get("dataframe_info")
-        display("_query_dataframe")
 
         if dataframe_info is None:
             raise ValueError("Invalid ElementDataSource")
