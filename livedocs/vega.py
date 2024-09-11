@@ -864,6 +864,17 @@ def main_chart(
 
         elif mark_type == "line":
 
+            ## Selectors and layers for line chart
+            nearest = alt.selection_point(
+                    nearest=True, 
+                    on="pointerover",
+                    empty=False,
+                    encodings=['x'],
+                    fields=[x_field]
+                    if x_temporal_format is None
+                    else [f'{x_temporal_format}({(x_field)})']
+                    )
+
             if color_by_aggregate:
                 lines = (
                     alt.Chart(df)
@@ -878,29 +889,20 @@ def main_chart(
                         color=color_by_encoding,
                     )
                 )
-
-                ## Selectors and layers for line chart
-                nearest = alt.selection_point(
-                        nearest=True, 
-                        on="pointerover",
-                        empty=False,
-                        encodings=['x'],
-                        fields=[x_field]
-                        )
                 
                 points = lines.mark_point().transform_filter(nearest)
 
                 ## Making tooltip for multiple categories
                 if y_aggregate !="none":
-                    tt=[f'{y_aggregate}({col}):Q' for col in df[f'{color_by_field}'].unique().to_list()]
+                    tooltip_list=[f'{y_aggregate}({col}):Q' for col in df[f'{color_by_field}'].unique().to_list()]
                 else:
-                    tt=[f'{col}:Q' for col in df[f'{color_by_field}'].unique().to_list()]
+                    tooltip_list=[f'{col}:Q' for col in df[f'{color_by_field}'].unique().to_list()]
 
                 ## Tooltip for x-field
                 if x_temporal_format:
-                    tt.append(f'{x_temporal_format}({x_field})')
+                    tooltip_list.append(f'{x_temporal_format}({x_field})')
                 else:
-                    tt.append(x_field)
+                    tooltip_list.append(x_field)
                 
                 rules = alt.Chart(df
                     ).transform_pivot(
@@ -911,7 +913,7 @@ def main_chart(
                         color="gray"
                     ).encode(
                         x=x_encoding,
-                        tooltip=tt,
+                        tooltip=tooltip_list,
 
 
                         opacity=alt.condition(nearest, 
@@ -944,7 +946,7 @@ def main_chart(
                         on="pointerover",
                         empty=False,
                         encodings=['x'],
-                        fields=[x_field]
+                        fields=[x_field] if x_temporal_format is None else [f'{x_temporal_format}({(x_field)})']
                         )
                 
                 points = lines.mark_point().transform_filter(nearest)
