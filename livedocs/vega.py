@@ -938,16 +938,6 @@ def main_chart(
                         color=color_by_encoding,
                     )
                 )
-
-
-                ## Selectors and layers for line chart
-                nearest = alt.selection_point(
-                        nearest=True, 
-                        on="pointerover",
-                        empty=False,
-                        encodings=['x'],
-                        fields=[x_field] if x_temporal_format is None else [f'{x_temporal_format}({(x_field)})']
-                        )
                 
                 points = lines.mark_point().transform_filter(nearest)
                 
