@@ -863,7 +863,7 @@ def main_chart(
                 )
 
         elif mark_type == "line":
-            base_layer = (
+            lines = (
                 alt.Chart(df)
                 .mark_line(
                     clip=True,
@@ -886,39 +886,17 @@ def main_chart(
                     empty=False,
                     encodings=['x'],
                     fields=[x_field]
+                    # fields=[f'{x_temporal_format}({x_field})']
+                    # if x_temporal_format
+                    # else [x_field]
                     )
             
-            points1 = alt.Chart(df).mark_point(
-                cursor="crosshair"
-                ).encode(
-                    x=x_encoding,
-                    opacity=alt.value(0),
-                    tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ],
-                    ).add_selection(
-                    nearest)
+            points = lines.mark_point().transform_filter(nearest)
             
             
             rules = alt.Chart(df).mark_rule(
-                    color="gray",
-                    cursor="crosshair"
-            ).encode(
+                    color="gray"
+                ).encode(
                     x=x_encoding,
                     tooltip=[
                             alt.Tooltip(
@@ -941,10 +919,10 @@ def main_chart(
                     opacity=alt.condition(nearest, 
                                           alt.value(1), 
                                           alt.value(0))
-            )
+            ).add_params(nearest)
 
             
-            base_layer = alt.layer(base_layer, points1, rules)
+            base_layer = alt.layer(lines, points, rules)
 
         elif mark_type == "point":
             brush=alt.selection_interval()
