@@ -876,6 +876,12 @@ def main_chart(
                     )
 
             if color_by_aggregate:
+
+                select = alt.selection_point(
+                    fields=[color_by_field],
+                    bind='legend'
+            )
+                            
                 lines = (
                     alt.Chart(df)
                     .mark_line(
@@ -886,9 +892,9 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        color=color_by_encoding,
+                        color=alt.condition(select, color_by_encoding, alt.value('lightgray'))
                     )
-                )
+                ).add_params(select)
                 
                 points = lines.mark_point().transform_filter(nearest)
 
