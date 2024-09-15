@@ -1698,6 +1698,7 @@ def create_x_encoding(
         gridDash=[4, 4]
         if axis_settings.get("grid", "none") == "dashed"
         else alt.Undefined,
+        labelOverlap=True
     )
 
     if type == "temporal" and temporal_format and temporal_format != "none":
@@ -1754,6 +1755,7 @@ def create_y_encoding(
                 gridDash=[4, 4]
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
+                labelOverlap=True
             ),
         )
     else:
@@ -1773,6 +1775,8 @@ def create_y_encoding(
                 gridDash=[4, 4]
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
+                labelOverlap=True
+
             ),
             scale=alt.Scale(
                 domainMax=int(axis_settings["max"])
