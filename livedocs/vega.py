@@ -1,11 +1,8 @@
 import json
-import logging
 import uuid
 
 import altair as alt
 import polars as pl
-
-from IPython.display import display
 
 from livedocs.types import (
     ElementDataSource,
@@ -119,8 +116,6 @@ based on the chartType parameter of the Livedocs chart config.
 
 
 def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
-    logging.getLogger("vegafusion").setLevel(logging.ERROR)
-
     alt.data_transformers.enable("vegafusion")
 
     style_settings = spec.get("styleSettings", {})

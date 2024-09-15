@@ -5,7 +5,7 @@ from datetime import datetime
 import polars as pl
 import altair as alt
 
-from datetime import date
+from datetime import date, time
 
 from livedocs.types import Credentials
 
@@ -171,7 +171,7 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
 
 """JSON serializer for objects not serializable by default json code"""
 def _datetime_json_serializer(obj):
-    if isinstance(obj, (datetime, date)):
+    if isinstance(obj, (datetime, date, time)):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 

@@ -1,15 +1,15 @@
+import base64
+import gzip
 import json
 import os
 import tempfile
 from typing import Dict, List
 
-from jinja2 import Template
 import pandas as pd
-
 import polars as pl
-import gzip
-import base64
 import requests
+from duckdb import CatalogException
+from jinja2 import Template
 
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
@@ -19,7 +19,6 @@ from livedocs.types import (
     LivedocsChartSpec,
     Schema,
 )
-from duckdb import CatalogException
 from livedocs.utils.common import (
     _datetime_json_serializer,
     _fetch_credentials,
@@ -127,18 +126,22 @@ class Livedocs:
     def _get_vega_spec(
         self, settings_str: str, datasource_str: str, dataframe = None
     ) -> dict:
-        settings: LivedocsChartSpec = json.loads(settings_str)
-        datasource: ElementDataSource = json.loads(datasource_str)
+        try:
+            settings: LivedocsChartSpec = json.loads(settings_str)
+            datasource: ElementDataSource = json.loads(datasource_str)
 
-        results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-            _get_altair_datasource_query(datasource), datasource, dataframe
-        )
+            results: tuple[pl.DataFrame, dict] = self._query_with_schema(
+                _get_altair_datasource_query(datasource), datasource, dataframe
+            )
 
-        vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
-        compressed = gzip.compress(vega_spec_json_str.encode('utf-8'))
-        encoded = base64.b64encode(compressed).decode('ascii')
-        
-        return encoded
+            vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
+
+            compressed = gzip.compress(vega_spec_json_str.encode('utf-8'))
+            encoded = base64.b64encode(compressed).decode('ascii')
+            
+            return encoded
+        except Exception as e:
+            raise e
 
 
     """
