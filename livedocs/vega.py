@@ -876,6 +876,12 @@ def main_chart(
                     )
 
             if color_by_aggregate:
+
+                select = alt.selection_point(
+                    fields=[color_by_field],
+                    bind='legend'
+            )
+                            
                 lines = (
                     alt.Chart(df)
                     .mark_line(
@@ -886,9 +892,9 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        color=color_by_encoding,
+                        color=alt.condition(select, color_by_encoding, alt.value('lightgray'))
                     )
-                )
+                ).add_params(select)
                 
                 points = lines.mark_point().transform_filter(nearest)
 
@@ -1692,6 +1698,7 @@ def create_x_encoding(
         gridDash=[4, 4]
         if axis_settings.get("grid", "none") == "dashed"
         else alt.Undefined,
+        labelOverlap=True
     )
 
     if type == "temporal" and temporal_format and temporal_format != "none":
@@ -1748,6 +1755,7 @@ def create_y_encoding(
                 gridDash=[4, 4]
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
+                labelOverlap=True
             ),
         )
     else:
@@ -1767,6 +1775,8 @@ def create_y_encoding(
                 gridDash=[4, 4]
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
+                labelOverlap=True
+
             ),
             scale=alt.Scale(
                 domainMax=int(axis_settings["max"])
