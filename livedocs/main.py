@@ -4,12 +4,15 @@ import json
 import os
 import tempfile
 from typing import Dict, List
+from functools import wraps
 
 import pandas as pd
 import polars as pl
 import requests
+import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
+
 
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
@@ -30,6 +33,31 @@ from livedocs.utils.postgres import (
     process_postgres_schema,
 )
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
+
+
+def _setup_sentry(report_id: str = ""):
+    try:
+        sentry_sdk.init(
+            dsn=os.getenv("VMLIB_SENTRY_DSN"),
+            traces_sample_rate=0.0,
+        )
+        sentry_sdk.set_tag("report_id", report_id)
+        print(f"Sentry initialized for report_id {report_id}")
+    except Exception as e:
+        raise f"Failed to initialize Sentry: {e}"
+
+
+def _capture_exceptions(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
+            raise  # Re-raise the exception after capturing it
+
+    return wrapper
+
 
 """
 This is initialized in the prelude cell of the notebook like this:
@@ -59,14 +87,18 @@ class Livedocs:
     DB connection credentials and secrets for the report.
     """
 
-    def initialize(self, report_id: str, token: str) ->  tuple[object, dict]:
+    def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
+        _setup_sentry(report_id)
+
         self._report_id = report_id
         self._token = token
         self._credentials = _fetch_credentials(report_id, token)
         self.is_initialized = True
 
-        secrets = self._credentials.get('workspace_secrets', {})
-        secrets_dict = {key: secret_info['value'] for key, secret_info in secrets.items()}
+        secrets = self._credentials.get("workspace_secrets", {})
+        secrets_dict = {
+            key: secret_info["value"] for key, secret_info in secrets.items()
+        }
         self._secrets = secrets_dict
 
     """
@@ -75,13 +107,17 @@ class Livedocs:
     livedocs.secrets('CLIENT_ID', 'default_value (optional)')
 
     """
-    def secrets(self, key, default_value = "") -> str:
+
+    @_capture_exceptions
+    def secrets(self, key, default_value="") -> str:
         if self._secrets.get(key):
             return self._secrets.get(key)
         else:
             result = _fetch_credentials(self._report_id, self._token)
-            secrets = result.get('workspace_secrets', {})
-            secrets_dict = {key: secret_info['value'] for key, secret_info in secrets.items()}
+            secrets = result.get("workspace_secrets", {})
+            secrets_dict = {
+                key: secret_info["value"] for key, secret_info in secrets.items()
+            }
             self._secrets = secrets_dict
             return self._secrets.get(key, default_value)
 
@@ -90,7 +126,10 @@ class Livedocs:
     a Polars DataFrame. Simple. 
     """
 
-    def query(self, query: str, str_datasource: str, context: dict, dataframe = None) -> tuple[pl.DataFrame, str]:
+    @_capture_exceptions
+    def query(
+        self, query: str, str_datasource: str, context: dict, dataframe=None
+    ) -> tuple[pl.DataFrame, str]:
         datasource: ElementDataSource = json.loads(str_datasource)
         final_query = self.add_jinja_vars(query, context)
 
@@ -98,19 +137,19 @@ class Livedocs:
         (df, schema) = self._query_with_schema(final_query, datasource, dataframe)
 
         json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
-        compressed = gzip.compress(json_string.encode('utf-8'))
-        encoded = base64.b64encode(compressed).decode('ascii')
+        compressed = gzip.compress(json_string.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
         return (df, encoded)
-    
 
     """
     Plugs Jinja variables into a raw HTML string for a text element
     """
+
+    @_capture_exceptions
     def process_raw_text(self, str_src: str, context: dict) -> str:
         src = json.loads(str_src)
         return self.add_jinja_vars(src["html"], context)
 
-   
     """
     Adds the local variables to the query. 
     """
@@ -123,8 +162,9 @@ class Livedocs:
     Gets a Vega spec for a given datasource and settings. 
     """
 
+    @_capture_exceptions
     def _get_vega_spec(
-        self, settings_str: str, datasource_str: str, dataframe = None
+        self, settings_str: str, datasource_str: str, dataframe=None
     ) -> dict:
         try:
             settings: LivedocsChartSpec = json.loads(settings_str)
@@ -136,19 +176,21 @@ class Livedocs:
 
             vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
 
-            compressed = gzip.compress(vega_spec_json_str.encode('utf-8'))
-            encoded = base64.b64encode(compressed).decode('ascii')
-            
+            compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
+            encoded = base64.b64encode(compressed).decode("ascii")
+
             return encoded
         except Exception as e:
             raise e
-
 
     """
     Gets a polars table for a given datasource. 
     """
 
-    def _get_table_response(self, str_datasource: ElementDataSource, dataframe = None) -> pl.DataFrame:
+    @_capture_exceptions
+    def _get_table_response(
+        self, str_datasource: ElementDataSource, dataframe=None
+    ) -> pl.DataFrame:
         datasource: ElementDataSource = json.loads(str_datasource)
         results: tuple[pl.DataFrame, dict] = self._query_with_schema(
             _get_altair_datasource_query(datasource), datasource, dataframe
@@ -157,8 +199,8 @@ class Livedocs:
         (df, schema) = results
 
         json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
-        compressed = gzip.compress(json_string.encode('utf-8'))
-        encoded = base64.b64encode(compressed).decode('ascii')
+        compressed = gzip.compress(json_string.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
         return encoded
 
     """
@@ -166,8 +208,10 @@ class Livedocs:
     """
 
     def _query_with_schema(
-        self, query: str, datasource: ElementDataSource,
-        dataframe = None,
+        self,
+        query: str,
+        datasource: ElementDataSource,
+        dataframe=None,
     ) -> tuple[pl.DataFrame, dict]:
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database | ElementDatasourceType.database_table:
@@ -176,7 +220,9 @@ class Livedocs:
                 return self._query_file_with_schema(query, datasource)
             case ElementDatasourceType.dataframe:
                 if dataframe is not None:
-                    self._duckdb.conn.register(datasource["dataframe_info"]['df_name'], dataframe)
+                    self._duckdb.conn.register(
+                        datasource["dataframe_info"]["df_name"], dataframe
+                    )
                 return self._query_dataframe_with_schema(query, datasource)
             case _:
                 return "Unknown ElementDataSource"
@@ -194,7 +240,7 @@ class Livedocs:
                 schema_query = f"DESCRIBE {query}"
                 _schema = self._query_database(schema_query, datasource)
                 schema = process_postgres_schema(_schema)
-                
+
                 # Execute the original query
                 result = self._query_database(query, datasource)
                 return [result, schema]
@@ -243,9 +289,9 @@ class Livedocs:
             connection_string = create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
-        
+
         # This is unique to the workspace, so no chance of conflict
-        alias = credentials["db_name"] 
+        alias = credentials["db_name"]
 
         try:
             self._duckdb.attach_postgres(connection_string, alias)
@@ -255,7 +301,9 @@ class Livedocs:
         try:
             result = self._duckdb.conn.sql(query).pl()
         except CatalogException as e:
-            raise RuntimeError("CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')")
+            raise RuntimeError(
+                "CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')"
+            )
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
 
@@ -277,7 +325,7 @@ class Livedocs:
             if not os.path.exists(temp_file_path):
                 signed_url = self._get_signed_url(file_id)
                 self._download_file(signed_url, temp_file_path)
-                
+
             if file_type == "csv":
                 query_with_path = query.replace(
                     file_name, f"read_csv_auto('{temp_file_path}')"
@@ -361,9 +409,10 @@ class Livedocs:
     """
     Get the schema of any given dataframe
     """
+
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         schema = []
-            
+
         if isinstance(df, pd.DataFrame):
             for column in df.columns:
                 dtype = df[column].dtype
@@ -373,32 +422,40 @@ class Livedocs:
                     col_type = "DATE"
                 else:
                     col_type = "STRING"
-                
-                schema.append({
-                    "name": column,
-                    "livedocs_type": col_type,
-                    "children": []
-                })
-        
+
+                schema.append(
+                    {"name": column, "livedocs_type": col_type, "children": []}
+                )
+
         elif isinstance(df, pl.DataFrame):
             for column in df.columns:
                 dtype = df[column].dtype
-                if isinstance(dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64, 
-                      pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64, 
-                      pl.Float32, pl.Float64)):
+                if isinstance(
+                    dtype,
+                    (
+                        pl.Int8,
+                        pl.Int16,
+                        pl.Int32,
+                        pl.Int64,
+                        pl.UInt8,
+                        pl.UInt16,
+                        pl.UInt32,
+                        pl.UInt64,
+                        pl.Float32,
+                        pl.Float64,
+                    ),
+                ):
                     col_type = "NUMBER"
                 elif isinstance(dtype, (pl.Date, pl.Datetime, pl.Time)):
                     col_type = "DATE"
                 else:
                     col_type = "STRING"
-                
-                schema.append({
-                    "name": column,
-                    "livedocs_type": col_type,
-                    "children": []
-                })
-        
+
+                schema.append(
+                    {"name": column, "livedocs_type": col_type, "children": []}
+                )
+
         else:
             raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
-        
+
         return json.dumps(schema, default=str)
