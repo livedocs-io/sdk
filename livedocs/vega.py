@@ -243,6 +243,7 @@ def pie(
                     title="Count of Records"
                     if size_by_aggregate == "count"
                     else size_by_field,
+                    format=",.2f",
                 ),
             ],
             opacity=alt.value(1),
@@ -652,6 +653,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",      
                             ),
                             alt.Tooltip(
                                 field=color_by_field,
@@ -693,6 +695,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                         ],
                     )
@@ -731,6 +734,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                             alt.Tooltip(
                                 field=color_by_field,
@@ -772,6 +776,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                         ],
                     )
@@ -810,6 +815,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                             alt.Tooltip(
                                 field=color_by_field,
@@ -851,6 +857,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                         ],
                     )
@@ -962,6 +969,7 @@ def main_chart(
                                     aggregate=y_aggregate
                                     if y_aggregate != "none"
                                     else alt.Undefined,
+                                    format=",.2f",
                                 ),
                             ],
                         opacity=alt.condition(nearest, 
@@ -1003,6 +1011,7 @@ def main_chart(
                                     aggregate=y_aggregate
                                     if y_aggregate != "none"
                                     else alt.Undefined,
+                                    format=",.2f",
                                 ),
                                 alt.Tooltip(
                                     field=color_by_field,
@@ -1044,6 +1053,7 @@ def main_chart(
                                     aggregate=y_aggregate
                                     if y_aggregate != "none"
                                     else alt.Undefined,
+                                    format=",.2f",
                                 ),
                             ],
                         )
@@ -1080,6 +1090,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                             alt.Tooltip(
                                 field=color_by_field,
@@ -1121,7 +1132,8 @@ def main_chart(
                                 else f"{y_aggregate} of {y_field}",
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
-                                else alt.Undefined
+                                else alt.Undefined,
+                                format=",.2f",
                             ),
                         ],
                     )
@@ -1157,6 +1169,7 @@ def main_chart(
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
                                 else alt.Undefined,
+                                format=",.2f",
                             ),
                             alt.Tooltip(
                                 field=color_by_field,
@@ -1198,7 +1211,8 @@ def main_chart(
                                 else f"{y_aggregate} of {y_field}",
                                 aggregate=y_aggregate
                                 if y_aggregate != "none"
-                                else alt.Undefined
+                                else alt.Undefined,
+                                format=",.2f",
                             ),
                         ],
                     )
@@ -1448,6 +1462,7 @@ def swapped_main_chart(
                             aggregate=x_aggregate
                             if x_aggregate != "none"
                             else alt.Undefined,
+                            format=",.2f",
                         ),
                         alt.Tooltip(
                             field=color_by_field,
@@ -1487,7 +1502,8 @@ def swapped_main_chart(
                             title=x_field,
                             aggregate=x_aggregate
                             if x_aggregate != "none"
-                            else alt.Undefined
+                            else alt.Undefined,
+                            format=",.2f",
                         )
                     ],
                 ).add_params(select, highlight, brush)
@@ -1524,6 +1540,7 @@ def swapped_main_chart(
                             aggregate=x_aggregate
                             if x_aggregate != "none"
                             else alt.Undefined,
+                            format=",.2f",
                         ),
                         alt.Tooltip(
                             field=color_by_field,
@@ -1563,7 +1580,8 @@ def swapped_main_chart(
                             title=x_field,
                             aggregate=x_aggregate
                             if x_aggregate != "none"
-                            else alt.Undefined
+                            else alt.Undefined,
+                            format=",.2f",
                         )
                     ],
                 ).add_params(select, highlight, brush)
@@ -1600,6 +1618,7 @@ def swapped_main_chart(
                             aggregate=x_aggregate
                             if x_aggregate != "none"
                             else alt.Undefined,
+                            format=",.2f",
                         ),
                         alt.Tooltip(
                             field=color_by_field,
@@ -1639,7 +1658,8 @@ def swapped_main_chart(
                             title=x_field,
                             aggregate=x_aggregate
                             if x_aggregate != "none"
-                            else alt.Undefined
+                            else alt.Undefined,
+                            format=",.2f",
                         )
                     ],
                 ).add_params(select, highlight, brush)
