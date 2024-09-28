@@ -22,6 +22,7 @@ from livedocs.types import (
     LivedocsChartSpec,
     Schema,
 )
+
 from livedocs.utils.common import (
     _datetime_json_serializer,
     _fetch_credentials,
@@ -42,7 +43,6 @@ def _setup_sentry(report_id: str = ""):
             traces_sample_rate=0.0,
         )
         sentry_sdk.set_tag("report_id", report_id)
-        print(f"Sentry initialized for report_id {report_id}")
     except Exception as e:
         raise f"Failed to initialize Sentry: {e}"
 

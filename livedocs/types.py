@@ -1,5 +1,53 @@
-from typing import Dict, Literal, Optional, TypedDict, List
+import json
 from enum import Enum
+from typing import Dict, List, Literal, Optional, TypedDict
+from pydantic import BaseModel, model_validator
+
+class UserMeta(BaseModel):
+    styleSettings: dict
+    chartType: str
+    colorGroups: Optional[dict] = None
+    pieSettings: Optional[dict] = None
+    histogramSettings: Optional[dict] = None
+    chartSettings: Optional[dict] = None
+    swappedChartSettings: Optional[dict] = None
+
+    @model_validator(mode="before")
+    def validate_exclusive_chart_settings(cls, values):
+        chart_fields = ["pieSettings", "histogramSettings", "chartSettings", "swappedChartSettings"]
+        provided_fields = [field for field in chart_fields if values.get(field) is not None]
+
+        if len(provided_fields) != 1:
+            raise ValueError("Exactly one of 'pieSettings', 'histogramSettings', 'chartSettings', or 'swappedChartSettings' must be provided.")
+        
+        return values
+
+class VegaSpec(BaseModel):
+    spec: str 
+    schema: dict
+    status: str
+    
+    @model_validator(mode="before")
+    def validate_usermeta(cls, values):
+        status = values.get("status")
+        if not status:
+            raise ValueError("Missing 'status' in result")
+
+        if status == "SUCCESS":
+            spec_str = values.get("spec")
+            try:
+                spec_dict = json.loads(spec_str)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON format for 'spec'")
+            
+            usermeta = spec_dict.get("usermeta")
+            if not usermeta:
+                raise ValueError("Missing 'usermeta' in spec when status is 'SUCCESS'")
+            
+            # Validate usermeta only if status is "SUCCESS"
+            UserMeta(**usermeta)
+        
+        return values
 
 
 class DatabaseType(Enum):
