@@ -204,6 +204,42 @@ class Livedocs:
         encoded = base64.b64encode(compressed).decode("ascii")
         return encoded
 
+
+    """
+    Returns a dict with just the schema for a given datasource
+    """
+
+    def _get_chart_schema(self, datasource: ElementDataSource) -> dict:
+        match ElementDatasourceType(datasource["source_type"]):
+            case ElementDatasourceType.database_table:
+                query = f"SELECT * FROM {datasource['database_table_info']['table_name']} LIMIT 10"
+                _, schema = self._query_database_with_schema(query, datasource)
+            case ElementDatasourceType.file:
+                query = f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
+                _, schema = self._query_file_with_schema(query, datasource)
+            case ElementDatasourceType.dataframe:
+                if datasource is not None:
+                    self._duckdb.conn.register(
+                        datasource["dataframe_info"]["df_name"], datasource["dataframe_info"]["df_element_id"]
+                    )
+                query = f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT 10"
+                _, schema = self._query_dataframe_with_schema(datasource)
+            case _:
+                return "Unknown or unsupported datasource type for chart schema"
+            
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "styleSettings": {},
+                "chartType": "main",
+            },
+        }
+        empty_spec_with_schema = json.dumps({"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"})
+        compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
+
+        return encoded
+
     """
     Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
     """
