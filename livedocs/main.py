@@ -13,7 +13,6 @@ import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
 
-
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     DatabaseType,
