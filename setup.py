@@ -16,6 +16,8 @@ setup(
         "db-dtypes",
         "duckdb",
         "altair",
+        "pydantic",
+        "sentry-sdk"
     ],
     python_requires=">=3.12",
     classifiers=[
