@@ -209,7 +209,7 @@ class Livedocs:
     Returns a dict with just the schema for a given datasource
     """
 
-    def _get_chart_schema(self, datasource_str: str) -> dict:
+    def _get_chart_schema(self, datasource_str: str, dataframe: pl.DataFrame = None) -> dict:
         datasource: ElementDataSource = json.loads(datasource_str)
         
         match ElementDatasourceType(datasource["source_type"]):
@@ -220,12 +220,12 @@ class Livedocs:
                 query = f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
                 _, schema = self._query_file_with_schema(query, datasource)
             case ElementDatasourceType.dataframe:
-                if datasource is not None:
+                if dataframe is not None and datasource is not None:
                     self._duckdb.conn.register(
-                        datasource["dataframe_info"]["df_name"], datasource["dataframe_info"]["df_element_id"]
+                        datasource["dataframe_info"]["df_name"], dataframe
                     )
                 query = f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT 10"
-                _, schema = self._query_dataframe_with_schema(datasource)
+                _, schema = self._query_dataframe_with_schema(query, datasource)
             case _:
                 return "Unknown or unsupported datasource type for chart schema"
             
