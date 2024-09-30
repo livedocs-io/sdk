@@ -42,6 +42,7 @@ def _setup_sentry(report_id: str = ""):
             dsn=os.getenv("VMLIB_SENTRY_DSN"),
             traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
             profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
+            environment=os.getenv("APP_ENV"),
         )
         sentry_sdk.set_tag("report_id", report_id)
     except Exception as e:

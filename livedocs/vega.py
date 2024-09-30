@@ -840,6 +840,10 @@ def main_chart(
                     .add_params(select, highlight, brush)
                 )
             else:
+
+                y_encoding['scale']['domain']= [0,1]
+                y_encoding['axis']['format']='%'
+
                 base_layer = (
                     alt.Chart(df)
                     .mark_bar(clip=True, 
@@ -1194,6 +1198,10 @@ def main_chart(
                 )
 
             else:
+
+                y_encoding['scale']['domain']= [0,1]
+                y_encoding['axis']['format']='%'
+
                 base_layer = (
                     alt.Chart(df)
                     .mark_area(
@@ -1643,6 +1651,10 @@ def swapped_main_chart(
             )
 
         else:
+
+            x_encoding['scale']=alt.Scale(domain= [0,1])
+            x_encoding['axis']['format']='%'
+
             base_layer = (
                 alt.Chart(df)
                 .mark_bar(clip=True, 
