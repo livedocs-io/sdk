@@ -209,7 +209,9 @@ class Livedocs:
     Returns a dict with just the schema for a given datasource
     """
 
-    def _get_chart_schema(self, datasource: ElementDataSource) -> dict:
+    def _get_chart_schema(self, datasource_str: str) -> dict:
+        datasource: ElementDataSource = json.loads(datasource_str)
+        
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database_table:
                 query = f"SELECT * FROM {datasource['database_table_info']['table_name']} LIMIT 10"
