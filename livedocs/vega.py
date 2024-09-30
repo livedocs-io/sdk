@@ -134,17 +134,17 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
     else:
         if spec.get("chartType"):
             if spec["chartType"] == "main":
-                vega_spec = main_chart(df, spec["chartSettings"], schema, style_settings)
+                (vega_spec, status) = main_chart(df, spec["chartSettings"], schema, style_settings)
             if spec["chartType"] == "swapped_main":
-                vega_spec = swapped_main_chart(
+                (vega_spec, status) = swapped_main_chart(
                     df, spec["swappedChartSettings"], schema, style_settings
                 )
             elif spec["chartType"] == "histogram":
-                vega_spec = histogram(df, spec["histogramSettings"], schema, style_settings)
+                (vega_spec, status) = histogram(df, spec["histogramSettings"], schema, style_settings)
             elif spec["chartType"] == "pie":
-                vega_spec = pie(df, spec["pieSettings"], schema, style_settings)
+                (vega_spec, status) = pie(df, spec["pieSettings"], schema, style_settings)
 
-            validated_spec = VegaSpec(**{"spec": vega_spec, "schema": schema, "status": "SUCCESS"})
+            validated_spec = VegaSpec(**{"spec": vega_spec, "schema": schema, "status": status})
             return validated_spec.model_dump_json()
         else:
             empty_chart = {
@@ -167,7 +167,7 @@ def pie(
     settings: PieChartSpec,
     schema: dict,
     style_settings: StyleSettings,
-) -> str:
+) -> tuple[str, str]:
     usermeta = settings
     if "color_by" in settings:
         color_by_field = settings["color_by"].get("field", "")
@@ -200,7 +200,7 @@ def pie(
                 "pieSettings": usermeta,
             },
         }
-        return json.dumps(empty_spec)
+        return (json.dumps(empty_spec), "EMPTY")
 
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
@@ -277,7 +277,7 @@ def pie(
 
     # Convert the chart to Vega-Lite JSON spec
     vega_spec = final_chart.to_json(format="vega")
-    return vega_spec
+    return (vega_spec, "SUCCESS")
 
 
 """
@@ -290,7 +290,7 @@ def histogram(
     settings: HistogramSpec,
     schema: dict,
     style_settings: StyleSettings,
-) -> str:
+) -> tuple[str, str]:
     if "field" not in settings:
         empty_chart = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
@@ -299,7 +299,7 @@ def histogram(
                 "histogramSettings": settings,
             },
         }
-        return json.dumps(empty_chart)
+        return (json.dumps(empty_chart), "EMPTY")
 
     field = settings["field"]
     bin_type = settings.get("binBy", {}).get("type", "max_bins")
@@ -397,7 +397,7 @@ def histogram(
     )
 
     vega_spec = chart.to_json(format="vega")
-    return vega_spec
+    return (vega_spec, "SUCCESS")
 
 
 """
@@ -414,7 +414,7 @@ def main_chart(
     settings: LivedocsChartSpec,
     schema: dict,
     style_settings: StyleSettings,
-) -> str:
+) -> tuple[str, str]:
     usermeta = settings
 
     legend_show = style_settings.get("legend", {}).get("show", True)
@@ -441,7 +441,7 @@ def main_chart(
                 "chartType": "main",
             },
         }
-        return json.dumps(empty_chart)
+        return (json.dumps(empty_chart), "EMPTY")
 
     if (
         "yAxis" not in settings
@@ -1279,7 +1279,7 @@ def main_chart(
     )
 
     vega_spec = chart.to_json(format="vega")
-    return vega_spec
+    return (vega_spec, "SUCCESS")
 
 
 """
@@ -1294,7 +1294,7 @@ def swapped_main_chart(
     settings: LivedocsSwappedChartSpec,
     schema: dict,
     style_settings: StyleSettings,
-) -> str:
+) -> tuple[str, str]:
     usermeta = settings
 
     legend_show = style_settings.get("legend", {}).get("show", True)
@@ -1311,7 +1311,7 @@ def swapped_main_chart(
                 "chartType": "swapped_main",
             },
         }
-        return json.dumps(empty_chart)
+        return (json.dumps(empty_chart), "EMPTY")
 
     if "xAxis" not in settings or not settings["xAxis"].get("field"):
         default_x_field, default_x_type = get_first_field_by_preference(schema)
@@ -1708,7 +1708,7 @@ def swapped_main_chart(
     )
 
     vega_spec = chart.to_json(format="vega")
-    return vega_spec
+    return (vega_spec, "SUCCESS")
 
 
 def create_x_encoding(
