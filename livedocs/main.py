@@ -3,8 +3,8 @@ import gzip
 import json
 import os
 import tempfile
-from typing import Dict, List
 from functools import wraps
+from typing import Dict, List
 
 import pandas as pd
 import polars as pl
@@ -21,12 +21,12 @@ from livedocs.types import (
     LivedocsChartSpec,
     Schema,
 )
-
 from livedocs.utils.common import (
-    _datetime_json_serializer,
+    _capture_exceptions,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
+    _json_serializer
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
@@ -47,17 +47,6 @@ def _setup_sentry(report_id: str = ""):
     except Exception as e:
         raise f"Failed to initialize Sentry: {e}"
 
-
-def _capture_exceptions(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            sentry_sdk.capture_exception(e)
-            raise  # Re-raise the exception after capturing it
-
-    return wrapper
 
 
 """
@@ -88,19 +77,23 @@ class Livedocs:
     DB connection credentials and secrets for the report.
     """
 
+    @sentry_sdk.trace
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
-        _setup_sentry(report_id)
+        with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
+            _setup_sentry(report_id)
 
-        self._report_id = report_id
-        self._token = token
-        self._credentials = _fetch_credentials(report_id, token)
-        self.is_initialized = True
+            self._report_id = report_id
+            self._token = token
+            span = sentry_sdk.start_span(name="fetch credentials")
+            self._credentials = _fetch_credentials(report_id, token)
+            span.finish()
+            self.is_initialized = True
 
-        secrets = self._credentials.get("workspace_secrets", {})
-        secrets_dict = {
-            key: secret_info["value"] for key, secret_info in secrets.items()
-        }
-        self._secrets = secrets_dict
+            secrets = self._credentials.get("workspace_secrets", {})
+            secrets_dict = {
+                key: secret_info["value"] for key, secret_info in secrets.items()
+            }
+            self._secrets = secrets_dict
 
     """
     Accessor for user-defined secrets. Use this like:
@@ -126,30 +119,44 @@ class Livedocs:
     Central query function. Give it a query and a datasource, and it will return 
     a Polars DataFrame. Simple. 
     """
-
     @_capture_exceptions
+    @sentry_sdk.trace
     def query(
         self, query: str, str_datasource: str, context: dict, dataframe=None
     ) -> tuple[pl.DataFrame, str]:
-        datasource: ElementDataSource = json.loads(str_datasource)
-        final_query = self.add_jinja_vars(query, context)
+        with sentry_sdk.start_transaction(op="task", name="run query"):
+            datasource: ElementDataSource = json.loads(str_datasource)
 
-        df: pl.DataFrame = pl.DataFrame()
-        (df, schema) = self._query_with_schema(final_query, datasource, dataframe)
+            # Run jinja on input queries
+            jinja_span = sentry_sdk.start_span(name="run add_jinja_vars")
+            final_query = self.add_jinja_vars(query, context)
+            jinja_span.finish()
 
-        json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
-        compressed = gzip.compress(json_string.encode("utf-8"))
-        encoded = base64.b64encode(compressed).decode("ascii")
-        return (df, encoded)
+
+            # Run the actual queries
+            df: pl.DataFrame = pl.DataFrame()
+            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            (df, schema) = self._query_with_schema(final_query, datasource, dataframe)
+            query_span.finish()
+
+            # Post-process the results
+            post_span = sentry_sdk.start_span(name="post-processing")
+            json_string = json.dumps(df.to_dicts(), default=_json_serializer)
+            compressed = gzip.compress(json_string.encode("utf-8"))
+            encoded = base64.b64encode(compressed).decode("ascii")
+            post_span.finish()
+            return (df, encoded)
 
     """
     Plugs Jinja variables into a raw HTML string for a text element
     """
 
     @_capture_exceptions
+    @sentry_sdk.trace
     def process_raw_text(self, str_src: str, context: dict) -> str:
-        src = json.loads(str_src)
-        return self.add_jinja_vars(src["html"], context)
+        with sentry_sdk.start_transaction(op="task", name="run text element"):
+            src = json.loads(str_src)
+            return self.add_jinja_vars(src["html"], context)
 
     """
     Adds the local variables to the query. 
@@ -164,83 +171,112 @@ class Livedocs:
     """
 
     @_capture_exceptions
+    @sentry_sdk.trace
     def _get_vega_spec(
         self, settings_str: str, datasource_str: str, dataframe=None
     ) -> dict:
-        try:
-            settings: LivedocsChartSpec = json.loads(settings_str)
-            datasource: ElementDataSource = json.loads(datasource_str)
+        with sentry_sdk.start_transaction(op="task", name="run chart element"):
+            try:
+                settings: LivedocsChartSpec = json.loads(settings_str)
+                datasource: ElementDataSource = json.loads(datasource_str)
 
-            results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-                _get_altair_datasource_query(datasource), datasource, dataframe
-            )
+                # Run actual span
+                query_span = sentry_sdk.start_span(name="run _query_with_schema")
+                results: tuple[pl.DataFrame, dict] = self._query_with_schema(
+                    _get_altair_datasource_query(datasource), datasource, dataframe
+                )
+                query_span.finish()
 
-            vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
+                # Vegafusion 
+                vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
+                vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
+                vega_span.finish()
 
-            compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
+                # Post-process the results
+                post_span = sentry_sdk.start_span(name="post-processing")
+                compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
+                encoded = base64.b64encode(compressed).decode("ascii")
+                post_span.finish()
 
-            return encoded
-        except Exception as e:
-            raise e
+                return encoded
+            except Exception as e:
+                raise e
 
     """
     Gets a polars table for a given datasource. 
     """
 
     @_capture_exceptions
+    @sentry_sdk.trace
     def _get_table_response(
         self, str_datasource: ElementDataSource, dataframe=None
     ) -> pl.DataFrame:
-        datasource: ElementDataSource = json.loads(str_datasource)
-        results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-            _get_altair_datasource_query(datasource), datasource, dataframe
-        )
+        with sentry_sdk.start_transaction(op="task", name="run table element"):
+            datasource: ElementDataSource = json.loads(str_datasource)
 
-        (df, schema) = results
+            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            results: tuple[pl.DataFrame, dict] = self._query_with_schema(
+                _get_altair_datasource_query(datasource), datasource, dataframe
+            )
+            query_span.finish()
 
-        json_string = json.dumps(df.to_dicts(), default=_datetime_json_serializer)
-        compressed = gzip.compress(json_string.encode("utf-8"))
-        encoded = base64.b64encode(compressed).decode("ascii")
-        return encoded
+            (df, schema) = results
+
+            post_span = sentry_sdk.start_span(name="post-processing")
+            json_string = json.dumps(df.to_dicts(), default=_json_serializer)
+            compressed = gzip.compress(json_string.encode("utf-8"))
+            encoded = base64.b64encode(compressed).decode("ascii")
+            post_span.finish()
+
+            return encoded
 
 
     """
     Returns a dict with just the schema for a given datasource
     """
-
+    @_capture_exceptions
+    @sentry_sdk.trace
     def _get_chart_schema(self, datasource_str: str, dataframe: pl.DataFrame = None) -> dict:
-        datasource: ElementDataSource = json.loads(datasource_str)
-        
-        match ElementDatasourceType(datasource["source_type"]):
-            case ElementDatasourceType.database_table:
-                query = f"SELECT * FROM {datasource['database_table_info']['table_name']} LIMIT 10"
-                _, schema = self._query_database_with_schema(query, datasource)
-            case ElementDatasourceType.file:
-                query = f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
-                _, schema = self._query_file_with_schema(query, datasource)
-            case ElementDatasourceType.dataframe:
-                if dataframe is not None and datasource is not None:
-                    self._duckdb.conn.register(
-                        datasource["dataframe_info"]["df_name"], dataframe
-                    )
-                query = f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT 10"
-                _, schema = self._query_dataframe_with_schema(query, datasource)
-            case _:
-                return "Unknown or unsupported datasource type for chart schema"
+        with sentry_sdk.start_transaction(op="task", name="get schema for chart"):
+            datasource: ElementDataSource = json.loads(datasource_str)
             
-        empty_chart = {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "usermeta": {
-                "styleSettings": {},
-                "chartType": "main",
-            },
-        }
-        empty_spec_with_schema = json.dumps({"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"})
-        compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
-        encoded = base64.b64encode(compressed).decode("ascii")
+            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            match ElementDatasourceType(datasource["source_type"]):
+                case ElementDatasourceType.database_table:
+                    query = f"SELECT * FROM {datasource['database_table_info']['table_name']} LIMIT 10"
+                    _, schema = self._query_database_with_schema(query, datasource)
+                    query_span.finish()
+                case ElementDatasourceType.file:
+                    query = f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
+                    _, schema = self._query_file_with_schema(query, datasource)
+                    query_span.finish()
+                case ElementDatasourceType.dataframe:
+                    if dataframe is not None and datasource is not None:
+                        self._duckdb.conn.register(
+                            datasource["dataframe_info"]["df_name"], dataframe
+                        )
+                    query = f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT 10"
+                    _, schema = self._query_dataframe_with_schema(query, datasource)
+                    query_span.finish()
+                case _:
+                    query_span.finish()
+                    return "Unknown or unsupported datasource type for chart schema"
 
-        return encoded
+            post_span = sentry_sdk.start_span(name="post-processing")
+            empty_chart = {
+                "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+                "usermeta": {
+                    "styleSettings": {},
+                    "chartType": "main",
+                },
+            }
+
+            empty_spec_with_schema = json.dumps({"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"})
+            compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
+            encoded = base64.b64encode(compressed).decode("ascii")
+            post_span.finish()
+
+            return encoded
 
     """
     Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 

@@ -1,12 +1,16 @@
+import base64
+import decimal
 import os
+import uuid
+from datetime import date, datetime, time
+from functools import wraps
 from typing import Dict
-import requests
-from datetime import datetime
-import polars as pl
+
 import altair as alt
-
-from datetime import date, time
-
+import polars as pl
+import requests
+import sentry_sdk
+from duckdb import CatalogException
 from livedocs.types import Credentials
 
 _LIVEDOCS_COLORS = [
@@ -26,6 +30,19 @@ _LIVEDOCS_COLORS = [
     "#4ca30e",
     "#7839ee",
 ]
+
+def _capture_exceptions(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except CatalogException:
+            raise
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
+            raise  # Re-raise the exception after capturing it
+
+    return wrapper
 
 
 def _get_color(index: int) -> str:
@@ -70,7 +87,7 @@ CORE_URL = os.getenv("CORE_BASE_URL")
 if not CORE_URL:
     raise ValueError("CORE_BASE_URL environment variable not set")
 
-
+@_capture_exceptions
 def _fetch_credentials(report_id: str, token: str) -> Credentials:
     response = requests.get(
         f"{CORE_URL}/v1/credentials/{report_id}",
@@ -83,7 +100,7 @@ def _fetch_credentials(report_id: str, token: str) -> Credentials:
             f"Failed to fetch credentials. Status code: {response.status_code}"
         )
 
-
+@_capture_exceptions
 def _fetch_file_manifest(file_id: str, report_id: str, token: str) -> str:
     response = requests.post(
         f"{CORE_URL}/v1/manifest/{report_id}",
@@ -170,20 +187,43 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
     return column_types
 
 """JSON serializer for objects not serializable by default json code"""
-def _datetime_json_serializer(obj):
-    if isinstance(obj, (datetime, date, time)):
+def _json_serializer(obj):
+    if obj is None:
+        return None
+    elif isinstance(obj, bool):
+        return obj
+    elif isinstance(obj, (datetime, date, time)):
         return obj.isoformat()
-    raise TypeError(f"Type {type(obj)} not serializable")
-
+    elif isinstance(obj, decimal.Decimal):
+        return str(obj)
+    elif isinstance(obj, float):
+        return str(obj)
+    elif isinstance(obj, uuid.UUID):
+        return str(obj)
+    elif isinstance(obj, bytes):
+        return base64.b64encode(obj).decode("utf-8")
+    elif isinstance(obj, dict):
+        return {
+            k: _json_serializer(v) for k, v in obj.items()
+        }
+    elif isinstance(obj, list):
+        return [_json_serializer(item) for item in obj]
+    elif isinstance(obj, (set, tuple, frozenset)):
+        return [_json_serializer(item) for item in obj]
+    elif isinstance(obj, complex):
+        return {"real": obj.real, "imag": obj.imag}
+    else:
+        return str(obj)
 
 __all__ = [
+    "_LIVEDOCS_COLORS",
     "_fetch_credentials",
     "_fetch_file_manifest",
     "_get_dataframe_schema",
-    "_LIVEDOCS_COLORS",
     "_get_color",
     "_get_color_group_key",
     "_get_user_defined_color",
     "_get_user_defined_opacity",
-    "_datetime_json_serializer",
+    "_json_serializer",
+    "_capture_exceptions",
 ]

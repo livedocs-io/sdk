@@ -1,6 +1,6 @@
-# ingestor-cf
+# `vm-lib`
 
-Library that helps exchange data between Cloud Functions and Ingestor service.
+A Python SDK that lets Livedocs notebooks run helper functions for various elements, like charts, tables, SQL queries and text.
 
 ## Installation
 
@@ -19,5 +19,3 @@ pip install git+https:username:password@github.com/livedocs-io/vm-lib.git
 ```bash
 python livedocs/test.py
 ```
-
-# vm-lib
