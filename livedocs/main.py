@@ -13,6 +13,8 @@ import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
 
+from IPython.display import display
+
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     DatabaseType,
@@ -26,7 +28,8 @@ from livedocs.utils.common import (
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
-    _json_serializer
+    _json_serializer,
+    _persist_built_in_vars
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
@@ -69,6 +72,7 @@ class Livedocs:
         self._file_dir = tempfile.mkdtemp()
         self._file_manifests: Dict[str, str] = {}
         self._secrets = {}
+        self._built_in_vars = {}
         self.is_initialized = False
 
     """
@@ -94,6 +98,26 @@ class Livedocs:
                 key: secret_info["value"] for key, secret_info in secrets.items()
             }
             self._secrets = secrets_dict
+            self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
+
+    @_capture_exceptions
+    def set_var(self, key: str, value: str):
+        self._built_in_vars[key] = value
+        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+
+    @_capture_exceptions
+    def get_var(self, key: str) -> str:
+        return self._built_in_vars.get(key, None)
+    
+    @_capture_exceptions
+    def unset_var(self, key: str):
+        self._built_in_vars.pop(key, None)
+        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+
+    @_capture_exceptions
+    def clear_vars(self):
+        self._built_in_vars = {}
+        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     """
     Accessor for user-defined secrets. Use this like:

@@ -13,6 +13,8 @@ import sentry_sdk
 from duckdb import CatalogException
 from livedocs.types import Credentials
 
+from IPython.display import display
+
 _LIVEDOCS_COLORS = [
     "#0094ff",
     "#079250",
@@ -114,6 +116,19 @@ def _fetch_file_manifest(file_id: str, report_id: str, token: str) -> str:
             f"Failed to fetch file manifest. Status code: {response.status_code}"
         )
 
+@_capture_exceptions
+def _persist_built_in_vars(report_id: str, token: str, vars: dict) -> dict:
+    response = requests.post(
+        f"{CORE_URL}/v1/vars/{report_id}",
+        json=vars,
+        headers={"authorization": token},
+    )
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(
+            f"Failed to persist built-in vars. Status code: {response.status_code}"
+        )
 
 def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
     date_formats = [
@@ -219,6 +234,7 @@ __all__ = [
     "_LIVEDOCS_COLORS",
     "_fetch_credentials",
     "_fetch_file_manifest",
+    "_persist_built_in_vars",
     "_get_dataframe_schema",
     "_get_color",
     "_get_color_group_key",
