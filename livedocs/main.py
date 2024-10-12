@@ -38,7 +38,7 @@ from livedocs.utils.postgres import (
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 
 
-def _setup_sentry(report_id: str = ""):
+def _setup_sentry():
     try:
         sentry_sdk.init(
             dsn=os.getenv("VMLIB_SENTRY_DSN"),
@@ -46,7 +46,6 @@ def _setup_sentry(report_id: str = ""):
             profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
             environment=os.getenv("APP_ENV"),
         )
-        sentry_sdk.set_tag("report_id", report_id)
     except Exception as e:
         raise f"Failed to initialize Sentry: {e}"
 
@@ -68,12 +67,14 @@ class Livedocs:
     """
 
     def __init__(self):
+        _setup_sentry()
         self._duckdb = DuckDBSingleton()
         self._file_dir = tempfile.mkdtemp()
         self._file_manifests: Dict[str, str] = {}
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
+
 
     """
     Called when the pod is initialized. Fetches the credentials and sets the 
@@ -83,9 +84,8 @@ class Livedocs:
 
     @sentry_sdk.trace
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
+        sentry_sdk.set_tag("report_id", report_id)
         with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
-            _setup_sentry(report_id)
-
             self._report_id = report_id
             self._token = token
             span = sentry_sdk.start_span(name="fetch credentials")
