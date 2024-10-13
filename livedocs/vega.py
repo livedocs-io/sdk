@@ -173,6 +173,11 @@ def pie(
         color_by_field = settings["color_by"].get("field", "")
         color_by_type = settings["color_by"].get("type", "")
         usermeta["color_by"] = {"field": color_by_field, "type": color_by_type}
+        tooltip1 = alt.Tooltip(
+                field=color_by_field,
+                type=map_datatype_to_scale_type(settings["color_by"]["type"]),
+                title=color_by_field,
+            )
     if "size_by" in settings:
         size_by_field = settings["size_by"].get("field", "")
         size_by_type = settings["size_by"].get("type", "")
@@ -182,12 +187,42 @@ def pie(
             "type": size_by_type,
             "aggregate": size_by_aggregate,
         }
+        tooltip2 = alt.Tooltip(
+            field=size_by_field,
+            type="quantitative",
+            aggregate=size_by_aggregate
+            if size_by_aggregate != "none"
+            else alt.Undefined,
+            title="Count of Records"
+            if size_by_aggregate == "count"
+            else size_by_field,
+            format=",.2f",
+            ) 
+        
     if "show_as" in settings:
         show_as = settings["show_as"]
         usermeta["show_as"] = show_as
     if "format" in settings:
         format_type = settings["format"]
         usermeta["format"] = format_type
+
+    legend_show = style_settings.get("legend", {}).get("show", True)
+    legend_position = style_settings.get("legend", {}).get("position", "right")
+    legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
+    legend_font_size = style_settings.get("fontSize", 10)
+
+    legend = None
+    if legend_show:
+        legend = alt.Legend(
+            labelFontSize=legend_font_size,
+            titleFontSize=legend_font_size,
+            title=legend_title
+            if legend_show and legend_title
+            else (color_by_field if legend_show else alt.Undefined),
+            orient=legend_position,
+        )
+
+    tooltip_show = style_settings.get("tooltip", True)
 
     if not usermeta.get("color_by", {}).get("field") or not usermeta.get(
         "size_by", {}
@@ -212,6 +247,7 @@ def pie(
             stack=True,
         )
 
+
     # Generate the pie chart using Altair
     chart = (
         alt.Chart(df)
@@ -219,6 +255,7 @@ def pie(
         .encode(
             theta=theta_encoding,
             color=alt.Color(
+                legend=legend,
                 field=color_by_field,
                 type=map_datatype_to_scale_type(settings["color_by"]["type"]),
                 scale=alt.Scale(
@@ -235,27 +272,8 @@ def pie(
                         "#BAB0AC",
                     ]
                 ),
-                legend=alt.Legend(symbolOpacity=1),
-                title=color_by_field,
             ),
-            tooltip=[
-                alt.Tooltip(
-                    field=color_by_field,
-                    type=map_datatype_to_scale_type(settings["color_by"]["type"]),
-                    title=color_by_field,
-                ),
-                alt.Tooltip(
-                    field=size_by_field,
-                    type="quantitative",
-                    aggregate=size_by_aggregate
-                    if size_by_aggregate != "none"
-                    else alt.Undefined,
-                    title="Count of Records"
-                    if size_by_aggregate == "count"
-                    else size_by_field,
-                    format=",.2f",
-                ),
-            ],
+            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
             opacity=alt.value(1),
         )
     )
