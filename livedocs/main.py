@@ -98,7 +98,8 @@ class Livedocs:
                 key: secret_info["value"] for key, secret_info in secrets.items()
             }
             self._secrets = secrets_dict
-            self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
+            self._built_in_vars = {**json.loads(self._credentials.get("built_in_vars", "{}"))} 
+            # self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
 
     @_capture_exceptions
     def set_var(self, key: str, value: str):

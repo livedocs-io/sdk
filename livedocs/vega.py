@@ -632,6 +632,7 @@ def main_chart(
         if mark_type == "grouped_column":
 
             if color_by_aggregate:
+                print(color_by_sort)
                 base_layer = (
                     alt.Chart(df)
                     .mark_bar(clip=True,
@@ -639,11 +640,15 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        color=alt.condition(brush, color_by_encoding, alt.value('lightgray')),
+                        color=alt.condition(brush, 
+                                            color_by_encoding, 
+                                            alt.value('lightgray')),
+                        order = alt.Order(color_by_field,
+                                          sort=color_by_sort),
                         opacity=opacity_encoding,
                         fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                         strokeWidth=conditional_stroke,
-                        xOffset=alt.XOffset(field=color_by_field)
+                        xOffset=alt.XOffset(field=color_by_field, sort=color_by_sort)
                         if color_by_encoding
                         else None,
                         tooltip=[
@@ -728,6 +733,7 @@ def main_chart(
                         opacity=opacity_encoding,
                         fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                         strokeWidth=conditional_stroke,
+                        order=alt.Order(color_by_field, sort=color_by_sort),
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -809,6 +815,7 @@ def main_chart(
                         opacity=opacity_encoding,
                         fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                         strokeWidth=conditional_stroke,
+                        order=alt.Order(color_by_field, sort=color_by_sort),
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -1088,6 +1095,7 @@ def main_chart(
                         y=y_encoding,
                         color=color_by_encoding,
                         opacity=opacity_encoding,
+                        order=alt.Order(color_by_field, sort=color_by_sort),
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -1167,6 +1175,7 @@ def main_chart(
                         y=y_encoding.stack("normalize"),
                         color=color_by_encoding,
                         opacity=opacity_encoding,
+                        order=alt.Order(color_by_field, sort=color_by_sort),
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -1461,7 +1470,7 @@ def swapped_main_chart(
                     opacity=opacity_encoding,
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
-                    yOffset=alt.YOffset(field=color_by_field)
+                    yOffset=alt.YOffset(field=color_by_field, sort=color_by_sort)
                     if color_by_encoding
                     else None,
                     tooltip=[
@@ -1542,6 +1551,7 @@ def swapped_main_chart(
                     opacity=opacity_encoding,
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
+                    order=alt.Order(color_by_field, sort=color_by_sort),
                     tooltip=[
                         alt.Tooltip(
                             field=y_field,
@@ -1620,6 +1630,7 @@ def swapped_main_chart(
                     opacity=opacity_encoding,
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
+                    order=alt.Order(color_by_field, sort=color_by_sort),
                     tooltip=[
                         alt.Tooltip(
                             field=y_field,
