@@ -199,7 +199,6 @@ def pie(
             format=",.2f",
             ) 
         
-        #### 
     if "show_as" in settings:
         show_as = settings["show_as"]
         usermeta["show_as"] = show_as
@@ -223,30 +222,7 @@ def pie(
             orient=legend_position,
         )
 
-#### 
     tooltip_show = style_settings.get("tooltip", True)
-    # tooltip=alt.Undefined
-    # if tooltip_show:
-        # tooltip=[
-        #     alt.Tooltip(
-        #         field=color_by_field,
-        #         type=map_datatype_to_scale_type(settings["color_by"]["type"]),
-        #         title=color_by_field,
-        #     ) if "color_by" in settings else alt.Tooltip(alt.Undefined),
-            # alt.Tooltip(
-            #     field=size_by_field,
-            #     type="quantitative",
-            #     aggregate=size_by_aggregate
-            #     if size_by_aggregate != "none"
-            #     else alt.Undefined,
-            #     title="Count of Records"
-            #     if size_by_aggregate == "count"
-            #     else size_by_field,
-            #     format=",.2f",
-            # ) if "size_by" in settings else alt.Tooltip(alt.Undefined),
-        # ],
-    # else: tooltip=alt.Undefined
-
 
     if not usermeta.get("color_by", {}).get("field") or not usermeta.get(
         "size_by", {}
