@@ -719,7 +719,6 @@ def main_chart(
 
 
         elif mark_type == "stacked_column":
-            print(style_settings)
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -1784,61 +1783,6 @@ def create_x_encoding(
                 type=axis_settings.get("scale", alt.Undefined),
             ),
         )
-
-    # tick_count_expr = "length(domain('x')) > 0 ? min(ceil(width / 40), ceil((domain('x')[1] - domain('x')[0]) / 7884000000)) : ceil(width / 40)"
-    # axis_settings = style.get("xAxis", {})
-
-    # axis_props = alt.Axis(
-    #     title=field if "xAxis" not in style else style["xAxis"].get("title", field),
-    #     titleFontSize=style.get("fontSize", 10),
-    #     labelFontSize=style.get("fontSize", 10),
-    #     ##
-    #     # format=style.get('xAxis', {}).get('format', "%b %Y"),
-    #     ##
-    #     labelAngle=axis_settings.get("labelAngle", alt.Undefined),
-    #     tickCount=axis_settings.get(
-    #         "ticks", alt.expr(tick_count_expr) if not horizontal else alt.Undefined
-    #     ),
-    #     grid=True if axis_settings.get("grid", "none") != "none" else False,
-    #     gridDash=[4, 4]
-    #     if axis_settings.get("grid", "none") == "dashed"
-    #     else alt.Undefined,
-    #     labelOverlap=True
-    # )
-
-    # if type == "temporal" and temporal_format and temporal_format != "none":
-    #     axis_props.format=get_axis_format(temporal_format),
-
-    #     return alt.X(
-    #         f"{x_aggregate}({field}):{type}" if x_aggregate != "none" else f"{field}:{type}",
-    #         timeUnit=temporal_format,
-    #         ##
-    #         # format=format,
-    #         ##
-    #         bandPosition=0,
-    #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
-    #         sort=sort,
-    #         axis=axis_props,
-    #         scale=alt.Scale(
-    #             domainMax=int(axis_settings["max"])
-    #             if "max" in axis_settings
-    #             else alt.Undefined,
-    #             domainMin=int(axis_settings["min"])
-    #             if "min" in axis_settings
-    #             else alt.Undefined,
-    #             type=axis_settings.get("scale", alt.Undefined),
-    #         ),
-    #     )
-    # else:
-    #     # axis_props.format = style.get('xAxis', {}).get('format', alt.Undefined),
-    #     return alt.X(
-    #         f"{x_aggregate}({field}):{type}"
-    #         if x_aggregate != "none"
-    #         else f"{field}:{type}",
-    #         sort=sort,
-    #         aggregate=x_aggregate if x_aggregate != "none" else alt.Undefined,
-    #         axis=axis_props,
-    #     )
 
 
 def create_y_encoding(
