@@ -343,6 +343,22 @@ def histogram(
     elif bin_type == "step_size":
         bin_params["step"] = bin_value
 
+
+###
+    tooltip_show = style.get("tooltip", True)
+
+    tooltip1 = alt.Tooltip(
+        field="__count" if format_type == "count" else "__PercentOfTotal",
+        title="Count of Records"
+        if format_type == "count"
+        else "Percentage of Records",
+        type="quantitative",
+    )
+
+    tooltip2 = alt.Tooltip("__bin_range", title=field, type="nominal")
+    ###
+    ###
+
     base = (
         alt.Chart(df)
         .transform_bin(as_="__bin_field_name", field=field, bin=bin_params)
@@ -438,16 +454,18 @@ def histogram(
                 # )),
             ),
             y2=alt.datum(0),
-            tooltip=[
-                alt.Tooltip(
-                    field="__count" if format_type == "count" else "__PercentOfTotal",
-                    title="Count of Records"
-                    if format_type == "count"
-                    else "Percentage of Records",
-                    type="quantitative",
-                ),
-                alt.Tooltip("__bin_range", title=field, type="nominal"),
-            ],
+
+            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
+            # tooltip=[
+            #     alt.Tooltip(
+            #         field="__count" if format_type == "count" else "__PercentOfTotal",
+            #         title="Count of Records"
+            #         if format_type == "count"
+            #         else "Percentage of Records",
+            #         type="quantitative",
+            #     ),
+            #     alt.Tooltip("__bin_range", title=field, type="nominal"),
+            # ],
             opacity=alt.value(1),
             color=alt.value("#4C78A8"),
         )
