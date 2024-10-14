@@ -318,18 +318,14 @@ def histogram(
             },
         }
         return (json.dumps(empty_chart), "EMPTY")
-### 
-    print(style)
-###
+
     field = settings["field"]
     bin_type = settings.get("binBy", {}).get("type", "max_bins")
     bin_value = settings.get("binBy", {}).get("value", 10)
     format_type = settings.get("format", "count")
 
-### 
     x_axis_settings = style.get("xAxis", {})
     y_axis_settings = style.get("yAxis", {})
-### 
 
     usermeta = settings
     usermeta["field"] = field
@@ -343,8 +339,6 @@ def histogram(
     elif bin_type == "step_size":
         bin_params["step"] = bin_value
 
-
-###
     tooltip_show = style.get("tooltip", True)
 
     tooltip1 = alt.Tooltip(
@@ -356,8 +350,6 @@ def histogram(
     )
 
     tooltip2 = alt.Tooltip("__bin_range", title=field, type="nominal")
-    ###
-    ###
 
     base = (
         alt.Chart(df)
@@ -389,7 +381,6 @@ def histogram(
                 title=field,
                 axis=alt.Axis(
                     tickMinStep=bin_value if bin_type == "step_size" else alt.Undefined,
-                    # tickCount=bin_value if bin_type == "max_bins" else alt.Undefined,
                     title=field
                     if "xAxis" not in style
                     else style["xAxis"].get("title", field),
@@ -449,23 +440,11 @@ def histogram(
                     else alt.Undefined,
                     type=y_axis_settings.get("scale", alt.Undefined),
                 ),
-                # axis=alt.Axis(
-                #     format="PERCENT" if format_type == 'percentage' else 'NUMBER',
-                # )),
+
             ),
             y2=alt.datum(0),
 
             tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
-            # tooltip=[
-            #     alt.Tooltip(
-            #         field="__count" if format_type == "count" else "__PercentOfTotal",
-            #         title="Count of Records"
-            #         if format_type == "count"
-            #         else "Percentage of Records",
-            #         type="quantitative",
-            #     ),
-            #     alt.Tooltip("__bin_range", title=field, type="nominal"),
-            # ],
             opacity=alt.value(1),
             color=alt.value("#4C78A8"),
         )
