@@ -318,14 +318,17 @@ def histogram(
             },
         }
         return (json.dumps(empty_chart), "EMPTY")
-
+### 
+    print(style)
+###
     field = settings["field"]
     bin_type = settings.get("binBy", {}).get("type", "max_bins")
     bin_value = settings.get("binBy", {}).get("value", 10)
     format_type = settings.get("format", "count")
 
 ### 
-    axis_settings = style.get("xAxis", {})
+    x_axis_settings = style.get("xAxis", {})
+    y_axis_settings = style.get("yAxis", {})
 ### 
 
     usermeta = settings
@@ -371,33 +374,29 @@ def histogram(
                 axis=alt.Axis(
                     tickMinStep=bin_value if bin_type == "step_size" else alt.Undefined,
                     # tickCount=bin_value if bin_type == "max_bins" else alt.Undefined,
-
-
-### 
-
                     title=field
                     if "xAxis" not in style
                     else style["xAxis"].get("title", field),
                     titleFontSize=style.get("fontSize", 10),
                     labelFontSize=style.get("fontSize", 10),
-                    labelAngle=axis_settings.get("labelAngle", alt.Undefined),
-                    tickCount=axis_settings.get("ticks", alt.Undefined),
-                    grid=True if axis_settings.get("grid", "none") != "none" else True,
-                    format=axis_settings.get("format", alt.Undefined),
+                    labelAngle=x_axis_settings.get("labelAngle", alt.Undefined),
+                    tickCount=x_axis_settings.get("ticks", alt.Undefined),
+                    grid=True if x_axis_settings.get("grid", "none") != "none" else True,
+                    format=x_axis_settings.get("format", alt.Undefined),
                     gridDash=[4, 4]
-                    if axis_settings.get("grid", "none") == "dashed"
+                    if x_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
                     labelOverlap=True
 
             ),
                 scale=alt.Scale(
-                domainMax=int(axis_settings["max"])
-                if "max" in axis_settings
+                domainMax=int(x_axis_settings["max"])
+                if "max" in x_axis_settings
                 else alt.Undefined,
-                domainMin=int(axis_settings["min"])
-                if "min" in axis_settings
+                domainMin=int(x_axis_settings["min"])
+                if "min" in x_axis_settings
                 else alt.Undefined,
-                type=axis_settings.get("scale", alt.Undefined),
+                type=x_axis_settings.get("scale", alt.Undefined),
             ),
                 
                 ),
@@ -409,6 +408,31 @@ def histogram(
                 title="Count of Records"
                 if format_type == "count"
                 else "Percentage of Records",
+                axis=alt.Axis(
+                    title=field
+                    if "yAxis" not in style
+                    else style["yAxis"].get("title", field),
+                    titleFontSize=style.get("fontSize", 10),
+                    labelFontSize=style.get("fontSize", 10),
+                    labelAngle=y_axis_settings.get("labelAngle", alt.Undefined),
+                    tickCount=y_axis_settings.get("ticks", alt.Undefined),
+                    grid=True if y_axis_settings.get("grid", "none") != "none" else True,
+                    format=y_axis_settings.get("format", alt.Undefined),
+                    gridDash=[4, 4]
+                    if y_axis_settings.get("grid", "none") == "dashed"
+                    else alt.Undefined,
+                    labelOverlap=True
+
+                ),
+                scale=alt.Scale(
+                    domainMax=int(y_axis_settings["max"])
+                    if "max" in y_axis_settings
+                    else alt.Undefined,
+                    domainMin=int(y_axis_settings["min"])
+                    if "min" in y_axis_settings
+                    else alt.Undefined,
+                    type=y_axis_settings.get("scale", alt.Undefined),
+                ),
                 # axis=alt.Axis(
                 #     format="PERCENT" if format_type == 'percentage' else 'NUMBER',
                 # )),
