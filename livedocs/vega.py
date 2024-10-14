@@ -307,7 +307,7 @@ def histogram(
     df: pl.DataFrame,
     settings: HistogramSpec,
     schema: dict,
-    style_settings: StyleSettings,
+    style: StyleSettings,
 ) -> tuple[str, str]:
     if "field" not in settings:
         empty_chart = {
@@ -323,6 +323,10 @@ def histogram(
     bin_type = settings.get("binBy", {}).get("type", "max_bins")
     bin_value = settings.get("binBy", {}).get("value", 10)
     format_type = settings.get("format", "count")
+
+### 
+    axis_settings = style.get("xAxis", {})
+### 
 
     usermeta = settings
     usermeta["field"] = field
@@ -366,9 +370,38 @@ def histogram(
                 title=field,
                 axis=alt.Axis(
                     tickMinStep=bin_value if bin_type == "step_size" else alt.Undefined,
-                    tickCount=bin_value if bin_type == "max_bins" else alt.Undefined,
-                ),
+                    # tickCount=bin_value if bin_type == "max_bins" else alt.Undefined,
+
+
+### 
+
+                    title=field
+                    if "xAxis" not in style
+                    else style["xAxis"].get("title", field),
+                    titleFontSize=style.get("fontSize", 10),
+                    labelFontSize=style.get("fontSize", 10),
+                    labelAngle=axis_settings.get("labelAngle", alt.Undefined),
+                    tickCount=axis_settings.get("ticks", alt.Undefined),
+                    grid=True if axis_settings.get("grid", "none") != "none" else True,
+                    format=axis_settings.get("format", alt.Undefined),
+                    gridDash=[4, 4]
+                    if axis_settings.get("grid", "none") == "dashed"
+                    else alt.Undefined,
+                    labelOverlap=True
+
             ),
+                scale=alt.Scale(
+                domainMax=int(axis_settings["max"])
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=int(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", alt.Undefined),
+            ),
+                
+                ),
+
             x2="__bin_field_name_end",
             y=alt.Y(
                 field="__count" if format_type == "count" else "__PercentOfTotal",
@@ -410,7 +443,7 @@ def histogram(
         usermeta={
             "chartType": "histogram",
             "histogramSettings": usermeta,
-            "styleSettings": style_settings,
+            "styleSettings": style,
         },
     )
 
