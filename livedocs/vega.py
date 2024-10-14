@@ -489,6 +489,7 @@ def main_chart(
 ) -> tuple[str, str]:
     usermeta = settings
 
+
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
@@ -527,7 +528,7 @@ def main_chart(
                     "field": default_y_field,
                     "name": "line layer 1",
                     "aggregate": "none",
-                    "mark": "line",
+                    "mark": "grouped_column",
                     "type": default_y_type,
                     "temporalFormat": None,
                     "color_by": None,
@@ -582,7 +583,7 @@ def main_chart(
         y_field = y_series["field"]
         y_type = y_series.get("type") or map_datatype_to_scale_type(schema[y_field])
         y_aggregate = y_series.get("aggregate", "sum")
-        mark_type = y_series.get("mark", "line")
+        mark_type = y_series.get("mark", "grouped_column")
         y_temporal_format = y_series.get("temporalFormat")
 
         y_encoding = create_y_encoding(
@@ -680,7 +681,7 @@ def main_chart(
             or usermeta["yAxis"]["primary"][index]["name"] == ""
         ):
             usermeta["yAxis"]["primary"][index]["name"] = (
-                f"{y_series.get('mark', 'line')} layer {index + 1}"
+                f"{y_series.get('mark', "grouped_column")} layer {index + 1}"
             )
 
         # Create selectors
@@ -1314,24 +1315,6 @@ def main_chart(
                         ],
                     )
                 )
-
-
-        else:
-            base_layer = (
-                alt.Chart(df)
-                .mark_line(
-                    clip=True,
-                    strokeCap="square",
-                    strokeJoin="round",
-                    cursor="crosshair",
-                )
-                .encode(
-                    x=x_encoding,
-                    y=y_encoding,
-                    color=color_by_encoding,
-                    opacity=opacity_encoding,
-                )
-            )
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
