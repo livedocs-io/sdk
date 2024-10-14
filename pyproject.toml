@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livedocs"
+version = "1.0.0"
+description = "Python SDK for Livedocs"
+authors = [{ name = "Livedocs" }]
+dependencies = [
+    "requests>=2.32,<3",
+    "jinja2>=3.1,<4",
+    "polars>=1.9,<2",
+    "vegafusion[embed]>=1.6,<2",
+    "pandas>=2.2,<3",
+    "pyarrow>=17.0,<18",
+    "db-dtypes>=1.3,<2",
+    "duckdb>=1.1,<2",
+    "altair>=5.4,<6",
+    "pydantic>=2.9,<3",
+    "sentry-sdk>=2.16,<3",
+]
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+test = ["flask"]
+
+[project.urls]
+homepage = "https://github.com/livedocs-io/vm-lib"

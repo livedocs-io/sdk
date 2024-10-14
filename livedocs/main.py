@@ -3,7 +3,6 @@ import gzip
 import json
 import os
 import tempfile
-from functools import wraps
 from typing import Dict, List
 
 import pandas as pd
@@ -12,8 +11,6 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
-
-from IPython.display import display
 
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
@@ -29,7 +26,7 @@ from livedocs.utils.common import (
     _fetch_file_manifest,
     _get_dataframe_schema,
     _json_serializer,
-    _persist_built_in_vars
+    _persist_built_in_vars,
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
@@ -48,7 +45,6 @@ def _setup_sentry():
         )
     except Exception as e:
         raise f"Failed to initialize Sentry: {e}"
-
 
 
 """
@@ -75,17 +71,15 @@ class Livedocs:
         self._built_in_vars = {}
         self.is_initialized = False
 
-
     """
     Called when the pod is initialized. Fetches the credentials and sets the 
     is_initialized flag to True. The /v1/credentials endpoint is called to fetch the
     DB connection credentials and secrets for the report.
     """
 
-    @sentry_sdk.trace
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
-        sentry_sdk.set_tag("report_id", report_id)
         with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
+            sentry_sdk.set_tag("report_id", report_id)
             self._report_id = report_id
             self._token = token
             span = sentry_sdk.start_span(name="fetch credentials")
@@ -98,8 +92,7 @@ class Livedocs:
                 key: secret_info["value"] for key, secret_info in secrets.items()
             }
             self._secrets = secrets_dict
-            self._built_in_vars = {**json.loads(self._credentials.get("built_in_vars", "{}"))} 
-            # self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
+            self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
 
     @_capture_exceptions
     def set_var(self, key: str, value: str):
@@ -109,7 +102,7 @@ class Livedocs:
     @_capture_exceptions
     def get_var(self, key: str) -> str:
         return self._built_in_vars.get(key, None)
-    
+
     @_capture_exceptions
     def unset_var(self, key: str):
         self._built_in_vars.pop(key, None)
@@ -144,6 +137,7 @@ class Livedocs:
     Central query function. Give it a query and a datasource, and it will return 
     a Polars DataFrame. Simple. 
     """
+
     @_capture_exceptions
     @sentry_sdk.trace
     def query(
@@ -156,7 +150,6 @@ class Livedocs:
             jinja_span = sentry_sdk.start_span(name="run add_jinja_vars")
             final_query = self.add_jinja_vars(query, context)
             jinja_span.finish()
-
 
             # Run the actual queries
             df: pl.DataFrame = pl.DataFrame()
@@ -212,8 +205,10 @@ class Livedocs:
                 )
                 query_span.finish()
 
-                # Vegafusion 
-                vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
+                # Vegafusion
+                vega_span = sentry_sdk.start_span(
+                    name="run create_vega_spec (vegafusion)"
+                )
                 vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
                 vega_span.finish()
 
@@ -255,16 +250,18 @@ class Livedocs:
 
             return encoded
 
-
     """
     Returns a dict with just the schema for a given datasource
     """
+
     @_capture_exceptions
     @sentry_sdk.trace
-    def _get_chart_schema(self, datasource_str: str, dataframe: pl.DataFrame = None) -> dict:
+    def _get_chart_schema(
+        self, datasource_str: str, dataframe: pl.DataFrame = None
+    ) -> dict:
         with sentry_sdk.start_transaction(op="task", name="get schema for chart"):
             datasource: ElementDataSource = json.loads(datasource_str)
-            
+
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             match ElementDatasourceType(datasource["source_type"]):
                 case ElementDatasourceType.database_table:
@@ -272,7 +269,9 @@ class Livedocs:
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
-                    query = f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
+                    query = (
+                        f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
+                    )
                     _, schema = self._query_file_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.dataframe:
@@ -296,7 +295,9 @@ class Livedocs:
                 },
             }
 
-            empty_spec_with_schema = json.dumps({"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"})
+            empty_spec_with_schema = json.dumps(
+                {"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"}
+            )
             compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
             encoded = base64.b64encode(compressed).decode("ascii")
             post_span.finish()

@@ -11,9 +11,8 @@ import polars as pl
 import requests
 import sentry_sdk
 from duckdb import CatalogException
-from livedocs.types import Credentials
 
-from IPython.display import display
+from livedocs.types import Credentials
 
 _LIVEDOCS_COLORS = [
     "#0094ff",
@@ -32,6 +31,7 @@ _LIVEDOCS_COLORS = [
     "#4ca30e",
     "#7839ee",
 ]
+
 
 def _capture_exceptions(func):
     @wraps(func)
@@ -89,6 +89,7 @@ CORE_URL = os.getenv("CORE_BASE_URL")
 if not CORE_URL:
     raise ValueError("CORE_BASE_URL environment variable not set")
 
+
 @_capture_exceptions
 def _fetch_credentials(report_id: str, token: str) -> Credentials:
     response = requests.get(
@@ -101,6 +102,7 @@ def _fetch_credentials(report_id: str, token: str) -> Credentials:
         raise Exception(
             f"Failed to fetch credentials. Status code: {response.status_code}"
         )
+
 
 @_capture_exceptions
 def _fetch_file_manifest(file_id: str, report_id: str, token: str) -> str:
@@ -116,6 +118,7 @@ def _fetch_file_manifest(file_id: str, report_id: str, token: str) -> str:
             f"Failed to fetch file manifest. Status code: {response.status_code}"
         )
 
+
 @_capture_exceptions
 def _persist_built_in_vars(report_id: str, token: str, vars: dict) -> dict:
     response = requests.post(
@@ -129,6 +132,7 @@ def _persist_built_in_vars(report_id: str, token: str, vars: dict) -> dict:
         raise Exception(
             f"Failed to persist built-in vars. Status code: {response.status_code}"
         )
+
 
 def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
     date_formats = [
@@ -201,7 +205,10 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
 
     return column_types
 
+
 """JSON serializer for objects not serializable by default json code"""
+
+
 def _json_serializer(obj):
     if obj is None:
         return None
@@ -218,9 +225,7 @@ def _json_serializer(obj):
     elif isinstance(obj, bytes):
         return base64.b64encode(obj).decode("utf-8")
     elif isinstance(obj, dict):
-        return {
-            k: _json_serializer(v) for k, v in obj.items()
-        }
+        return {k: _json_serializer(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_json_serializer(item) for item in obj]
     elif isinstance(obj, (set, tuple, frozenset)):
@@ -229,6 +234,7 @@ def _json_serializer(obj):
         return {"real": obj.real, "imag": obj.imag}
     else:
         return str(obj)
+
 
 __all__ = [
     "_LIVEDOCS_COLORS",
