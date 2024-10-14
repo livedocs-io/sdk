@@ -495,6 +495,8 @@ def main_chart(
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
     legend_font_size = style_settings.get("fontSize", 10)
 
+    tooltip_show = style_settings.get("tooltip", True)
+
     if "xAxis" not in settings or not settings["xAxis"].get("field"):
         # Set the right inferred type for the color by field
         if "yAxis" in settings and settings["yAxis"].get("primary"):
@@ -750,7 +752,7 @@ def main_chart(
                                 if color_by_aggregate != "none"
                                 else alt.Undefined,
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -784,7 +786,7 @@ def main_chart(
                                 else alt.Undefined,
                                 format=",.2f",
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -831,7 +833,7 @@ def main_chart(
                                 if color_by_aggregate != "none"
                                 else alt.Undefined,
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -865,7 +867,7 @@ def main_chart(
                                 else alt.Undefined,
                                 format=",.2f",
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -913,7 +915,7 @@ def main_chart(
                                 if color_by_aggregate != "none"
                                 else alt.Undefined,
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -951,7 +953,7 @@ def main_chart(
                                 else alt.Undefined,
                                 format=",.2f",
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1013,7 +1015,7 @@ def main_chart(
                         color="gray"
                     ).encode(
                         x=x_encoding,
-                        tooltip=tooltip_list,
+                        tooltip=tooltip_list if tooltip_show else alt.Undefined,
 
 
                         opacity=alt.condition(nearest, 
@@ -1063,7 +1065,7 @@ def main_chart(
                                     else alt.Undefined,
                                     format=",.2f",
                                 ),
-                            ],
+                            ] if tooltip_show else alt.Undefined,
                         opacity=alt.condition(nearest, 
                                             alt.value(1), 
                                             alt.value(0))
@@ -1113,7 +1115,7 @@ def main_chart(
                                     if color_by_aggregate != "none"
                                     else alt.Undefined,
                                 ),
-                            ],
+                            ] if tooltip_show else alt.Undefined,
                         ).add_params(select, highlight, brush)
                     )
 
@@ -1147,7 +1149,7 @@ def main_chart(
                                     else alt.Undefined,
                                     format=",.2f",
                                 ),
-                            ],
+                            ] if tooltip_show else alt.Undefined,
                         )
                         .add_params(select, highlight, brush)
                     )
@@ -1193,7 +1195,7 @@ def main_chart(
                                 if color_by_aggregate != "none"
                                 else alt.Undefined,
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                 )
 
@@ -1228,7 +1230,7 @@ def main_chart(
                                 else alt.Undefined,
                                 format=",.2f",
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                 )
 
@@ -1273,7 +1275,7 @@ def main_chart(
                                 if color_by_aggregate != "none"
                                 else alt.Undefined,
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                 )
 
@@ -1312,7 +1314,7 @@ def main_chart(
                                 else alt.Undefined,
                                 format=",.2f",
                             ),
-                        ],
+                        ] if tooltip_show else alt.Undefined,
                     )
                 )
 
@@ -1363,6 +1365,8 @@ def swapped_main_chart(
     legend_position = style_settings.get("legend", {}).get("position", "right")
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
     legend_font_size = style_settings.get("fontSize", 10)
+
+    tooltip_show = style_settings.get("tooltip", True)
 
     if "yAxis" not in settings or not settings["yAxis"].get("field"):
         empty_chart = {
@@ -1552,7 +1556,7 @@ def swapped_main_chart(
                             if color_by_aggregate != "none"
                             else alt.Undefined,
                         )
-                    ],
+                    ] if tooltip_show else alt.Undefined,
                 ).add_params(select, highlight, brush)
             )
 
@@ -1585,7 +1589,7 @@ def swapped_main_chart(
                             else alt.Undefined,
                             format=",.2f",
                         )
-                    ],
+                    ] if tooltip_show else alt.Undefined,
                 ).add_params(select, highlight, brush)
             )
 
@@ -1631,7 +1635,7 @@ def swapped_main_chart(
                             if color_by_aggregate != "none"
                             else alt.Undefined,
                         )
-                    ],
+                    ] if tooltip_show else alt.Undefined,
                 ).add_params(select, highlight, brush)
             )
 
@@ -1664,7 +1668,7 @@ def swapped_main_chart(
                             else alt.Undefined,
                             format=",.2f",
                         )
-                    ],
+                    ] if tooltip_show else alt.Undefined,
                 ).add_params(select, highlight, brush)
             )
 
@@ -1710,7 +1714,7 @@ def swapped_main_chart(
                             if color_by_aggregate != "none"
                             else alt.Undefined,
                         )
-                    ],
+                    ] if tooltip_show else alt.Undefined,
                 ).add_params(select, highlight, brush)
             )
 
@@ -1747,7 +1751,7 @@ def swapped_main_chart(
                             else alt.Undefined,
                             format=",.2f",
                         )
-                    ],
+                    ] if tooltip_show else alt.Undefined,
                 ).add_params(select, highlight, brush)
             )
 
