@@ -307,7 +307,7 @@ def histogram(
     df: pl.DataFrame,
     settings: HistogramSpec,
     schema: dict,
-    style_settings: StyleSettings,
+    style: StyleSettings,
 ) -> tuple[str, str]:
     if "field" not in settings:
         empty_chart = {
@@ -324,6 +324,9 @@ def histogram(
     bin_value = settings.get("binBy", {}).get("value", 10)
     format_type = settings.get("format", "count")
 
+    x_axis_settings = style.get("xAxis", {})
+    y_axis_settings = style.get("yAxis", {})
+
     usermeta = settings
     usermeta["field"] = field
     usermeta["binBy"] = {"type": bin_type, "value": bin_value}
@@ -335,6 +338,18 @@ def histogram(
         bin_params["maxbins"] = bin_value
     elif bin_type == "step_size":
         bin_params["step"] = bin_value
+
+    tooltip_show = style.get("tooltip", True)
+
+    tooltip1 = alt.Tooltip(
+        field="__count" if format_type == "count" else "__PercentOfTotal",
+        title="Count of Records"
+        if format_type == "count"
+        else "Percentage of Records",
+        type="quantitative",
+    )
+
+    tooltip2 = alt.Tooltip("__bin_range", title=field, type="nominal")
 
     base = (
         alt.Chart(df)
@@ -366,9 +381,33 @@ def histogram(
                 title=field,
                 axis=alt.Axis(
                     tickMinStep=bin_value if bin_type == "step_size" else alt.Undefined,
-                    tickCount=bin_value if bin_type == "max_bins" else alt.Undefined,
-                ),
+                    title=field
+                    if "xAxis" not in style
+                    else style["xAxis"].get("title", field),
+                    titleFontSize=style.get("fontSize", 10),
+                    labelFontSize=style.get("fontSize", 10),
+                    labelAngle=x_axis_settings.get("labelAngle", alt.Undefined),
+                    tickCount=x_axis_settings.get("ticks", alt.Undefined),
+                    grid=True if x_axis_settings.get("grid", "none") != "none" else True,
+                    format=x_axis_settings.get("format", alt.Undefined),
+                    gridDash=[4, 4]
+                    if x_axis_settings.get("grid", "none") == "dashed"
+                    else alt.Undefined,
+                    labelOverlap=True
+
             ),
+                scale=alt.Scale(
+                domainMax=int(x_axis_settings["max"])
+                if "max" in x_axis_settings
+                else alt.Undefined,
+                domainMin=int(x_axis_settings["min"])
+                if "min" in x_axis_settings
+                else alt.Undefined,
+                type=x_axis_settings.get("scale", alt.Undefined),
+            ),
+                
+                ),
+
             x2="__bin_field_name_end",
             y=alt.Y(
                 field="__count" if format_type == "count" else "__PercentOfTotal",
@@ -376,21 +415,36 @@ def histogram(
                 title="Count of Records"
                 if format_type == "count"
                 else "Percentage of Records",
-                # axis=alt.Axis(
-                #     format="PERCENT" if format_type == 'percentage' else 'NUMBER',
-                # )),
+                axis=alt.Axis(
+                    title=field
+                    if "yAxis" not in style
+                    else style["yAxis"].get("title", field),
+                    titleFontSize=style.get("fontSize", 10),
+                    labelFontSize=style.get("fontSize", 10),
+                    labelAngle=y_axis_settings.get("labelAngle", alt.Undefined),
+                    tickCount=y_axis_settings.get("ticks", alt.Undefined),
+                    grid=True if y_axis_settings.get("grid", "none") != "none" else True,
+                    format=y_axis_settings.get("format", alt.Undefined),
+                    gridDash=[4, 4]
+                    if y_axis_settings.get("grid", "none") == "dashed"
+                    else alt.Undefined,
+                    labelOverlap=True
+
+                ),
+                scale=alt.Scale(
+                    domainMax=int(y_axis_settings["max"])
+                    if "max" in y_axis_settings
+                    else alt.Undefined,
+                    domainMin=int(y_axis_settings["min"])
+                    if "min" in y_axis_settings
+                    else alt.Undefined,
+                    type=y_axis_settings.get("scale", alt.Undefined),
+                ),
+
             ),
             y2=alt.datum(0),
-            tooltip=[
-                alt.Tooltip(
-                    field="__count" if format_type == "count" else "__PercentOfTotal",
-                    title="Count of Records"
-                    if format_type == "count"
-                    else "Percentage of Records",
-                    type="quantitative",
-                ),
-                alt.Tooltip("__bin_range", title=field, type="nominal"),
-            ],
+
+            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
             opacity=alt.value(1),
             color=alt.value("#4C78A8"),
         )
@@ -410,7 +464,7 @@ def histogram(
         usermeta={
             "chartType": "histogram",
             "histogramSettings": usermeta,
-            "styleSettings": style_settings,
+            "styleSettings": style,
         },
     )
 
