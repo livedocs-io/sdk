@@ -28,8 +28,9 @@ pip install --upgrade pip setuptools wheel
 
 ## Testing
 
-To run tests for the project, use the following command:
+To test the charts directly from the client, run:
 
 ```bash
-python livedocs/test.py
+pip install ".[test]"
+CORE_BASE_URL=http://localhost:4000 flask --app tests.vega-api run
 ```
