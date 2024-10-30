@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["flask"]
+test = ["flask", "flask-cors"]
 
 [project.urls]
 homepage = "https://github.com/livedocs-io/vm-lib"

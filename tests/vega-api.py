@@ -5,6 +5,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app, origins=["*"])
 
+
 @app.route("/test-set-datasource", methods=["POST", "OPTIONS"])
 def set_datasource():
     if request.method == "OPTIONS":
@@ -18,9 +19,7 @@ def set_datasource():
     livedocs = Livedocs()
     livedocs.initialize(data["report_id"], data["idToken"])
 
-    schema = []
-    if data["datasource"]["source_type"] == "dataframe":
-        schema = livedocs._get_dataframe_schema(data["datasource"])
+    schema = livedocs._get_chart_schema(json.dumps(data["datasource"]))
 
     return jsonify({"schema": schema}), 200
 
@@ -38,6 +37,8 @@ def run_chart():
     livedocs = Livedocs()
     livedocs.initialize(data["report_id"], data["idToken"])
 
-    chart_config = livedocs._get_vega_spec(json.dumps(data["settings"]), json.dumps(data["datasource"]))
+    chart_config = livedocs._get_vega_spec(
+        json.dumps(data["settings"]), json.dumps(data["datasource"])
+    )
 
     return json.dumps(chart_config), 200, {"Content-Type": "application/json"}
