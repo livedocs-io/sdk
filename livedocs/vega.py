@@ -553,7 +553,6 @@ def main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
-    ###
     if (x_type == "temporal" and x_temporal_format is None):
         x_temporal_format = "yearmonthdate"
 
@@ -610,11 +609,10 @@ def main_chart(
 
         color_by_encoding = None
         color_by_aggregate = None
-        ###
+
         color_by_field = None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
-            ###
             color_by_field = y_series["color_by"].get("field", "none")
             unique_values = (
                 df.select(pl.col(color_by_field).unique()).to_series().to_list()
@@ -718,8 +716,6 @@ def main_chart(
         # Create the appropriate mark type
         if mark_type == "grouped_column":
             if color_by_field:
-                print(color_by_field)
-                print(settings)
                 base_layer = (
                     alt.Chart(df)
                     .mark_bar(clip=True, stroke="black")
@@ -776,8 +772,6 @@ def main_chart(
                     .add_params(select, highlight, brush)
                 )
             else:
-                ###
-                print("not color by field")
                 base_layer = (
                     alt.Chart(df)
                     .mark_bar(clip=True, stroke="black")
