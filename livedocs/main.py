@@ -11,6 +11,7 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
+from IPython.display import display
 
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
@@ -33,6 +34,7 @@ from livedocs.utils.postgres import (
     process_postgres_schema,
 )
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
+from livedocs.cache import QueryCache
 
 
 def _setup_sentry():
@@ -70,6 +72,7 @@ class Livedocs:
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
+        self._query_cache = QueryCache()
 
     """
     Called when the pod is initialized. Fetches the credentials and sets the 
@@ -135,35 +138,50 @@ class Livedocs:
 
     """
     Central query function. Give it a query and a datasource, and it will return 
-    a Polars DataFrame. Simple. 
+    a Polars DataFrame and JSON string of the result. Simple. 
     """
 
     @_capture_exceptions
     @sentry_sdk.trace
     def query(
-        self, query: str, str_datasource: str, context: dict, dataframe=None
+        self,
+        query: str,
+        str_datasource: str,
+        context: dict,
+        dataframe=None,
+        limit=10,
+        offset=0,
+        use_cache=True,
     ) -> tuple[pl.DataFrame, str]:
         with sentry_sdk.start_transaction(op="task", name="run query"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
-            # Run jinja on input queries
-            jinja_span = sentry_sdk.start_span(name="run add_jinja_vars")
+            # Plug in the Jinja variables
             final_query = self.add_jinja_vars(query, context)
-            jinja_span.finish()
 
             # Run the actual queries
             df: pl.DataFrame = pl.DataFrame()
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            (df, schema) = self._query_with_schema(final_query, datasource, dataframe)
+            query_result = self._query_with_schema(
+                final_query, datasource, dataframe, use_cache
+            )
+            display(f"FINAL QUERY RESULT: {query_result}")
+            df, schema, cache_hit = query_result
             query_span.finish()
 
-            # Post-process the results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            json_string = json.dumps(df.to_dicts(), default=_json_serializer)
-            compressed = gzip.compress(json_string.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
-            post_span.finish()
-            return (df, encoded)
+            sliced_df = df.slice(offset, limit)
+            result = {
+                "data": sliced_df.to_dicts(),
+                "metadata": {
+                    "total_rows": len(df),
+                    "limit": limit,
+                    "offset": offset,
+                    "cache": "hit" if cache_hit else "miss",
+                },
+            }
+            json_str = json.dumps(result, default=_json_serializer)
+
+            return (df, json_str)
 
     """
     Plugs Jinja variables into a raw HTML string for a text element
@@ -304,29 +322,56 @@ class Livedocs:
 
             return encoded
 
-    """
-    Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
-    """
-
     def _query_with_schema(
         self,
         query: str,
         datasource: ElementDataSource,
         dataframe=None,
-    ) -> tuple[pl.DataFrame, dict]:
+        use_cache=True,
+    ) -> tuple[pl.DataFrame, dict, bool]:
+        """
+        Executes a query on a given datasource with schema handling and optional caching.
+
+        Args:
+            query (str): The query string to execute.
+            datasource (ElementDataSource): The datasource to execute the query on.
+            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+            use_cache (bool): Indicates whether to use caching. Defaults to True.
+
+        Returns:
+            tuple[pl.DataFrame, dict, bool]: A tuple containing the resulting DataFrame,
+            schema as a dict, and a boolean indicating if the result was retrieved from cache.
+        """
+
+        cache_hit = False
+
+        # Use cache if enabled and the query is found in cache
+        if use_cache:
+            cache_result = self._query_cache.get(query, str(datasource))
+            if cache_result is not None and not cache_result[0].is_empty():
+                cache_hit = True
+                return (*cache_result, cache_hit)
+
+        # Execute query based on datasource type
         match ElementDatasourceType(datasource["source_type"]):
             case ElementDatasourceType.database | ElementDatasourceType.database_table:
-                return self._query_database_with_schema(query, datasource)
+                result = self._query_database_with_schema(query, datasource)
             case ElementDatasourceType.file:
-                return self._query_file_with_schema(query, datasource)
+                result = self._query_file_with_schema(query, datasource)
             case ElementDatasourceType.dataframe:
                 if dataframe is not None:
                     self._duckdb.conn.register(
                         datasource["dataframe_info"]["df_name"], dataframe
                     )
-                return self._query_dataframe_with_schema(query, datasource)
+                result = self._query_dataframe_with_schema(query, datasource)
             case _:
                 return "Unknown ElementDataSource"
+
+        # Cache result if caching is enabled
+        if use_cache:
+            self._query_cache.set(query, str(datasource), result)
+
+        return (*result, cache_hit)
 
     """
     Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
