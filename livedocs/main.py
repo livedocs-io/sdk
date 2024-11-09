@@ -38,6 +38,9 @@ from livedocs.cache import QueryCache
 
 
 def _setup_sentry():
+    """
+    Initializes Sentry for error tracking and performance monitoring.
+    """
     try:
         sentry_sdk.init(
             dsn=os.getenv("VMLIB_SENTRY_DSN"),
@@ -60,11 +63,13 @@ This is initialized in the prelude cell of the notebook like this:
 
 class Livedocs:
     """
-    On initialization this sets up everything that can be used by the library without
-    having a report_id and token.
+    Main class for the Livedocs library. Handles initialization, querying, and data processing.
     """
 
     def __init__(self):
+        """
+        Initializes the Livedocs instance, setting up necessary components and configurations.
+        """
         _setup_sentry()
         self._duckdb = DuckDBSingleton()
         self._file_dir = tempfile.mkdtemp()
@@ -81,6 +86,13 @@ class Livedocs:
     """
 
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
+        """
+        Initializes the Livedocs instance with the given report ID and token.
+
+        Args:
+            report_id (str): The report ID.
+            token (str): The session token.
+        """
         with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
             sentry_sdk.set_tag("report_id", report_id)
             self._report_id = report_id
@@ -99,32 +111,62 @@ class Livedocs:
 
     @_capture_exceptions
     def set_var(self, key: str, value: str):
+        """
+        Sets a built-in variable.
+
+        Args:
+            key (str): The variable key.
+            value (str): The variable value.
+        """
         self._built_in_vars[key] = value
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     @_capture_exceptions
     def get_var(self, key: str) -> str:
+        """
+        Gets the value of a built-in variable.
+
+        Args:
+            key (str): The variable key.
+
+        Returns:
+            str: The variable value.
+        """
         return self._built_in_vars.get(key, None)
 
     @_capture_exceptions
     def unset_var(self, key: str):
+        """
+        Unsets a built-in variable.
+
+        Args:
+            key (str): The variable key.
+        """
         self._built_in_vars.pop(key, None)
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     @_capture_exceptions
     def clear_vars(self):
+        """
+        Clears all built-in variables.
+        """
         self._built_in_vars = {}
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
-    """
-    Accessor for user-defined secrets. Use this like:
-
-    livedocs.secrets('CLIENT_ID', 'default_value (optional)')
-
-    """
-
     @_capture_exceptions
     def secrets(self, key, default_value="") -> str:
+        """
+        Accesses user-defined secrets.
+
+        Usage: livedocs.secrets('CLIENT_ID', 'some_value')
+
+        Args:
+            key (str): The secret key.
+            default_value (str, optional): The default value if the secret is not found. Defaults to "".
+
+        Returns:
+            str: The secret value.
+        """
         if self._secrets.get(key):
             return self._secrets.get(key)
         else:
@@ -135,11 +177,6 @@ class Livedocs:
             }
             self._secrets = secrets_dict
             return self._secrets.get(key, default_value)
-
-    """
-    Central query function. Give it a query and a datasource, and it will return 
-    a Polars DataFrame and JSON string of the result. Simple. 
-    """
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -153,6 +190,21 @@ class Livedocs:
         offset=0,
         use_cache=True,
     ) -> tuple[pl.DataFrame, str]:
+        """
+        Executes a query on a given datasource and returns the result as a Polars DataFrame and JSON string.
+
+        Args:
+            query (str): The query string.
+            str_datasource (str): The datasource as a JSON string.
+            context (dict): The context for Jinja variables.
+            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+            limit (int, optional): The number of rows to return. Defaults to 10.
+            offset (int, optional): The offset for the rows to return. Defaults to 0.
+            use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
+
+        Returns:
+            tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
+        """
         with sentry_sdk.start_transaction(op="task", name="run query"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
@@ -183,34 +235,53 @@ class Livedocs:
 
             return (df, json_str)
 
-    """
-    Plugs Jinja variables into a raw HTML string for a text element
-    """
-
     @_capture_exceptions
     @sentry_sdk.trace
     def process_raw_text(self, str_src: str, context: dict) -> str:
+        """
+        Processes raw text by plugging in Jinja variables.
+
+        Args:
+            str_src (str): The source text as a JSON string.
+            context (dict): The context for Jinja variables.
+
+        Returns:
+            str: The processed HTML text.
+        """
         with sentry_sdk.start_transaction(op="task", name="run text element"):
             src = json.loads(str_src)
             return self.add_jinja_vars(src["html"], context)
 
-    """
-    Adds the local variables to the query. 
-    """
-
     def add_jinja_vars(self, text: str, context: dict) -> str:
+        """
+        Adds Jinja variables to the given text.
+
+        Args:
+            text (str): The text to process.
+            context (dict): The context for Jinja variables.
+
+        Returns:
+            str: The processed text with Jinja variables.
+        """
         template = Template(text)
         return template.render(context)
-
-    """
-    Gets a Vega spec for a given datasource and settings. 
-    """
 
     @_capture_exceptions
     @sentry_sdk.trace
     def _get_vega_spec(
         self, settings_str: str, datasource_str: str, dataframe=None
     ) -> dict:
+        """
+        Gets a Vega specification for a given datasource and settings.
+
+        Args:
+            settings_str (str): The settings as a JSON string.
+            datasource_str (str): The datasource as a JSON string.
+            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+
+        Returns:
+            dict: The Vega specification as a base64 encoded string.
+        """
         with sentry_sdk.start_transaction(op="task", name="run chart element"):
             try:
                 settings: LivedocsChartSpec = json.loads(settings_str)
@@ -240,15 +311,21 @@ class Livedocs:
             except Exception as e:
                 raise e
 
-    """
-    Gets a polars table for a given datasource. 
-    """
-
     @_capture_exceptions
     @sentry_sdk.trace
     def _get_table_response(
         self, str_datasource: ElementDataSource, dataframe=None
     ) -> pl.DataFrame:
+        """
+        Gets a Polars table for a given datasource.
+
+        Args:
+            str_datasource (ElementDataSource): The datasource as a JSON string.
+            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+
+        Returns:
+            pl.DataFrame: The resulting Polars DataFrame.
+        """
         with sentry_sdk.start_transaction(op="task", name="run table element"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
@@ -268,15 +345,21 @@ class Livedocs:
 
             return encoded
 
-    """
-    Returns a dict with just the schema for a given datasource
-    """
-
     @_capture_exceptions
     @sentry_sdk.trace
     def _get_chart_schema(
         self, datasource_str: str, dataframe: pl.DataFrame = None
     ) -> dict:
+        """
+        Returns a dictionary with the schema for a given datasource.
+
+        Args:
+            datasource_str (str): The datasource as a JSON string.
+            dataframe (pl.DataFrame, optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+
+        Returns:
+            dict: The schema as a base64 encoded string.
+        """
         with sentry_sdk.start_transaction(op="task", name="get schema for chart"):
             datasource: ElementDataSource = json.loads(datasource_str)
 
@@ -367,19 +450,25 @@ class Livedocs:
             case _:
                 return "Unknown ElementDataSource"
 
-        # Cache result if caching is enabled
+        # Cache result if enabled
         if use_cache:
             self._query_cache.set(query, str(datasource), result)
 
         return (*result, cache_hit)
 
-    """
-    Query a database and return the result as a DataFrame with schema. Currently only supports Postgres. 
-    """
-
     def _query_database_with_schema(
         self, query: str, datasource: ElementDataSource
     ) -> tuple[pl.DataFrame, dict]:
+        """
+        Queries a database and returns the result as a DataFrame with schema. Currently only supports Postgres.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
+        """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
                 # Get the schema directly from the query
@@ -393,27 +482,39 @@ class Livedocs:
             case _:
                 return "Unknown DatabaseType"
 
-    """
-    Query a database. Currently only supports Postgres. 
-    """
-
     def _query_database(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
+        """
+        Queries a database. Currently only supports Postgres.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            pl.DataFrame: The resulting DataFrame.
+        """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
                 return self._query_postgres(query, datasource)
             case _:
                 return "Unknown DatabaseType"
 
-    """
-    Query a Postgres database. Attaches the database to DuckDB and executes the 
-    query under the alias same as the database name.
-    """
-
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
+        """
+        Queries a Postgres database. Attaches the database to DuckDB and executes the
+        query under the alias same as the database name.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            pl.DataFrame: The resulting DataFrame.
+        """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
             # This won't throw an error if the credentials are not found
@@ -455,11 +556,17 @@ class Livedocs:
 
         return result
 
-    """
-    Query a file. Currently supports CSV and XLSX files only. 
-    """
-
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
+        """
+        Queries a file. Currently supports CSV and XLSX files only.
+
+        Args:
+            query (str): The query string.
+            datasource (dict): The datasource to execute the query on.
+
+        Returns:
+            pl.DataFrame: The resulting DataFrame.
+        """
         try:
             file_info = datasource["file_info"]
             file_id = file_info["file_id"]
@@ -492,24 +599,36 @@ class Livedocs:
         except Exception as e:
             raise RuntimeError(f"An error occurred while querying the file: {e}")
 
-    """
-    Query a file with the schema included in the response. Currently supports CSV and XLSX files only. 
-    """
-
     def _query_file_with_schema(
         self, query: str, datasource: dict
     ) -> tuple[pl.DataFrame, dict]:
+        """
+        Queries a file with the schema included in the response. Currently supports CSV and XLSX files only.
+
+        Args:
+            query (str): The query string.
+            datasource (dict): The datasource to execute the query on.
+
+        Returns:
+            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
+        """
         result = self._query_file(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
 
-    """
-    Query a DataFrame. Currently only supports Pandas and Polars DataFrames. 
-    """
-
     def _query_dataframe(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
+        """
+        Queries a DataFrame. Currently only supports Pandas and Polars DataFrames.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            pl.DataFrame: The resulting DataFrame.
+        """
         dataframe_info = datasource.get("dataframe_info")
 
         if dataframe_info is None:
@@ -522,23 +641,34 @@ class Livedocs:
 
         return result
 
-    """
-    Query a DataFrame with the schema included in the response. Currently only supports Pandas and Polars DataFrames.
-    """
-
     def _query_dataframe_with_schema(
         self, query: str, datasource: ElementDataSource
     ) -> tuple[pl.DataFrame, dict]:
+        """
+        Queries a DataFrame with the schema included in the response. Currently only supports Pandas and Polars DataFrames.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
+        """
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
 
-    """
-    Fetches a signed URL from the /v1/manifest endpoint for a file and returns it. 
-    It also stores the signed URL in a dictionary for future use. 
-    """
-
     def _get_signed_url(self, file_id: str) -> str:
+        """
+        Fetches a signed URL from the /v1/manifest endpoint for a file and returns it.
+        It also stores the signed URL in a dictionary for future use.
+
+        Args:
+            file_id (str): The file ID.
+
+        Returns:
+            str: The signed URL.
+        """
         if file_id in self._file_manifests:
             return self._file_manifests[file_id]
         else:
@@ -547,16 +677,28 @@ class Livedocs:
             return manifest["signed_url"]
 
     def _download_file(self, signed_url, file_path):
+        """
+        Downloads a file from the given signed URL and saves it to the specified file path.
+
+        Args:
+            signed_url (str): The signed URL to download the file from.
+            file_path (str): The path to save the downloaded file.
+        """
         response = requests.get(signed_url)
         response.raise_for_status()
         with open(file_path, "wb") as f:
             f.write(response.content)
 
-    """
-    Get the schema of any given dataframe
-    """
-
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
+        """
+        Gets the schema of any given Polars DataFrame.
+
+        Args:
+            df (pl.DataFrame): The DataFrame to get the schema from.
+
+        Returns:
+            List[Schema]: The schema as a list of Schema objects.
+        """
         schema = []
 
         if isinstance(df, pd.DataFrame):
