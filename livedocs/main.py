@@ -77,7 +77,6 @@ class Livedocs:
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
-        self._query_cache = QueryCache()
 
     """
     Called when the pod is initialized. Fetches the credentials and sets the 
@@ -108,6 +107,7 @@ class Livedocs:
             }
             self._secrets = secrets_dict
             self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
+            self._query_cache = QueryCache(report_id=report_id, token=token)
 
     @_capture_exceptions
     def set_var(self, key: str, value: str):
@@ -229,11 +229,17 @@ class Livedocs:
                     "limit": limit,
                     "offset": offset,
                     "cache": "hit" if cache_hit else "miss",
+                    # "cache_id" : "whatever"
                 },
             }
+            # Post-process the results
+            post_span = sentry_sdk.start_span(name="post-processing")
             json_str = json.dumps(result, default=_json_serializer)
+            compressed = gzip.compress(json_str.encode("utf-8"))
+            encoded = base64.b64encode(compressed).decode("ascii")
+            post_span.finish()
 
-            return (df, json_str)
+            return (df, encoded)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -672,7 +678,9 @@ class Livedocs:
         if file_id in self._file_manifests:
             return self._file_manifests[file_id]
         else:
-            manifest = _fetch_file_manifest(file_id, self._report_id, self._token)
+            manifest = _fetch_file_manifest(
+                file_id, self._report_id, self._token, "read"
+            )
             self._file_manifests[file_id] = manifest["signed_url"]
             return manifest["signed_url"]
 

@@ -105,12 +105,16 @@ def _fetch_credentials(report_id: str, token: str) -> Credentials:
 
 
 @_capture_exceptions
-def _fetch_file_manifest(file_id: str, report_id: str, token: str) -> str:
+def _fetch_file_manifest(file_id: str, report_id: str, token: str, action: str) -> str:
+    if action not in {"write", "read", "delete"}:
+        raise ValueError("Invalid action. Must be 'write', 'read', or 'delete'.")
+
     response = requests.post(
         f"{CORE_URL}/v1/manifest/{report_id}",
-        json={"file_id": file_id},
+        json={"file_id": file_id, "action": action},
         headers={"authorization": token},
     )
+
     if response.status_code == 200:
         return response.json()
     else:

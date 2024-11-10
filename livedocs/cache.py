@@ -1,9 +1,15 @@
-import hashlib
-import polars as pl
 import concurrent.futures
-import time
+import hashlib
+import io
 import logging
+import threading
+import time
+
+import polars as pl
+import requests
 from IPython.display import display
+
+from livedocs.utils.common import _fetch_file_manifest
 
 
 class QueryCache:
@@ -16,7 +22,9 @@ class QueryCache:
         executor (concurrent.futures.ThreadPoolExecutor): Thread pool for asynchronous tasks.
     """
 
-    def __init__(self, ttl: int = 3600, max_workers: int = 2):
+    def __init__(
+        self, report_id: str, token: str, ttl: int = 3600, max_workers: int = 2
+    ):
         """
         Initializes the QueryCache instance with TTL and maximum worker threads.
 
@@ -27,6 +35,9 @@ class QueryCache:
         self.cache = {}
         self.ttl = ttl
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self.lock = threading.Lock()
+        self.report_id = report_id
+        self.token = token
 
     def _generate_hash(self, query: str, datasource: str) -> str:
         """
@@ -90,21 +101,51 @@ class QueryCache:
         """
         key = self._generate_hash(query, datasource)
         self.cache[key] = {"data": result, "timestamp": time.time()}
-        # Optionally submit the data to be written to a Parquet file asynchronously.
-        # self.executor.submit(self._write_to_parquet, key, result[0])
+        # Make a copy of the DataFrame to avoid concurrent access issues
+        df_copy = result[0].clone()
+        # Asynchronously write the DataFrame to a Parquet file
+        self.executor.submit(self._write_to_parquet, key, df_copy)
         logging.info(f"Successfully cached key: {key}")
         display(f"Successfully cached key: {key}")
 
     def _write_to_parquet(self, key: str, df: pl.DataFrame):
         """
-        Writes a DataFrame to a Parquet file using the generated cache key as filename.
+        Writes a DataFrame to GCS as parquet using streaming.
 
         Args:
-            key (str): The cache key used to name the Parquet file.
-            df (pl.DataFrame): The DataFrame to be written to Parquet.
+            key (str): The cache key used as filename
+            df (pl.DataFrame): The DataFrame to upload
         """
         try:
-            df.write_parquet(f"{key}.parquet")
-            logging.info(f"Successfully wrote Parquet file for key: {key}")
+            with self.lock:
+                # Create buffer to store the data in memory
+                buffer = io.BytesIO()
+
+                # Write DataFrame to the buffer in Parquet format
+                df.write_parquet(buffer)
+
+                # Retrieve the byte data from the buffer
+                parquet_bytes = buffer.getvalue()
+
+                if len(parquet_bytes) > 32 * 1024 * 1024:
+                    raise ValueError("Parquet file exceeds 32MB limit")
+
+                # Get signed URL for upload
+                upload_url = _fetch_file_manifest(
+                    f"cache/{key}.parquet", self.report_id, self.token, "write"
+                )["signed_url"]
+
+                # Upload the Parquet file to GCS
+                response = requests.put(
+                    upload_url,
+                    data=parquet_bytes,
+                    headers={"Content-Type": "application/octet-stream"},
+                )
+                response.raise_for_status()
+
+                display(f"Uploaded parquet to GCS for key: {key}")
+                logging.info(f"Uploaded parquet to GCS for key: {key}")
+
         except Exception as e:
-            logging.error(f"Failed to write Parquet file for key: {key}, error: {e}")
+            display(f"Failed to upload parquet for key: {key}, error: {e}")
+            logging.error(f"Failed to upload parquet for key: {key}, error: {e}")
