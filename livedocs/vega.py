@@ -373,7 +373,7 @@ def histogram(
         )
     )
 
-    if format_type == "percentage":
+    if format_type == "percent":
         base = base.transform_joinaggregate(
             joinaggregate=[{"op": "sum", "field": "__count", "as": "__totalCount"}],
             groupby=[],
