@@ -373,7 +373,7 @@ def histogram(
         )
     )
 
-    if format_type == "percentage":
+    if format_type == "percent":
         base = base.transform_joinaggregate(
             joinaggregate=[{"op": "sum", "field": "__count", "as": "__totalCount"}],
             groupby=[],
@@ -438,7 +438,9 @@ def histogram(
                     grid=True
                     if y_axis_settings.get("grid", "none") != "none"
                     else True,
-                    format=y_axis_settings.get("format", alt.Undefined),
+                    format=y_axis_settings.get("format", alt.Undefined)
+                    if format_type=="count"
+                    else "%",
                     gridDash=[4, 4]
                     if y_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
