@@ -438,7 +438,9 @@ def histogram(
                     grid=True
                     if y_axis_settings.get("grid", "none") != "none"
                     else True,
-                    format=y_axis_settings.get("format", alt.Undefined),
+                    format=y_axis_settings.get("format", alt.Undefined)
+                    if format_type=="count"
+                    else "%",
                     gridDash=[4, 4]
                     if y_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
