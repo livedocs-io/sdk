@@ -5,6 +5,7 @@ import altair as alt
 import polars as pl
 
 from livedocs.types import (
+    CacheInfo,
     ElementDataSource,
     HistogramSpec,
     LivedocsChartSpec,
@@ -117,7 +118,9 @@ based on the chartType parameter of the Livedocs chart config.
 """
 
 
-def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
+def create_vega_spec(
+    df: pl.DataFrame, spec: Spec, schema: dict, cache_info: CacheInfo = None
+):
     alt.data_transformers.enable("vegafusion")
 
     style_settings = spec.get("styleSettings", {})
@@ -135,6 +138,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
                 "spec": json.dumps(empty_chart),
                 "schema": schema,
                 "status": "OVERLOADED",
+                "cache_info": cache_info,
             }
         )
         return validated_spec.model_dump_json()
@@ -158,7 +162,12 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
                 )
 
             validated_spec = VegaSpec(
-                **{"spec": vega_spec, "schema": schema, "status": status}
+                **{
+                    "spec": vega_spec,
+                    "schema": schema,
+                    "status": status,
+                    "cache_info": cache_info,
+                }
             )
             return validated_spec.model_dump_json()
         else:
@@ -170,7 +179,12 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
                 },
             }
             validated_spec = VegaSpec(
-                **{"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"}
+                **{
+                    "spec": json.dumps(empty_chart, separators=(",", ":")),
+                    "schema": schema,
+                    "status": "EMPTY",
+                    "cache_info": cache_info,
+                }
             )
             return validated_spec.model_dump_json()
 

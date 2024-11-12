@@ -7,9 +7,11 @@ import time
 
 import polars as pl
 import requests
+import json
 from IPython.display import display
 
 from livedocs.utils.common import _fetch_file_manifest
+from livedocs.types import ElementDataSource
 
 
 class QueryCache:
@@ -30,7 +32,7 @@ class QueryCache:
 
         Args:
             ttl (int): Time-to-live for cached entries, in seconds. Defaults to 3600.
-            max_workers (int): Maximum number of threads for parallel operations. Defaults to 4.
+            max_workers (int): Maximum number of threads for parallel operations. Defaults to 2.
         """
         self.cache = {}
         self.ttl = ttl
@@ -39,18 +41,27 @@ class QueryCache:
         self.report_id = report_id
         self.token = token
 
-    def _generate_hash(self, query: str, datasource: str) -> str:
+    def generate_cache_id(self, query: str, datasource: ElementDataSource) -> str:
         """
         Generates a SHA-256 hash key based on the query and datasource.
 
         Args:
             query (str): The query string to be cached.
-            datasource (str): The identifier for the data source.
+            datasource (ElementDataSource): The query data source.
 
         Returns:
             str: The generated hash key.
         """
-        hash_input = query + datasource
+        try:
+            datasource_json = json.dumps(
+                datasource,
+                separators=(",", ":"),
+            )
+        except TypeError as e:
+            logging.error(f"Failed to generate cache_id: {e}")
+            return query
+
+        hash_input = query + datasource_json
         return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
 
     def _is_expired(self, timestamp: float) -> bool:
@@ -65,18 +76,20 @@ class QueryCache:
         """
         return time.time() - timestamp > self.ttl
 
-    def get(self, query: str, datasource: str) -> tuple[pl.DataFrame, dict]:
+    def get(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
         """
         Retrieves a cached entry for a given query and datasource if available and not expired.
 
         Args:
             query (str): The query string used as part of the cache key.
-            datasource (str): The data source identifier used as part of the cache key.
+            datasource (ElementDataSource): The data source identifier used as part of the cache key.
 
         Returns:
             tuple[pl.DataFrame, dict] or None: Cached data and metadata if found and valid, otherwise None.
         """
-        key = self._generate_hash(query, datasource)
+        key = self.generate_cache_id(query, datasource)
         entry = self.cache.get(key)
         if entry and not self._is_expired(entry["timestamp"]):
             logging.info(f"Cache hit for key: {key}")
@@ -99,7 +112,7 @@ class QueryCache:
             datasource (str): The data source identifier used to generate the cache key.
             result (tuple[pl.DataFrame, dict]): The result data and metadata to cache.
         """
-        key = self._generate_hash(query, datasource)
+        key = self.generate_cache_id(query, datasource)
         self.cache[key] = {"data": result, "timestamp": time.time()}
         # Make a copy of the DataFrame to avoid concurrent access issues
         df_copy = result[0].clone()

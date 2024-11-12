@@ -11,14 +11,19 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
-from IPython.display import display
 
+from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
+    CacheInfo,
+    CacheStatus,
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
     LivedocsChartSpec,
+    LivedocsResult,
+    QueryResult,
+    QueryResultMetadata,
     Schema,
 )
 from livedocs.utils.common import (
@@ -26,7 +31,6 @@ from livedocs.utils.common import (
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
-    _json_serializer,
     _persist_built_in_vars,
 )
 from livedocs.utils.postgres import (
@@ -34,7 +38,6 @@ from livedocs.utils.postgres import (
     process_postgres_schema,
 )
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
-from livedocs.cache import QueryCache
 
 
 def _setup_sentry():
@@ -52,18 +55,13 @@ def _setup_sentry():
         raise f"Failed to initialize Sentry: {e}"
 
 
-"""
-This is initialized in the prelude cell of the notebook like this:
-    
-    livedocs = Livedocs()
-    livedocs.initialize(report_id, session_token)
-
-"""
-
-
 class Livedocs:
     """
     Main class for the Livedocs library. Handles initialization, querying, and data processing.
+    This is initialized in the prelude cell of the notebook like this:
+
+    livedocs = Livedocs()
+    livedocs.initialize(report_id, session_token)
     """
 
     def __init__(self):
@@ -212,34 +210,30 @@ class Livedocs:
             final_query = self.add_jinja_vars(query, context)
 
             # Run the actual queries
-            df: pl.DataFrame = pl.DataFrame()
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            query_result = self._query_with_schema(
+            df: pl.DataFrame = pl.DataFrame()
+            df, schema, cache_info = self._query_with_schema(
                 final_query, datasource, dataframe, use_cache
             )
-            display(f"FINAL QUERY RESULT: {query_result}")
-            df, schema, cache_hit = query_result
             query_span.finish()
 
-            sliced_df = df.slice(offset, limit)
-            result = {
-                "data": sliced_df.to_dicts(),
-                "metadata": {
-                    "total_rows": len(df),
-                    "limit": limit,
-                    "offset": offset,
-                    "cache": "hit" if cache_hit else "miss",
-                    # "cache_id" : "whatever"
-                },
-            }
-            # Post-process the results
+            # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
-            json_str = json.dumps(result, default=_json_serializer)
-            compressed = gzip.compress(json_str.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
+            df_slice = df.slice(offset, limit)
+
+            # Compress and encode response
+            result = QueryResult(
+                data=df_slice,
+                metadata=QueryResultMetadata(
+                    limit=limit,
+                    offset=offset,
+                    total_rows=len(df),
+                    cache_info=cache_info,
+                ),
+            ).serialize()
             post_span.finish()
 
-            return (df, encoded)
+            return (df, LivedocsResult(result))
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -275,7 +269,7 @@ class Livedocs:
     @_capture_exceptions
     @sentry_sdk.trace
     def _get_vega_spec(
-        self, settings_str: str, datasource_str: str, dataframe=None
+        self, settings_str: str, datasource_str: str, dataframe=None, use_cache=True
     ) -> dict:
         """
         Gets a Vega specification for a given datasource and settings.
@@ -289,38 +283,41 @@ class Livedocs:
             dict: The Vega specification as a base64 encoded string.
         """
         with sentry_sdk.start_transaction(op="task", name="run chart element"):
-            try:
-                settings: LivedocsChartSpec = json.loads(settings_str)
-                datasource: ElementDataSource = json.loads(datasource_str)
+            settings: LivedocsChartSpec = json.loads(settings_str)
+            datasource: ElementDataSource = json.loads(datasource_str)
 
-                # Run actual span
-                query_span = sentry_sdk.start_span(name="run _query_with_schema")
-                results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-                    _get_altair_datasource_query(datasource), datasource, dataframe
-                )
-                query_span.finish()
+            # Run actual span
+            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            df, schema, cache_info = self._query_with_schema(
+                _get_altair_datasource_query(datasource),
+                datasource,
+                dataframe,
+                use_cache,
+            )
+            query_span.finish()
 
-                # Vegafusion
-                vega_span = sentry_sdk.start_span(
-                    name="run create_vega_spec (vegafusion)"
-                )
-                vega_spec_json_str = create_vega_spec(results[0], settings, results[1])
-                vega_span.finish()
+            # Vegafusion
+            vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
+            vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
+            vega_span.finish()
 
-                # Post-process the results
-                post_span = sentry_sdk.start_span(name="post-processing")
-                compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
-                encoded = base64.b64encode(compressed).decode("ascii")
-                post_span.finish()
+            # Post-process the results
+            post_span = sentry_sdk.start_span(name="post-processing")
+            compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
+            encoded = base64.b64encode(compressed).decode("ascii")
+            post_span.finish()
 
-                return encoded
-            except Exception as e:
-                raise e
+            return encoded
 
     @_capture_exceptions
     @sentry_sdk.trace
     def _get_table_response(
-        self, str_datasource: ElementDataSource, dataframe=None
+        self,
+        str_datasource: ElementDataSource,
+        dataframe=None,
+        limit=10,
+        offset=0,
+        use_cache=True,
     ) -> pl.DataFrame:
         """
         Gets a Polars table for a given datasource.
@@ -336,20 +333,31 @@ class Livedocs:
             datasource: ElementDataSource = json.loads(str_datasource)
 
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            results: tuple[pl.DataFrame, dict] = self._query_with_schema(
-                _get_altair_datasource_query(datasource), datasource, dataframe
+            df, schema, cache_info = self._query_with_schema(
+                _get_altair_datasource_query(datasource),
+                datasource,
+                dataframe,
+                use_cache,
             )
             query_span.finish()
 
-            (df, schema) = results
-
+            # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
-            json_string = json.dumps(df.to_dicts(), default=_json_serializer)
-            compressed = gzip.compress(json_string.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
+            df_slice = df.slice(offset, limit)
+
+            # Compress and encode response
+            result = QueryResult(
+                data=df_slice,
+                metadata=QueryResultMetadata(
+                    limit=limit,
+                    offset=offset,
+                    total_rows=len(df),
+                    cache_info=cache_info,
+                ),
+            ).serialize()
             post_span.finish()
 
-            return encoded
+            return LivedocsResult(result)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -403,7 +411,12 @@ class Livedocs:
             }
 
             empty_spec_with_schema = json.dumps(
-                {"spec": json.dumps(empty_chart), "schema": schema, "status": "EMPTY"}
+                {
+                    "spec": json.dumps(empty_chart, separators=(",", ":")),
+                    "schema": schema,
+                    "status": "EMPTY",
+                },
+                separators=(",", ":"),
             )
             compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
             encoded = base64.b64encode(compressed).decode("ascii")
@@ -417,29 +430,36 @@ class Livedocs:
         datasource: ElementDataSource,
         dataframe=None,
         use_cache=True,
-    ) -> tuple[pl.DataFrame, dict, bool]:
+    ) -> tuple[
+        pl.DataFrame,
+        dict,
+        CacheInfo,
+    ]:
         """
         Executes a query on a given datasource with schema handling and optional caching.
 
         Args:
-            query (str): The query string to execute.
+            query (str): The SQL query string to execute.
             datasource (ElementDataSource): The datasource to execute the query on.
             dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
             use_cache (bool): Indicates whether to use caching. Defaults to True.
 
         Returns:
-            tuple[pl.DataFrame, dict, bool]: A tuple containing the resulting DataFrame,
-            schema as a dict, and a boolean indicating if the result was retrieved from cache.
+            tuple[pl.DataFrame, dict, CacheMetadata]: A tuple containing the resulting DataFrame,
+            schema as a dict, and info about the cache.
         """
 
-        cache_hit = False
+        cache_info = CacheInfo(
+            cache_id=self._query_cache.generate_cache_id(query, datasource),
+            status=CacheStatus.MISS,
+        )
 
         # Use cache if enabled and the query is found in cache
         if use_cache:
-            cache_result = self._query_cache.get(query, str(datasource))
+            cache_result = self._query_cache.get(query, datasource)
             if cache_result is not None and not cache_result[0].is_empty():
-                cache_hit = True
-                return (*cache_result, cache_hit)
+                cache_info["status"] = CacheStatus.HIT
+                return (*cache_result, cache_info)
 
         # Execute query based on datasource type
         match ElementDatasourceType(datasource["source_type"]):
@@ -456,11 +476,10 @@ class Livedocs:
             case _:
                 return "Unknown ElementDataSource"
 
-        # Cache result if enabled
-        if use_cache:
-            self._query_cache.set(query, str(datasource), result)
+        # We always cache the result, so it's available for querying in public mode
+        self._query_cache.set(query, datasource, result)
 
-        return (*result, cache_hit)
+        return (*result, cache_info)
 
     def _query_database_with_schema(
         self, query: str, datasource: ElementDataSource
@@ -754,4 +773,4 @@ class Livedocs:
         else:
             raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
 
-        return json.dumps(schema, default=str)
+        return json.dumps(schema, default=str, separators=(",", ":"))

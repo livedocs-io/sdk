@@ -1,8 +1,81 @@
+import base64
+import gzip
 import json
 from enum import Enum
 from typing import Dict, List, Literal, Optional, TypedDict
 
+from polars import DataFrame
 from pydantic import BaseModel, model_validator
+
+from livedocs.utils.serialize import _json_serializer
+
+
+class CacheStatus(str, Enum):
+    HIT = "hit"
+    MISS = "miss"
+
+
+class CacheInfo(TypedDict):
+    cache_id: str
+    status: CacheStatus
+
+
+class QueryResultMetadata(TypedDict):
+    limit: int
+    offset: int
+    total_rows: int
+    cache_info: CacheInfo
+
+
+class QueryResult:
+    """
+    A class to represent the result of a query.
+
+    Attributes:
+    ----------
+    data : DataFrame
+        The data resulting from the query.
+    metadata : QueryResultMetadata
+        Metadata associated with the query result.
+
+    Methods:
+    -------
+    serialize() -> str
+        Serializes the query result into a compressed and base64 encoded string.
+    """
+
+    def __init__(self, data: DataFrame, metadata: QueryResultMetadata):
+        self.data = data
+        self.metadata = metadata
+
+    def serialize(self) -> str:
+        result = {
+            "data": self.data.to_dicts(),
+            "metadata": self.metadata,
+        }
+        json_str = json.dumps(result, default=_json_serializer, separators=(",", ":"))
+        compressed = gzip.compress(json_str.encode("utf-8"))
+        b64_encoded = base64.b64encode(compressed).decode("ascii")
+        return b64_encoded
+
+
+class LivedocsResult:
+    def __init__(self, result):
+        self.result = result
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        data = {
+            "text/plain": self.result,
+        }
+
+        metadata = {
+            "text/plain": {
+                "compression": "gzip",
+                "encoding": "base64",
+            }
+        }
+
+        return data, metadata
 
 
 class UserMeta(BaseModel):
@@ -38,6 +111,7 @@ class VegaSpec(BaseModel):
     spec: str
     schema: dict
     status: str
+    cache_info: Optional[CacheInfo] = None
 
     @model_validator(mode="before")
     def validate_usermeta(cls, values):
