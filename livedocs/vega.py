@@ -215,12 +215,11 @@ def pie(
             format=",.2f",
         )
 
-    if "show_as" in settings:
-        show_as = settings["show_as"]
-        usermeta["show_as"] = show_as
-    if "format" in settings:
-        format_type = settings["format"]
-        usermeta["format"] = format_type
+    format_type = settings.get("format", "")
+    show_as = settings.get("show_as", "value")
+
+    usermeta["format"] = format_type
+    usermeta["show_as"] = show_as
 
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
@@ -253,24 +252,6 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
-    # base = (
-    #     alt.Chart(df)
-    #     .transform_bin(as_="__bin_field_name", field=field, bin=bin_params)
-    #     .transform_aggregate(
-    #         aggregate=[{"op": "count", "as": "__count"}],
-    #         groupby=["__bin_field_name", "__bin_field_name_end"],
-    #     )
-    # )
-
-    # if format_type == "percent":
-    #     base = base.transform_joinaggregate(
-    #         joinaggregate=[{"op": "sum", "field": "__count", "as": "__totalCount"}],
-    #         groupby=[],
-    #     ).transform_calculate(
-    #         calculate="datum.__count / datum.__totalCount", as_="__PercentOfTotal"
-    #     )
-
-
 
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
@@ -292,8 +273,6 @@ def pie(
             calculate=f"datum.{size_by_field}/datum.__totalCount",
             as_="__percentOfTotal"
         )
-
-    print(show_as)
 
     # Generate the pie chart using Altair
     chart = (
