@@ -298,6 +298,7 @@ def pie(
         .encode(
             text=alt.Text(
                 field=size_by_field,
+                format=format_type,
                 aggregate=size_by_aggregate
                 if size_by_aggregate and size_by_aggregate!="none"
                 else alt.Undefined),
