@@ -253,6 +253,25 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
+    # base = (
+    #     alt.Chart(df)
+    #     .transform_bin(as_="__bin_field_name", field=field, bin=bin_params)
+    #     .transform_aggregate(
+    #         aggregate=[{"op": "count", "as": "__count"}],
+    #         groupby=["__bin_field_name", "__bin_field_name_end"],
+    #     )
+    # )
+
+    # if format_type == "percent":
+    #     base = base.transform_joinaggregate(
+    #         joinaggregate=[{"op": "sum", "field": "__count", "as": "__totalCount"}],
+    #         groupby=[],
+    #     ).transform_calculate(
+    #         calculate="datum.__count / datum.__totalCount", as_="__PercentOfTotal"
+    #     )
+
+
+
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
     if size_by_aggregate != "none":
@@ -263,9 +282,22 @@ def pie(
             stack=True,
         )
 
+    base=alt.Chart(df)
+
+    if show_as == "percentage":
+        base = alt.Chart(df).transform_joinaggregate(
+            joinaggregate=[{"op":"sum", "field": size_by_field, "as": "__totalCount"}],
+            groupby=[]
+        ).transform_calculate(
+            calculate=f"datum.{size_by_field}/datum.__totalCount",
+            as_="__percentOfTotal"
+        )
+
+    print(show_as)
+
     # Generate the pie chart using Altair
     chart = (
-        alt.Chart(df)
+        base
         .mark_arc(cursor="pointer")
         .encode(
             theta=theta_encoding,
@@ -293,11 +325,13 @@ def pie(
         )
     )
 
-    text=(alt.Chart(df)
+    text=(base
         .mark_text(radius=150)
         .encode(
             text=alt.Text(
-                field=size_by_field,
+                field=size_by_field
+                if show_as!="percentage"
+                else "__percentOfTotal",
                 format=format_type,
                 aggregate=size_by_aggregate
                 if size_by_aggregate and size_by_aggregate!="none"
