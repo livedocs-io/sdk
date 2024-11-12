@@ -293,8 +293,22 @@ def pie(
         )
     )
 
+    text=(alt.Chart(df)
+        .mark_text(radius=150)
+        .encode(
+            text=alt.Text(
+                field=size_by_field,
+                aggregate=size_by_aggregate
+                if size_by_aggregate and size_by_aggregate!="none"
+                else alt.Undefined),
+            color=alt.value("black"),
+            detail=color_by_field,
+            theta=theta_encoding
+        )
+    )
+
     # Nest the chart within a layer
-    outer_layer = alt.layer(chart).properties(
+    outer_layer = alt.layer(chart, text).properties(
         description="outer data layer",
     )
 
