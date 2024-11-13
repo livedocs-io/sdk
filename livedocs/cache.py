@@ -1,27 +1,21 @@
 import concurrent.futures
 import hashlib
 import io
+import json
 import logging
 import threading
 import time
 
 import polars as pl
 import requests
-import json
-from IPython.display import display
 
+from livedocs.types import ElementDataSource, GCSBucketType
 from livedocs.utils.common import _fetch_file_manifest
-from livedocs.types import ElementDataSource
 
 
 class QueryCache:
     """
     A cache class for storing query results with a time-to-live (TTL) expiration mechanism.
-
-    Attributes:
-        ttl (int): Time-to-live for cache entries in seconds.
-        cache (dict): Dictionary for storing cached data and timestamps.
-        executor (concurrent.futures.ThreadPoolExecutor): Thread pool for asynchronous tasks.
     """
 
     def __init__(
@@ -92,15 +86,9 @@ class QueryCache:
         key = self.generate_cache_id(query, datasource)
         entry = self.cache.get(key)
         if entry and not self._is_expired(entry["timestamp"]):
-            logging.info(f"Cache hit for key: {key}")
-            display(f"Cache entry for key: {key} is {entry}")
             return entry["data"]
         elif entry:
-            logging.info(f"Cache expired for key: {key}")
-            display("CACHE EXPIRED")
             del self.cache[key]
-        logging.info(f"Cache miss for key: {key}")
-        display("CACHE MISS")
         return None
 
     def set(self, query: str, datasource: str, result: tuple[pl.DataFrame, dict]):
@@ -114,51 +102,57 @@ class QueryCache:
         """
         key = self.generate_cache_id(query, datasource)
         self.cache[key] = {"data": result, "timestamp": time.time()}
-        # Make a copy of the DataFrame to avoid concurrent access issues
-        df_copy = result[0].clone()
-        # Asynchronously write the DataFrame to a Parquet file
-        self.executor.submit(self._write_to_parquet, key, df_copy)
-        logging.info(f"Successfully cached key: {key}")
-        display(f"Successfully cached key: {key}")
+
+    def bust(self):
+        """
+        Clears the cache by removing all entries.
+        """
+        self.cache.clear()
 
     def _write_to_parquet(self, key: str, df: pl.DataFrame):
         """
-        Writes a DataFrame to GCS as parquet using streaming.
+        Writes a DataFrame to GCS as Parquet file.
 
         Args:
-            key (str): The cache key used as filename
-            df (pl.DataFrame): The DataFrame to upload
+            key (str): The cache key used as file name
+            df (pl.DataFrame): The DataFrame to cache
         """
-        try:
-            with self.lock:
-                # Create buffer to store the data in memory
-                buffer = io.BytesIO()
 
-                # Write DataFrame to the buffer in Parquet format
-                df.write_parquet(buffer)
+        with self.lock:
+            # Create buffer to store the data in memory
+            buffer = io.BytesIO()
 
-                # Retrieve the byte data from the buffer
-                parquet_bytes = buffer.getvalue()
+            # Write DataFrame to the buffer in Parquet format
+            df.write_parquet(buffer)
 
-                if len(parquet_bytes) > 32 * 1024 * 1024:
-                    raise ValueError("Parquet file exceeds 32MB limit")
+            # Retrieve the byte data from the buffer
+            parquet_bytes = buffer.getvalue()
 
-                # Get signed URL for upload
-                upload_url = _fetch_file_manifest(
-                    f"cache/{key}.parquet", self.report_id, self.token, "write"
-                )["signed_url"]
+            if len(parquet_bytes) > 32 * 1024 * 1024:
+                raise ValueError("Parquet file exceeds 32MB limit")
 
-                # Upload the Parquet file to GCS
-                response = requests.put(
-                    upload_url,
-                    data=parquet_bytes,
-                    headers={"Content-Type": "application/octet-stream"},
-                )
-                response.raise_for_status()
+            # Get signed URL for upload
+            upload_url = _fetch_file_manifest(
+                f"{key}.parquet",
+                self.report_id,
+                self.token,
+                "write",
+                GCSBucketType.CACHE_ARTIFACTS,
+            )["signed_url"]
 
-                display(f"Uploaded parquet to GCS for key: {key}")
-                logging.info(f"Uploaded parquet to GCS for key: {key}")
+            # Upload the Parquet file to GCS
+            response = requests.put(
+                upload_url,
+                data=parquet_bytes,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            response.raise_for_status()
 
-        except Exception as e:
-            display(f"Failed to upload parquet for key: {key}, error: {e}")
-            logging.error(f"Failed to upload parquet for key: {key}, error: {e}")
+    def upload_artifacts(self):
+        """
+        Uploads the cached artifacts to GCS.
+        """
+        for key in self.cache.keys():
+            # Make a cheap copy of the DataFrame to avoid concurrency issues
+            df_copy = self.cache.get(key)["data"][0].clone()
+            self.executor.submit(self._write_to_parquet, key, df_copy)

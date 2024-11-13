@@ -9,7 +9,7 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 
-from livedocs.types import Credentials
+from livedocs.types import Credentials, GCSBucketType
 
 _LIVEDOCS_COLORS = [
     "#0094ff",
@@ -102,13 +102,15 @@ def _fetch_credentials(report_id: str, token: str) -> Credentials:
 
 
 @_capture_exceptions
-def _fetch_file_manifest(file_id: str, report_id: str, token: str, action: str) -> str:
-    if action not in {"write", "read", "delete"}:
-        raise ValueError("Invalid action. Must be 'write', 'read', or 'delete'.")
+def _fetch_file_manifest(
+    file_id: str, report_id: str, token: str, action: str, bucket: GCSBucketType
+) -> str:
+    if action not in {"write", "read"}:
+        raise ValueError("Invalid action. Must be 'write' or 'read'.")
 
     response = requests.post(
         f"{CORE_URL}/v1/manifest/{report_id}",
-        json={"file_id": file_id, "action": action},
+        json={"file_id": file_id, "action": action, "bucket": bucket},
         headers={"authorization": token},
     )
 

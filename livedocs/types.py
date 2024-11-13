@@ -10,6 +10,11 @@ from pydantic import BaseModel, model_validator
 from livedocs.utils.serialize import _json_serializer
 
 
+class GCSBucketType(str, Enum):
+    USER_FILES = "user-files"
+    CACHE_ARTIFACTS = "cache-artifacts"
+
+
 class CacheStatus(str, Enum):
     HIT = "hit"
     MISS = "miss"

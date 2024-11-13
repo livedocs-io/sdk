@@ -20,6 +20,7 @@ from livedocs.types import (
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
+    GCSBucketType,
     LivedocsChartSpec,
     LivedocsResult,
     QueryResult,
@@ -698,7 +699,7 @@ class Livedocs:
             return self._file_manifests[file_id]
         else:
             manifest = _fetch_file_manifest(
-                file_id, self._report_id, self._token, "read"
+                file_id, self._report_id, self._token, "read", GCSBucketType.USER_FILES
             )
             self._file_manifests[file_id] = manifest["signed_url"]
             return manifest["signed_url"]
