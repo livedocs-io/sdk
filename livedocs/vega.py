@@ -265,12 +265,14 @@ def pie(
 
     base=alt.Chart(df)
 
-    if show_as == "percentage":
+
+    if show_as == "percentage" and size_by_aggregate!="none":
         base = alt.Chart(df).transform_joinaggregate(
-            joinaggregate=[{"op":"sum", "field": size_by_field, "as": "__totalCount"}],
-            groupby=[]
+            joinaggregate=[{"op":size_by_aggregate, "field": size_by_field, "as": "__total"}],
         ).transform_calculate(
-            calculate=f"datum.{size_by_field}/datum.__totalCount",
+            calculate=f"datum.{size_by_field}/datum.__total"
+            if size_by_aggregate=="sum"
+            else "1/datum.__total",
             as_="__percentOfTotal"
         )
 
@@ -304,17 +306,22 @@ def pie(
         )
     )
 
-    text=(base
-        .mark_text(radius=150)
-        .encode(
-            text=alt.Text(
+    if size_by_aggregate!="none":
+        text_parameters=alt.Text(
                 field=size_by_field
                 if show_as!="percentage"
                 else "__percentOfTotal",
                 format=format_type,
                 aggregate=size_by_aggregate
                 if size_by_aggregate and size_by_aggregate!="none"
-                else alt.Undefined),
+                else alt.Undefined)
+    else:
+        text_parameters=alt.Undefined
+
+    text=(base
+        .mark_text(radius=150)
+        .encode(
+            text=text_parameters,
             color=alt.value("black"),
             detail=color_by_field,
             theta=theta_encoding
