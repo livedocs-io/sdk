@@ -87,7 +87,7 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
         case "dataframe":
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
         case "database_table":
-            return f"SELECT * FROM {datasource['database_table_info']['table_name']}"
+            return f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}"
         case _:
             return "unknown datasource"
 
@@ -229,12 +229,11 @@ def pie(
             format=",.2f",
         )
 
-    if "show_as" in settings:
-        show_as = settings["show_as"]
-        usermeta["show_as"] = show_as
-    if "format" in settings:
-        format_type = settings["format"]
-        usermeta["format"] = format_type
+    format_type = settings.get("format", "")
+    show_as = settings.get("show_as", "value")
+
+    usermeta["format"] = format_type
+    usermeta["show_as"] = show_as
 
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
@@ -267,6 +266,7 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
+
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
     if size_by_aggregate != "none":
@@ -277,9 +277,22 @@ def pie(
             stack=True,
         )
 
+    base=alt.Chart(df)
+
+
+    if show_as == "percentage" and size_by_aggregate!="none":
+        base = alt.Chart(df).transform_joinaggregate(
+            joinaggregate=[{"op":size_by_aggregate, "field": size_by_field, "as": "__total"}],
+        ).transform_calculate(
+            calculate=f"datum.{size_by_field}/datum.__total"
+            if size_by_aggregate=="sum"
+            else "1/datum.__total",
+            as_="__percentOfTotal"
+        )
+
     # Generate the pie chart using Altair
     chart = (
-        alt.Chart(df)
+        base
         .mark_arc(cursor="pointer")
         .encode(
             theta=theta_encoding,
@@ -307,8 +320,30 @@ def pie(
         )
     )
 
+    if size_by_aggregate!="none":
+        text_parameters=alt.Text(
+                field=size_by_field
+                if show_as!="percentage"
+                else "__percentOfTotal",
+                format=format_type,
+                aggregate=size_by_aggregate
+                if size_by_aggregate and size_by_aggregate!="none"
+                else alt.Undefined)
+    else:
+        text_parameters=alt.Undefined
+
+    text=(base
+        .mark_text(radius=150)
+        .encode(
+            text=text_parameters,
+            color=alt.value("black"),
+            detail=color_by_field,
+            theta=theta_encoding
+        )
+    )
+
     # Nest the chart within a layer
-    outer_layer = alt.layer(chart).properties(
+    outer_layer = alt.layer(chart, text).properties(
         description="outer data layer",
     )
 
@@ -322,7 +357,7 @@ def pie(
         },
     )
 
-    # Convert the chart to Vega-Lite JSON spec
+    # Convert the chart to Vega JSON spec
     vega_spec = final_chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
 
@@ -387,7 +422,7 @@ def histogram(
         )
     )
 
-    if format_type == "percentage":
+    if format_type == "percent":
         base = base.transform_joinaggregate(
             joinaggregate=[{"op": "sum", "field": "__count", "as": "__totalCount"}],
             groupby=[],
@@ -452,7 +487,9 @@ def histogram(
                     grid=True
                     if y_axis_settings.get("grid", "none") != "none"
                     else True,
-                    format=y_axis_settings.get("format", alt.Undefined),
+                    format=y_axis_settings.get("format", alt.Undefined)
+                    if format_type=="count"
+                    else "%",
                     gridDash=[4, 4]
                     if y_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
@@ -567,6 +604,8 @@ def main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
+    if (x_type == "temporal" and x_temporal_format is None):
+        x_temporal_format = "yearmonthdate"
 
     color_groups = {}
 
@@ -622,8 +661,10 @@ def main_chart(
         color_by_encoding = None
         color_by_aggregate = None
 
+        color_by_field = None
+
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
-            color_by_field = y_series["color_by"]["field"]
+            color_by_field = y_series["color_by"].get("field", "none")
             unique_values = (
                 df.select(pl.col(color_by_field).unique()).to_series().to_list()
             )
@@ -725,13 +766,16 @@ def main_chart(
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
-            if color_by_aggregate:
+            if color_by_field:
                 base_layer = (
                     alt.Chart(df)
                     .mark_bar(clip=True, stroke="black")
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
+                        xOffset=alt.XOffset(field=color_by_field
+                        #  sort=color_by_sort),
+                        ),
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
@@ -741,9 +785,9 @@ def main_chart(
                             select, opacity_encoding, alt.value(0.3)
                         ),
                         strokeWidth=conditional_stroke,
-                        xOffset=alt.XOffset(field=color_by_field, sort=color_by_sort)
-                        if color_by_encoding
-                        else None,
+
+                        # if color_by_encoding
+                        # else None,
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -790,6 +834,9 @@ def main_chart(
                             select, opacity_encoding, alt.value(0.3)
                         ),
                         strokeWidth=conditional_stroke,
+                        # xOffset=alt.XOffset(field=color_by_field, sort=color_by_sort)
+                        # if color_by_field
+                        # else None,                        
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),

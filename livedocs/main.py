@@ -383,7 +383,7 @@ class Livedocs:
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             match ElementDatasourceType(datasource["source_type"]):
                 case ElementDatasourceType.database_table:
-                    query = f"SELECT * FROM {datasource['database_table_info']['table_name']} LIMIT 10"
+                    query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
@@ -561,7 +561,10 @@ class Livedocs:
             raise ValueError(f"Error parsing connection details: {e}")
 
         try:
-            connection_string = create_postgres_connection_url(parsed_credentials)
+            if parsed_credentials.get("connect_using") == "url":
+                connection_string = parsed_credentials["connection_url"]
+            else:
+                connection_string = create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
 
