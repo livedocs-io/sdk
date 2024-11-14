@@ -231,10 +231,11 @@ class Livedocs:
                     total_rows=len(df),
                     cache_info=cache_info,
                 ),
-            ).serialize()
+            )
+            payload = LivedocsResult(result)
             post_span.finish()
 
-            return (df, LivedocsResult(result))
+            return (df, payload)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -355,10 +356,11 @@ class Livedocs:
                     total_rows=len(df),
                     cache_info=cache_info,
                 ),
-            ).serialize()
+            )
+            payload = LivedocsResult(result)
             post_span.finish()
 
-            return LivedocsResult(result)
+            return payload
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -451,11 +453,11 @@ class Livedocs:
         """
 
         cache_info = CacheInfo(
-            cache_id=self._query_cache.generate_cache_id(query, datasource),
+            id=self._query_cache.generate_cache_id(query, datasource),
             status=CacheStatus.MISS,
         )
 
-        # Use cache if enabled and the query is found in cache
+        # Use cache if enabled and the query is found in the cache
         if use_cache:
             cache_result = self._query_cache.get(query, datasource)
             if cache_result is not None and not cache_result[0].is_empty():

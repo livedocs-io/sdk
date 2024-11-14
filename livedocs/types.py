@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import base64
 import gzip
 import json
@@ -21,7 +22,7 @@ class CacheStatus(str, Enum):
 
 
 class CacheInfo(TypedDict):
-    cache_id: str
+    id: str
     status: CacheStatus
 
 
@@ -32,7 +33,30 @@ class QueryResultMetadata(TypedDict):
     cache_info: CacheInfo
 
 
-class QueryResult:
+class LivedocsResultInterface(ABC):
+    """
+    Interface defining the required methods for a Livedocs result class.
+    Ideally, any result returned by an element should implement this interface.
+    """
+
+    @abstractmethod
+    def serialize(self) -> str:
+        """
+        Serializes the result data into an appropriate format, such as a compressed
+        and encoded string representation.
+        """
+        pass
+
+    @abstractmethod
+    def get_metadata(self):
+        """
+        Returns metadata about the result, including information on compression
+        and encoding.
+        """
+        pass
+
+
+class QueryResult(LivedocsResultInterface):
     """
     A class to represent the result of a query.
 
@@ -42,11 +66,6 @@ class QueryResult:
         The data resulting from the query.
     metadata : QueryResultMetadata
         Metadata associated with the query result.
-
-    Methods:
-    -------
-    serialize() -> str
-        Serializes the query result into a compressed and base64 encoded string.
     """
 
     def __init__(self, data: DataFrame, metadata: QueryResultMetadata):
@@ -54,31 +73,33 @@ class QueryResult:
         self.metadata = metadata
 
     def serialize(self) -> str:
-        result = {
-            "data": self.data.to_dicts(),
-            "metadata": self.metadata,
-        }
-        json_str = json.dumps(result, default=_json_serializer, separators=(",", ":"))
+        json_str = json.dumps(
+            self.data.to_dicts(), default=_json_serializer, separators=(",", ":")
+        )
         compressed = gzip.compress(json_str.encode("utf-8"))
         b64_encoded = base64.b64encode(compressed).decode("ascii")
         return b64_encoded
 
+    def get_metadata(self):
+        return {
+            "text/plain": {
+                "compression": "gzip",
+                "encoding": "base64",
+            },
+            "query": self.metadata,
+        }
+
 
 class LivedocsResult:
-    def __init__(self, result):
+    def __init__(self, result: LivedocsResultInterface):
         self.result = result
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         data = {
-            "text/plain": self.result,
+            "text/plain": self.result.serialize(),
         }
 
-        metadata = {
-            "text/plain": {
-                "compression": "gzip",
-                "encoding": "base64",
-            }
-        }
+        metadata = self.result.get_metadata()
 
         return data, metadata
 
