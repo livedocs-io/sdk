@@ -215,12 +215,11 @@ def pie(
             format=",.2f",
         )
 
-    if "show_as" in settings:
-        show_as = settings["show_as"]
-        usermeta["show_as"] = show_as
-    if "format" in settings:
-        format_type = settings["format"]
-        usermeta["format"] = format_type
+    format_type = settings.get("format", "")
+    show_as = settings.get("show_as", "value")
+
+    usermeta["format"] = format_type
+    usermeta["show_as"] = show_as
 
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
@@ -253,6 +252,7 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
+
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
     if size_by_aggregate != "none":
@@ -263,9 +263,22 @@ def pie(
             stack=True,
         )
 
+    base=alt.Chart(df)
+
+
+    if show_as == "percentage" and size_by_aggregate!="none":
+        base = alt.Chart(df).transform_joinaggregate(
+            joinaggregate=[{"op":size_by_aggregate, "field": size_by_field, "as": "__total"}],
+        ).transform_calculate(
+            calculate=f"datum.{size_by_field}/datum.__total"
+            if size_by_aggregate=="sum"
+            else "1/datum.__total",
+            as_="__percentOfTotal"
+        )
+
     # Generate the pie chart using Altair
     chart = (
-        alt.Chart(df)
+        base
         .mark_arc(cursor="pointer")
         .encode(
             theta=theta_encoding,
@@ -293,8 +306,30 @@ def pie(
         )
     )
 
+    if size_by_aggregate!="none":
+        text_parameters=alt.Text(
+                field=size_by_field
+                if show_as!="percentage"
+                else "__percentOfTotal",
+                format=format_type,
+                aggregate=size_by_aggregate
+                if size_by_aggregate and size_by_aggregate!="none"
+                else alt.Undefined)
+    else:
+        text_parameters=alt.Undefined
+
+    text=(base
+        .mark_text(radius=150)
+        .encode(
+            text=text_parameters,
+            color=alt.value("black"),
+            detail=color_by_field,
+            theta=theta_encoding
+        )
+    )
+
     # Nest the chart within a layer
-    outer_layer = alt.layer(chart).properties(
+    outer_layer = alt.layer(chart, text).properties(
         description="outer data layer",
     )
 
