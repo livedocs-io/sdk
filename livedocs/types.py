@@ -1,8 +1,107 @@
+from abc import ABC, abstractmethod
+import base64
+import gzip
 import json
 from enum import Enum
 from typing import Dict, List, Literal, Optional, TypedDict
 
+from polars import DataFrame
 from pydantic import BaseModel, model_validator
+
+from livedocs.utils.serialize import _json_serializer
+
+
+class GCSBucketType(str, Enum):
+    USER_FILES = "user-files"
+    CACHE_ARTIFACTS = "cache-artifacts"
+
+
+class CacheStatus(str, Enum):
+    HIT = "hit"
+    MISS = "miss"
+
+
+class CacheInfo(TypedDict):
+    id: str
+    status: CacheStatus
+
+
+class QueryResultMetadata(TypedDict):
+    limit: int
+    offset: int
+    total_rows: int
+    cache_info: CacheInfo
+
+
+class LivedocsResultInterface(ABC):
+    """
+    Interface defining the required methods for a Livedocs result class.
+    Ideally, any result returned by an element should implement this interface.
+    """
+
+    @abstractmethod
+    def serialize(self) -> str:
+        """
+        Serializes the result data into an appropriate format, such as a compressed
+        and encoded string representation.
+        """
+        pass
+
+    @abstractmethod
+    def get_metadata(self):
+        """
+        Returns metadata about the result, including information on compression
+        and encoding.
+        """
+        pass
+
+
+class QueryResult(LivedocsResultInterface):
+    """
+    A class to represent the result of a query.
+
+    Attributes:
+    ----------
+    data : DataFrame
+        The data resulting from the query.
+    metadata : QueryResultMetadata
+        Metadata associated with the query result.
+    """
+
+    def __init__(self, data: DataFrame, metadata: QueryResultMetadata):
+        self.data = data
+        self.metadata = metadata
+
+    def serialize(self) -> str:
+        json_str = json.dumps(
+            self.data.to_dicts(), default=_json_serializer, separators=(",", ":")
+        )
+        compressed = gzip.compress(json_str.encode("utf-8"))
+        b64_encoded = base64.b64encode(compressed).decode("ascii")
+        return b64_encoded
+
+    def get_metadata(self):
+        return {
+            "text/plain": {
+                "compression": "gzip",
+                "encoding": "base64",
+            },
+            "query": self.metadata,
+        }
+
+
+class LivedocsResult:
+    def __init__(self, result: LivedocsResultInterface):
+        self.result = result
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        data = {
+            "text/plain": self.result.serialize(),
+        }
+
+        metadata = self.result.get_metadata()
+
+        return data, metadata
 
 
 class UserMeta(BaseModel):
@@ -38,6 +137,7 @@ class VegaSpec(BaseModel):
     spec: str
     schema: dict
     status: str
+    cache_info: Optional[CacheInfo] = None
 
     @model_validator(mode="before")
     def validate_usermeta(cls, values):

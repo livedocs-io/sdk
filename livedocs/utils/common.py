@@ -1,8 +1,5 @@
-import base64
-import decimal
 import os
-import uuid
-from datetime import date, datetime, time
+from datetime import datetime
 from functools import wraps
 from typing import Dict
 
@@ -12,7 +9,7 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 
-from livedocs.types import Credentials
+from livedocs.types import Credentials, GCSBucketType
 
 _LIVEDOCS_COLORS = [
     "#0094ff",
@@ -105,12 +102,18 @@ def _fetch_credentials(report_id: str, token: str) -> Credentials:
 
 
 @_capture_exceptions
-def _fetch_file_manifest(file_id: str, report_id: str, token: str) -> str:
+def _fetch_file_manifest(
+    file_id: str, report_id: str, token: str, action: str, bucket: GCSBucketType
+) -> str:
+    if action not in {"write", "read"}:
+        raise ValueError("Invalid action. Must be 'write' or 'read'.")
+
     response = requests.post(
         f"{CORE_URL}/v1/manifest/{report_id}",
-        json={"file_id": file_id},
+        json={"file_id": file_id, "action": action, "bucket": bucket},
         headers={"authorization": token},
     )
+
     if response.status_code == 200:
         return response.json()
     else:
@@ -206,36 +209,6 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
     return column_types
 
 
-"""JSON serializer for objects not serializable by default json code"""
-
-
-def _json_serializer(obj):
-    if obj is None:
-        return None
-    elif isinstance(obj, bool):
-        return obj
-    elif isinstance(obj, (datetime, date, time)):
-        return obj.isoformat()
-    elif isinstance(obj, decimal.Decimal):
-        return str(obj)
-    elif isinstance(obj, float):
-        return str(obj)
-    elif isinstance(obj, uuid.UUID):
-        return str(obj)
-    elif isinstance(obj, bytes):
-        return base64.b64encode(obj).decode("utf-8")
-    elif isinstance(obj, dict):
-        return {k: _json_serializer(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_json_serializer(item) for item in obj]
-    elif isinstance(obj, (set, tuple, frozenset)):
-        return [_json_serializer(item) for item in obj]
-    elif isinstance(obj, complex):
-        return {"real": obj.real, "imag": obj.imag}
-    else:
-        return str(obj)
-
-
 __all__ = [
     "_LIVEDOCS_COLORS",
     "_fetch_credentials",
@@ -246,6 +219,5 @@ __all__ = [
     "_get_color_group_key",
     "_get_user_defined_color",
     "_get_user_defined_opacity",
-    "_json_serializer",
     "_capture_exceptions",
 ]
