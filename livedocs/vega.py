@@ -816,7 +816,7 @@ def main_chart(
                         y=y_encoding,
                         xOffset=alt.XOffset(
                             field=color_by_field,
-                            # sort=color_by_sort
+                            sort=color_by_sort
                         ),
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
