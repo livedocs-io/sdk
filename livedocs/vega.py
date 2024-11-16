@@ -265,16 +265,17 @@ def pie(
 
     base=alt.Chart(df)
 
-
-    if show_as == "percentage" and size_by_aggregate!="none":
+    if show_as == "percentage":
         base = alt.Chart(df).transform_joinaggregate(
-            joinaggregate=[{"op":size_by_aggregate, "field": size_by_field, "as": "__total"}],
+            joinaggregate=[{"op":"sum", "field": size_by_field, "as": "__totalCount"}],
+            groupby=[]
         ).transform_calculate(
-            calculate=f"datum.{size_by_field}/datum.__total"
-            if size_by_aggregate=="sum"
-            else "1/datum.__total",
+            calculate=f"datum.{size_by_field}/datum.__totalCount",
             as_="__percentOfTotal"
         )
+
+    print(show_as)
+    print(format_type)
 
     # Generate the pie chart using Altair
     chart = (
@@ -306,22 +307,17 @@ def pie(
         )
     )
 
-    if size_by_aggregate!="none":
-        text_parameters=alt.Text(
+    text=(base
+        .mark_text(radius=150)
+        .encode(
+            text=alt.Text(
                 field=size_by_field
                 if show_as!="percentage"
                 else "__percentOfTotal",
                 format=format_type,
                 aggregate=size_by_aggregate
                 if size_by_aggregate and size_by_aggregate!="none"
-                else alt.Undefined)
-    else:
-        text_parameters=alt.Undefined
-
-    text=(base
-        .mark_text(radius=150)
-        .encode(
-            text=text_parameters,
+                else alt.Undefined),
             color=alt.value("black"),
             detail=color_by_field,
             theta=theta_encoding
@@ -527,8 +523,6 @@ Generates the Vega spec from a chart configuration for:
 - Column charts (grouped, stacked, and full stacked)
 - Scatter charts
 """
-
-
 def main_chart(
     df: pl.DataFrame,
     settings: LivedocsChartSpec,
@@ -772,8 +766,6 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
 
-                        # if color_by_encoding
-                        # else None,
                         tooltip=[
                             alt.Tooltip(
                                 field=x_field,
@@ -819,10 +811,7 @@ def main_chart(
                         fillOpacity=alt.condition(
                             select, opacity_encoding, alt.value(0.3)
                         ),
-                        strokeWidth=conditional_stroke,
-                        # xOffset=alt.XOffset(field=color_by_field, sort=color_by_sort)
-                        # if color_by_field
-                        # else None,                        
+                        strokeWidth=conditional_stroke,                      
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
