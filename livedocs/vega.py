@@ -515,6 +515,56 @@ def histogram(
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
 
+###
+def create_tooltip(x_field, 
+                   x_type, 
+                   x_temporal_format,
+                   y_field, 
+                   y_type, 
+                   y_aggregate,
+                   color_by_field=None,
+                   color_by_type=None,
+                   color_by_aggregate=None,
+                   tooltip_show=True):
+    if not tooltip_show:
+        return alt.Undefined
+
+    tooltips=[
+        alt.Tooltip(
+            field=x_field,
+            type=x_type,
+            title=x_field,
+            timeUnit=x_temporal_format if x_temporal_format else alt.Undefined,
+    ),
+        alt.Tooltip(
+            field=y_field,
+            type=y_type,
+            title=y_field
+            if y_aggregate == "none"
+            else f"{y_aggregate} of {y_field}",
+            aggregate=y_aggregate
+            if y_aggregate != "none" 
+            else alt.Undefined,
+            format=",.2f",
+        )
+    ]
+    if color_by_field:
+        # if not color_by_type:
+        #     color_by_type="nominal"
+
+        tooltips.append(
+            alt.Tooltip(field=color_by_field, 
+                        type=color_by_type,
+                        title=color_by_field,
+                        aggregate=color_by_aggregate
+                        if color_by_aggregate!="none"
+                        else alt.Undefined)
+        )
+    
+    return tooltips
+
+    
+
 
 """
 Generates the Vega spec from a chart configuration for:
@@ -637,11 +687,10 @@ def main_chart(
         x_encoding = create_x_encoding(
             x_field, x_type, x_sort, x_temporal_format, style_settings
         )
-
-        color_by_encoding = None
-        color_by_aggregate = None
-
-        color_by_field = None
+        color_by_field=None
+        color_by_type=None
+        color_by_encoding=None
+        color_by_aggregate=None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"].get("field", "none")
@@ -744,6 +793,20 @@ def main_chart(
             "value": 0,
         }
 
+        print(color_by_type)
+
+        tooltip=create_tooltip(
+            x_field=x_field,
+            x_type=x_type,
+            y_field=y_field,
+            y_type=y_type,
+            y_aggregate=y_aggregate,
+            x_temporal_format=x_temporal_format,
+            color_by_field=color_by_field,
+            color_by_type=color_by_type,
+            color_by_aggregate=color_by_aggregate
+        )
+
         # Create the appropriate mark type
         if mark_type == "grouped_column":
             if color_by_field:
@@ -766,37 +829,7 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
 
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -815,29 +848,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
