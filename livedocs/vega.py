@@ -801,7 +801,8 @@ def main_chart(
             x_temporal_format=x_temporal_format,
             color_by_field=color_by_field,
             color_by_type=color_by_type,
-            color_by_aggregate=color_by_aggregate
+            color_by_aggregate=color_by_aggregate,
+            tooltip_show=tooltip_show
         )
 
         # Create the appropriate mark type
@@ -813,8 +814,9 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        xOffset=alt.XOffset(field=color_by_field
-                        #  sort=color_by_sort),
+                        xOffset=alt.XOffset(
+                            field=color_by_field,
+                            # sort=color_by_sort
                         ),
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
@@ -1163,8 +1165,6 @@ def main_chart(
                         color=color_by_encoding,
                         opacity=opacity_encoding,
                         tooltip=tooltip
-                        if tooltip_show
-                        else alt.Undefined,
                     )
                 )
 
