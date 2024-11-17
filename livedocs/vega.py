@@ -279,14 +279,12 @@ def pie(
 
     base=alt.Chart(df)
 
-
-    if show_as == "percentage" and size_by_aggregate!="none":
+    if show_as == "percentage":
         base = alt.Chart(df).transform_joinaggregate(
-            joinaggregate=[{"op":size_by_aggregate, "field": size_by_field, "as": "__total"}],
+            joinaggregate=[{"op":"sum", "field": size_by_field, "as": "__totalCount"}],
+            groupby=[]
         ).transform_calculate(
-            calculate=f"datum.{size_by_field}/datum.__total"
-            if size_by_aggregate=="sum"
-            else "1/datum.__total",
+            calculate=f"datum.{size_by_field}/datum.__totalCount",
             as_="__percentOfTotal"
         )
 
@@ -320,22 +318,17 @@ def pie(
         )
     )
 
-    if size_by_aggregate!="none":
-        text_parameters=alt.Text(
+    text=(base
+        .mark_text(radius=150)
+        .encode(
+            text=alt.Text(
                 field=size_by_field
                 if show_as!="percentage"
                 else "__percentOfTotal",
                 format=format_type,
                 aggregate=size_by_aggregate
                 if size_by_aggregate and size_by_aggregate!="none"
-                else alt.Undefined)
-    else:
-        text_parameters=alt.Undefined
-
-    text=(base
-        .mark_text(radius=150)
-        .encode(
-            text=text_parameters,
+                else alt.Undefined),
             color=alt.value("black"),
             detail=color_by_field,
             theta=theta_encoding
@@ -534,6 +527,54 @@ def histogram(
     return (vega_spec, "SUCCESS")
 
 
+def create_tooltip(axis1_field, 
+                   axis1_type, 
+                   temporal_format,
+                   axis2_field, 
+                   axis2_type, 
+                   aggregate,
+                   color_by_field=None,
+                   color_by_type=None,
+                   color_by_aggregate=None,
+                   tooltip_show=True):
+    
+    if not tooltip_show:
+        return alt.Undefined
+
+    tooltips=[
+        alt.Tooltip(
+            field=axis1_field,
+            type=axis1_type,
+            title=axis1_field,
+            timeUnit=temporal_format if temporal_format else alt.Undefined,
+    ),
+        alt.Tooltip(
+            field=axis2_field,
+            type=axis2_type,
+            title=axis2_field
+            if aggregate == "none"
+            else f"{aggregate} of {axis2_field}".title(),
+            aggregate=aggregate
+            if aggregate != "none" 
+            else alt.Undefined,
+            format=",.1f",
+        )
+    ]
+    if color_by_field:
+        tooltips.append(
+            alt.Tooltip(field=color_by_field, 
+                        type=color_by_type,
+                        title=color_by_field,
+                        aggregate=color_by_aggregate
+                        if color_by_aggregate!="none"
+                        else alt.Undefined)
+        )
+    
+    return tooltips
+
+    
+
+
 """
 Generates the Vega spec from a chart configuration for:
 - Line charts
@@ -541,8 +582,6 @@ Generates the Vega spec from a chart configuration for:
 - Column charts (grouped, stacked, and full stacked)
 - Scatter charts
 """
-
-
 def main_chart(
     df: pl.DataFrame,
     settings: LivedocsChartSpec,
@@ -657,11 +696,10 @@ def main_chart(
         x_encoding = create_x_encoding(
             x_field, x_type, x_sort, x_temporal_format, style_settings
         )
-
-        color_by_encoding = None
-        color_by_aggregate = None
-
-        color_by_field = None
+        color_by_field=None
+        color_by_type=None
+        color_by_encoding=None
+        color_by_aggregate=None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"].get("field", "none")
@@ -764,6 +802,20 @@ def main_chart(
             "value": 0,
         }
 
+        # Create the tooltip
+        tooltip=create_tooltip(
+            axis1_field=x_field,
+            axis1_type=x_type,
+            axis2_field=y_field,
+            axis2_type=y_type,
+            aggregate=y_aggregate,
+            temporal_format=x_temporal_format,
+            color_by_field=color_by_field,
+            color_by_type=color_by_type,
+            color_by_aggregate=color_by_aggregate,
+            tooltip_show=tooltip_show
+        )
+
         # Create the appropriate mark type
         if mark_type == "grouped_column":
             if color_by_field:
@@ -773,8 +825,9 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        xOffset=alt.XOffset(field=color_by_field
-                        #  sort=color_by_sort),
+                        xOffset=alt.XOffset(
+                            field=color_by_field,
+                            sort=color_by_sort
                         ),
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
@@ -786,39 +839,7 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
 
-                        # if color_by_encoding
-                        # else None,
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -833,36 +854,11 @@ def main_chart(
                         fillOpacity=alt.condition(
                             select, opacity_encoding, alt.value(0.3)
                         ),
-                        strokeWidth=conditional_stroke,
-                        # xOffset=alt.XOffset(field=color_by_field, sort=color_by_sort)
-                        # if color_by_field
-                        # else None,                        
+                        strokeWidth=conditional_stroke,                      
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -884,37 +880,7 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -933,35 +899,12 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
 
         elif mark_type == "full_stacked_column":
-            # Generate the base layer chart
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -978,37 +921,7 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1030,29 +943,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1190,37 +1081,7 @@ def main_chart(
                             select, opacity_encoding, alt.value(0.3)
                         ),
                         strokeWidth=conditional_stroke,
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1240,29 +1101,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1281,37 +1120,7 @@ def main_chart(
                         color=color_by_encoding,
                         opacity=opacity_encoding,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                 )
 
@@ -1328,29 +1137,7 @@ def main_chart(
                         y=y_encoding,
                         color=color_by_encoding,
                         opacity=opacity_encoding,
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                 )
 
@@ -1368,37 +1155,7 @@ def main_chart(
                         color=color_by_encoding,
                         opacity=opacity_encoding,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                            alt.Tooltip(
-                                field=color_by_field,
-                                type=color_by_type,
-                                title=color_by_field,
-                                aggregate=color_by_aggregate
-                                if color_by_aggregate != "none"
-                                else alt.Undefined,
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                 )
 
@@ -1418,29 +1175,7 @@ def main_chart(
                         y=y_encoding.stack("normalize"),
                         color=color_by_encoding,
                         opacity=opacity_encoding,
-                        tooltip=[
-                            alt.Tooltip(
-                                field=x_field,
-                                type=x_type,
-                                title=x_field,
-                                timeUnit=x_temporal_format
-                                if x_temporal_format
-                                else alt.Undefined,
-                            ),
-                            alt.Tooltip(
-                                field=y_field,
-                                type=y_type,
-                                title=y_field
-                                if y_aggregate == "none"
-                                else f"{y_aggregate} of {y_field}",
-                                aggregate=y_aggregate
-                                if y_aggregate != "none"
-                                else alt.Undefined,
-                                format=",.2f",
-                            ),
-                        ]
-                        if tooltip_show
-                        else alt.Undefined,
+                        tooltip=tooltip
                     )
                 )
 
@@ -1522,6 +1257,8 @@ def swapped_main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
+    if (x_type == "temporal" and x_temporal_format is None):
+        x_temporal_format = "yearmonthdate"
 
     x_aggregate = settings["xAxis"].get("aggregate", "sum")
     x_color_by = settings["xAxis"].get("color_by")
@@ -1545,8 +1282,10 @@ def swapped_main_chart(
     color_index = 0
     custom_key = f"{mark_type} layer 1"
 
-    color_by_encoding = None
-    color_by_field = None
+    color_by_field=None
+    color_by_type=None
+    color_by_encoding=None
+    color_by_aggregate=None
 
     if x_color_by:
         color_by_field = x_color_by["field"]
@@ -1633,6 +1372,20 @@ def swapped_main_chart(
         ],
         "value": 0,
     }
+    
+    # Create the tooltip
+    tooltip=create_tooltip(
+    axis1_field=y_field,
+    axis1_type=y_type,
+    axis2_field=x_field,
+    axis2_type=x_type,
+    aggregate=x_aggregate,
+    temporal_format=y_temporal_format,
+    color_by_field=color_by_field,
+    color_by_type=color_by_type,
+    color_by_aggregate=color_by_aggregate,
+    tooltip_show=tooltip_show
+)
 
     if mark_type == "grouped_bar":
         if color_by_field:
@@ -1651,37 +1404,7 @@ def swapped_main_chart(
                     yOffset=alt.YOffset(field=color_by_field, sort=color_by_sort)
                     if color_by_encoding
                     else None,
-                    tooltip=[
-                        alt.Tooltip(
-                            field=y_field,
-                            type=y_type,
-                            title=y_field,
-                            timeUnit=y_temporal_format
-                            if y_temporal_format
-                            else alt.Undefined,
-                        ),
-                        alt.Tooltip(
-                            field=x_field,
-                            type=x_type,
-                            title=x_field
-                            if x_aggregate == "none"
-                            else f"{x_aggregate} of  {x_field}",
-                            aggregate=x_aggregate
-                            if x_aggregate != "none"
-                            else alt.Undefined,
-                            format=",.2f",
-                        ),
-                        alt.Tooltip(
-                            field=color_by_field,
-                            type=color_by_type,
-                            title=color_by_field,
-                            aggregate=color_by_aggregate
-                            if color_by_aggregate != "none"
-                            else alt.Undefined,
-                        ),
-                    ]
-                    if tooltip_show
-                    else alt.Undefined,
+                    tooltip=tooltip
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1699,27 +1422,7 @@ def swapped_main_chart(
                     color=alt.condition(
                         brush, color_by_encoding, alt.value("lightgray")
                     ),
-                    tooltip=[
-                        alt.Tooltip(
-                            field=y_field,
-                            type=y_type,
-                            title=y_field,
-                            timeUnit=y_temporal_format
-                            if y_temporal_format
-                            else alt.Undefined,
-                        ),
-                        alt.Tooltip(
-                            field=x_field,
-                            type=x_type,
-                            title=x_field,
-                            aggregate=x_aggregate
-                            if x_aggregate != "none"
-                            else alt.Undefined,
-                            format=",.2f",
-                        ),
-                    ]
-                    if tooltip_show
-                    else alt.Undefined,
+                    tooltip=tooltip
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1739,37 +1442,7 @@ def swapped_main_chart(
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
                     order=alt.Order(color_by_field, sort=color_by_sort),
-                    tooltip=[
-                        alt.Tooltip(
-                            field=y_field,
-                            type=y_type,
-                            title=y_field,
-                            timeUnit=y_temporal_format
-                            if y_temporal_format
-                            else alt.Undefined,
-                        ),
-                        alt.Tooltip(
-                            field=x_field,
-                            type=x_type,
-                            title=x_field
-                            if x_aggregate == "none"
-                            else f"{x_aggregate} of  {x_field}",
-                            aggregate=x_aggregate
-                            if x_aggregate != "none"
-                            else alt.Undefined,
-                            format=",.2f",
-                        ),
-                        alt.Tooltip(
-                            field=color_by_field,
-                            type=color_by_type,
-                            title=color_by_field,
-                            aggregate=color_by_aggregate
-                            if color_by_aggregate != "none"
-                            else alt.Undefined,
-                        ),
-                    ]
-                    if tooltip_show
-                    else alt.Undefined,
+                    tooltip=tooltip
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1787,27 +1460,7 @@ def swapped_main_chart(
                     color=alt.condition(
                         brush, color_by_encoding, alt.value("lightgray")
                     ),
-                    tooltip=[
-                        alt.Tooltip(
-                            field=y_field,
-                            type=y_type,
-                            title=y_field,
-                            timeUnit=y_temporal_format
-                            if y_temporal_format
-                            else alt.Undefined,
-                        ),
-                        alt.Tooltip(
-                            field=x_field,
-                            type=x_type,
-                            title=x_field,
-                            aggregate=x_aggregate
-                            if x_aggregate != "none"
-                            else alt.Undefined,
-                            format=",.2f",
-                        ),
-                    ]
-                    if tooltip_show
-                    else alt.Undefined,
+                    tooltip=tooltip
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1827,37 +1480,7 @@ def swapped_main_chart(
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
                     order=alt.Order(color_by_field, sort=color_by_sort),
-                    tooltip=[
-                        alt.Tooltip(
-                            field=y_field,
-                            type=y_type,
-                            title=y_field,
-                            timeUnit=y_temporal_format
-                            if y_temporal_format
-                            else alt.Undefined,
-                        ),
-                        alt.Tooltip(
-                            field=x_field,
-                            type=x_type,
-                            title=x_field
-                            if x_aggregate == "none"
-                            else f"{x_aggregate} of  {x_field}",
-                            aggregate=x_aggregate
-                            if x_aggregate != "none"
-                            else alt.Undefined,
-                            format=",.2f",
-                        ),
-                        alt.Tooltip(
-                            field=color_by_field,
-                            type=color_by_type,
-                            title=color_by_field,
-                            aggregate=color_by_aggregate
-                            if color_by_aggregate != "none"
-                            else alt.Undefined,
-                        ),
-                    ]
-                    if tooltip_show
-                    else alt.Undefined,
+                    tooltip=tooltip
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1878,27 +1501,7 @@ def swapped_main_chart(
                     color=alt.condition(
                         brush, color_by_encoding, alt.value("lightgray")
                     ),
-                    tooltip=[
-                        alt.Tooltip(
-                            field=y_field,
-                            type=y_type,
-                            title=y_field,
-                            timeUnit=y_temporal_format
-                            if y_temporal_format
-                            else alt.Undefined,
-                        ),
-                        alt.Tooltip(
-                            field=x_field,
-                            type=x_type,
-                            title=x_field,
-                            aggregate=x_aggregate
-                            if x_aggregate != "none"
-                            else alt.Undefined,
-                            format=",.2f",
-                        ),
-                    ]
-                    if tooltip_show
-                    else alt.Undefined,
+                    tooltip=tooltip
                 )
                 .add_params(select, highlight, brush)
             )
