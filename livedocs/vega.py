@@ -384,13 +384,18 @@ def histogram(
 
     tooltip_show = style.get("tooltip", True)
 
-    tooltip1 = alt.Tooltip(
-        field="__count" if format_type == "count" else "__PercentOfTotal",
-        title="Count of Records" if format_type == "count" else "Percentage of Records",
-        type="quantitative",
+    tooltip=create_tooltip(
+        axis1_field="__count" if format_type == "count" else "__PercentOfTotal",
+        axis1_type="quantitative",
+        temporal_format=None,
+        axis2_field="__bin_field_name",
+        axis2_type="nominal",
+        aggregate="none",
+        tooltip_show=tooltip_show,
+        axis1_title="Count of Records" if format_type == "count" else "Percentage of Records",
+        axis2_title=field,
+        axis1_format=alt.Undefined if format_type=="count" else ".1%"
     )
-
-    tooltip2 = alt.Tooltip("__bin_range", title=field, type="nominal")
 
     base = (
         alt.Chart(df)
@@ -485,7 +490,7 @@ def histogram(
                 ),
             ),
             y2=alt.datum(0),
-            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
+            tooltip=tooltip,
             opacity=alt.value(1),
             color=alt.value("#4C78A8"),
         )
@@ -522,7 +527,11 @@ def create_tooltip(axis1_field,
                    color_by_field=None,
                    color_by_type=None,
                    color_by_aggregate=None,
-                   tooltip_show=True):
+                   tooltip_show=True,
+                   axis1_title=None,
+                   axis2_title=None,
+                   axis1_format="none",
+                   axis2_format="none"):
     
     if not tooltip_show:
         return alt.Undefined
@@ -531,19 +540,20 @@ def create_tooltip(axis1_field,
         alt.Tooltip(
             field=axis1_field,
             type=axis1_type,
-            title=axis1_field,
+            title=axis1_title,
             timeUnit=temporal_format if temporal_format else alt.Undefined,
+            format=axis1_format if axis1_format!="none" else alt.Undefined,
     ),
         alt.Tooltip(
             field=axis2_field,
             type=axis2_type,
-            title=axis2_field
+            title=axis2_title
             if aggregate == "none"
             else f"{aggregate} of {axis2_field}".title(),
             aggregate=aggregate
             if aggregate != "none" 
             else alt.Undefined,
-            format=",.1f",
+            format=axis2_format if axis2_format!="none" else ",.1f",
         )
     ]
     if color_by_field:
@@ -799,7 +809,9 @@ def main_chart(
             color_by_field=color_by_field,
             color_by_type=color_by_type,
             color_by_aggregate=color_by_aggregate,
-            tooltip_show=tooltip_show
+            tooltip_show=tooltip_show,
+            axis1_title=x_field,
+            axis2_title=y_field
         )
 
         # Create the appropriate mark type
