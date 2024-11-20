@@ -191,11 +191,6 @@ def pie(
         color_by_field = settings["color_by"].get("field", "")
         color_by_type = settings["color_by"].get("type", "")
         usermeta["color_by"] = {"field": color_by_field, "type": color_by_type}
-        tooltip1 = alt.Tooltip(
-            field=color_by_field,
-            type=map_datatype_to_scale_type(settings["color_by"]["type"]),
-            title=color_by_field,
-        )
     if "size_by" in settings:
         size_by_field = settings["size_by"].get("field", "")
         size_by_type = settings["size_by"].get("type", "")
@@ -205,15 +200,6 @@ def pie(
             "type": size_by_type,
             "aggregate": size_by_aggregate,
         }
-        tooltip2 = alt.Tooltip(
-            field=size_by_field,
-            type="quantitative",
-            aggregate=size_by_aggregate
-            if size_by_aggregate != "none"
-            else alt.Undefined,
-            title="Count of Records" if size_by_aggregate == "count" else size_by_field,
-            format=",.2f",
-        )
 
     format_type = settings.get("format", "")
     show_as = settings.get("show_as", "value")
@@ -252,6 +238,15 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
+    tooltip=create_tooltip(
+    axis1_field=color_by_field,
+    axis1_type="nominal",
+    temporal_format=alt.Undefined,
+    axis2_field=size_by_field,
+    axis2_type="quantitative",
+    aggregate=size_by_aggregate,
+    tooltip_show=tooltip_show
+    )
 
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
@@ -299,7 +294,7 @@ def pie(
                     ]
                 ),
             ),
-            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
+            tooltip=tooltip,
             opacity=alt.value(1),
         )
     )
