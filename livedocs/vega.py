@@ -205,11 +205,6 @@ def pie(
         color_by_field = settings["color_by"].get("field", "")
         color_by_type = settings["color_by"].get("type", "")
         usermeta["color_by"] = {"field": color_by_field, "type": color_by_type}
-        tooltip1 = alt.Tooltip(
-            field=color_by_field,
-            type=map_datatype_to_scale_type(settings["color_by"]["type"]),
-            title=color_by_field,
-        )
     if "size_by" in settings:
         size_by_field = settings["size_by"].get("field", "")
         size_by_type = settings["size_by"].get("type", "")
@@ -219,15 +214,6 @@ def pie(
             "type": size_by_type,
             "aggregate": size_by_aggregate,
         }
-        tooltip2 = alt.Tooltip(
-            field=size_by_field,
-            type="quantitative",
-            aggregate=size_by_aggregate
-            if size_by_aggregate != "none"
-            else alt.Undefined,
-            title="Count of Records" if size_by_aggregate == "count" else size_by_field,
-            format=",.2f",
-        )
 
     format_type = settings.get("format", "")
     show_as = settings.get("show_as", "value")
@@ -266,6 +252,15 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
+    tooltip=create_tooltip(
+    axis1_field=color_by_field,
+    axis1_type="nominal",
+    temporal_format=alt.Undefined,
+    axis2_field=size_by_field,
+    axis2_type="quantitative",
+    aggregate=size_by_aggregate,
+    tooltip_show=tooltip_show
+    )
 
     # Determine the theta encoding based on the aggregation type
     theta_encoding = alt.Theta(field=size_by_field, type="quantitative", stack=True)
@@ -313,7 +308,7 @@ def pie(
                     ]
                 ),
             ),
-            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
+            tooltip=tooltip,
             opacity=alt.value(1),
         )
     )
@@ -398,13 +393,18 @@ def histogram(
 
     tooltip_show = style.get("tooltip", True)
 
-    tooltip1 = alt.Tooltip(
-        field="__count" if format_type == "count" else "__PercentOfTotal",
-        title="Count of Records" if format_type == "count" else "Percentage of Records",
-        type="quantitative",
+    tooltip=create_tooltip(
+        axis1_field="__count" if format_type == "count" else "__PercentOfTotal",
+        axis1_type="quantitative",
+        temporal_format=None,
+        axis2_field="__bin_field_name",
+        axis2_type="nominal",
+        aggregate="none",
+        tooltip_show=tooltip_show,
+        axis1_title="Count of Records" if format_type == "count" else "Percentage of Records",
+        axis2_title=field,
+        axis1_format=alt.Undefined if format_type=="count" else ".1%"
     )
-
-    tooltip2 = alt.Tooltip("__bin_range", title=field, type="nominal")
 
     base = (
         alt.Chart(df)
@@ -499,7 +499,7 @@ def histogram(
                 ),
             ),
             y2=alt.datum(0),
-            tooltip=[tooltip1, tooltip2] if tooltip_show else alt.Undefined,
+            tooltip=tooltip,
             opacity=alt.value(1),
             color=alt.value("#4C78A8"),
         )
@@ -536,7 +536,11 @@ def create_tooltip(axis1_field,
                    color_by_field=None,
                    color_by_type=None,
                    color_by_aggregate=None,
-                   tooltip_show=True):
+                   tooltip_show=True,
+                   axis1_title=None,
+                   axis2_title=None,
+                   axis1_format="none",
+                   axis2_format="none"):
     
     if not tooltip_show:
         return alt.Undefined
@@ -545,19 +549,20 @@ def create_tooltip(axis1_field,
         alt.Tooltip(
             field=axis1_field,
             type=axis1_type,
-            title=axis1_field,
+            title=axis1_title,
             timeUnit=temporal_format if temporal_format else alt.Undefined,
+            format=axis1_format if axis1_format!="none" else alt.Undefined,
     ),
         alt.Tooltip(
             field=axis2_field,
             type=axis2_type,
-            title=axis2_field
+            title=axis2_title
             if aggregate == "none"
             else f"{aggregate} of {axis2_field}".title(),
             aggregate=aggregate
             if aggregate != "none" 
             else alt.Undefined,
-            format=",.1f",
+            format=axis2_format if axis2_format!="none" else ",.1f",
         )
     ]
     if color_by_field:
@@ -813,7 +818,9 @@ def main_chart(
             color_by_field=color_by_field,
             color_by_type=color_by_type,
             color_by_aggregate=color_by_aggregate,
-            tooltip_show=tooltip_show
+            tooltip_show=tooltip_show,
+            axis1_title=x_field,
+            axis2_title=y_field
         )
 
         # Create the appropriate mark type
