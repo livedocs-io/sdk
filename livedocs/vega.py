@@ -271,17 +271,39 @@ def pie(
             aggregate=size_by_aggregate,
             stack=True,
         )
-
     base=alt.Chart(df)
 
+    ## Create calculated column based on selected aggregation
     if show_as == "percentage":
-        base = alt.Chart(df).transform_joinaggregate(
-            joinaggregate=[{"op":"sum", "field": size_by_field, "as": "__totalCount"}],
-            groupby=[]
-        ).transform_calculate(
-            calculate=f"datum.{size_by_field}/datum.__totalCount",
+        if size_by_aggregate == "count":
+            df = df.with_columns([
+                pl.lit(len(df)).alias("__totalCount")
+            ])
+            base = alt.Chart(df).transform_calculate(
+                calculate="1/datum.__totalCount",
+                as_="__percentOfTotal"
+            )
+        else:
+            base = alt.Chart(df).transform_joinaggregate(
+            joinaggregate=[
+                {"op":"sum", 
+                 "field": size_by_field,
+                 "as": "__totalCount"}]
+            ).transform_calculate(
+            calculate=f"datum['{size_by_field}']/datum.__totalCount",
             as_="__percentOfTotal"
-        )
+            )
+
+    ## Aggregate variable to sum percentages instead of count
+    text_aggregate="none"
+
+    if size_by_aggregate=="count" and show_as=="percentage":
+        text_aggregate="sum"
+    elif size_by_aggregate and size_by_aggregate!="none":
+        text_aggregate=size_by_aggregate
+    else:
+        text_aggregate=alt.Undefined
+
 
     # Generate the pie chart using Altair
     chart = (
@@ -321,9 +343,9 @@ def pie(
                 if show_as!="percentage"
                 else "__percentOfTotal",
                 format=format_type,
-                aggregate=size_by_aggregate
-                if size_by_aggregate and size_by_aggregate!="none"
-                else alt.Undefined),
+                aggregate=text_aggregate,
+                type="quantitative"
+                ),
             color=alt.value("black"),
             detail=color_by_field,
             theta=theta_encoding
@@ -344,6 +366,7 @@ def pie(
             "styleSettings": style_settings,
         },
     )
+
 
     # Convert the chart to Vega JSON spec
     vega_spec = final_chart.to_json(format="vega")
