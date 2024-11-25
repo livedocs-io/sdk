@@ -198,7 +198,7 @@ def pie(
     df: pl.DataFrame,
     settings: PieChartSpec,
     schema: dict,
-    style_settings: StyleSettings,
+    style: StyleSettings, ###
 ) -> tuple[str, str]:
     usermeta = settings
     if "color_by" in settings:
@@ -215,16 +215,23 @@ def pie(
             "aggregate": size_by_aggregate,
         }
 
+    # Use x-axis style for label angle
+    x_axis_settings = style.get("xAxis", {})
+    labelAngle=x_axis_settings.get("labelAngle", 0)
+
+    labelFontSize=style.get("fontSize", 10)
+
     format_type = settings.get("format", "")
     show_as = settings.get("show_as", "value")
 
     usermeta["format"] = format_type
     usermeta["show_as"] = show_as
 
-    legend_show = style_settings.get("legend", {}).get("show", True)
-    legend_position = style_settings.get("legend", {}).get("position", "right")
-    legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
-    legend_font_size = style_settings.get("fontSize", 10)
+    # Legend settings
+    legend_show = style.get("legend", {}).get("show", True)
+    legend_position = style.get("legend", {}).get("position", "right")
+    legend_title = style.get("legend", {}).get("title", alt.Undefined)
+    legend_font_size = style.get("fontSize", 10)
 
     legend = None
     if legend_show:
@@ -237,7 +244,7 @@ def pie(
             orient=legend_position,
         )
 
-    tooltip_show = style_settings.get("tooltip", True)
+    tooltip_show = style.get("tooltip", True)
 
     if not usermeta.get("color_by", {}).get("field") or not usermeta.get(
         "size_by", {}
@@ -252,6 +259,7 @@ def pie(
         }
         return (json.dumps(empty_spec), "EMPTY")
 
+    # Create tooltip for chart
     tooltip=create_tooltip(
     axis1_field=color_by_field,
     axis1_type="nominal",
@@ -304,7 +312,6 @@ def pie(
     else:
         text_aggregate=alt.Undefined
 
-
     # Generate the pie chart using Altair
     chart = (
         base
@@ -336,7 +343,9 @@ def pie(
     )
 
     text=(base
-        .mark_text(radius=150)
+        .mark_text(radius=150,
+                   angle=labelAngle,
+                   size=labelFontSize)
         .encode(
             text=alt.Text(
                 field=size_by_field
@@ -363,7 +372,7 @@ def pie(
         usermeta={
             "chartType": "pie",
             "pieSettings": usermeta,
-            "styleSettings": style_settings,
+            "styleSettings": style,
         },
     )
 
