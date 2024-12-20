@@ -163,12 +163,12 @@ class VegaSpec(BaseModel):
 
 
 class DatabaseType(Enum):
-    Bigquery = "Bigquery"
-    Clickhouse = "Clickhouse"
-    Mysql = "Mysql"
-    Postgres = "Postgres"
-    Redshift = "Redshift"
-    Snowflake = "Snowflake"
+    Bigquery = "bigquery"
+    Clickhouse = "clickhouse"
+    Mysql = "mysql"
+    Postgres = "postgres"
+    Redshift = "redshift"
+    Snowflake = "snowflake"
 
 
 class ElementDatasourceType(Enum):

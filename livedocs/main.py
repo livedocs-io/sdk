@@ -33,12 +33,15 @@ from livedocs.utils.common import (
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
+    PROTECTED_VARS,
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
     process_postgres_schema,
 )
+from livedocs.utils.serialize import _json_serializer
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
+from IPython.core.display import display
 
 
 def _setup_sentry():
@@ -141,15 +144,19 @@ class Livedocs:
         Args:
             key (str): The variable key.
         """
-        self._built_in_vars.pop(key, None)
-        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        if key not in PROTECTED_VARS:
+            self._built_in_vars.pop(key, None)
+            _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     @_capture_exceptions
     def clear_vars(self):
         """
         Clears all built-in variables.
         """
-        self._built_in_vars = {}
+        protected_values = {
+            k: v for k, v in self._built_in_vars.items() if k in PROTECTED_VARS
+        }
+        self._built_in_vars = protected_values
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     @_capture_exceptions
@@ -254,6 +261,16 @@ class Livedocs:
             src = json.loads(str_src)
             return self.add_jinja_vars(src["html"], context)
 
+    @_capture_exceptions
+    def enrich_prompt(self, system, user, context: dict):
+        enriched_prompt = {
+            "system": self.add_jinja_vars(system, context),
+            "user": self.add_jinja_vars(user, context),
+        }
+        return json.dumps(
+            enriched_prompt, default=_json_serializer, separators=(",", ":")
+        )
+
     def add_jinja_vars(self, text: str, context: dict) -> str:
         """
         Adds Jinja variables to the given text.
@@ -267,6 +284,56 @@ class Livedocs:
         """
         template = Template(text)
         return template.render(context)
+
+    def process_dependencies(
+        self, dependencies: str, datasource: dict = None, globals_dict: dict = None
+    ) -> dict:
+        """
+        Process dependencies and serialize DataFrames to dictionaries.
+
+        Args:
+            dependencies (dict): Dictionary of dependencies
+            datasource (dict, optional): Datasource configuration
+            globals_dict (dict, optional): Global variables dictionary
+
+        Returns:
+            dict: Context dictionary with processed dependencies
+        """
+        deps = json.loads(dependencies)
+        ctx = {}
+
+        # Use provided globals or fall back to globals()
+        global_vars = globals_dict if globals_dict is not None else globals()
+
+        for dep_name, dep_info in deps.items():
+            if (
+                not datasource
+                or ElementDatasourceType(datasource.get("source_type"))
+                == ElementDatasourceType.dataframe
+                or dep_info.get("field_type") == ""
+            ):
+                try:
+                    # Get the value from globals
+                    value = global_vars.get(dep_name)
+                    if value is None:
+                        raise NameError(f"name '{dep_name}' is not defined")
+
+                    # Handle DataFrame serialization
+                    if isinstance(value, pl.DataFrame):
+                        df = value.to_dicts()
+                        ctx[dep_name] = json.dumps(
+                            df, default=_json_serializer, separators=(",", ":")
+                        )
+                    else:
+                        ctx[dep_name] = value
+
+                except Exception as e:
+                    raise Exception(
+                        f"Unable to find {dep_name}, ensure the element where you declared it "
+                        "has been run at least once"
+                    ) from e
+
+        return ctx
 
     @_capture_exceptions
     @sentry_sdk.trace
