@@ -29,6 +29,8 @@ _LIVEDOCS_COLORS = [
     "#7839ee",
 ]
 
+PROTECTED_VARS = {"run_context", "last_scheduled_run"}
+
 
 def _capture_exceptions(func):
     @wraps(func)
@@ -220,4 +222,5 @@ __all__ = [
     "_get_user_defined_color",
     "_get_user_defined_opacity",
     "_capture_exceptions",
+    "PROTECTED_VARS",
 ]

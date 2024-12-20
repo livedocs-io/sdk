@@ -33,6 +33,7 @@ from livedocs.utils.common import (
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
+    PROTECTED_VARS,
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
@@ -40,7 +41,7 @@ from livedocs.utils.postgres import (
 )
 from livedocs.utils.serialize import _json_serializer
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
-from IPython import display
+from IPython.core.display import display
 
 
 def _setup_sentry():
@@ -143,15 +144,19 @@ class Livedocs:
         Args:
             key (str): The variable key.
         """
-        self._built_in_vars.pop(key, None)
-        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        if key not in PROTECTED_VARS:
+            self._built_in_vars.pop(key, None)
+            _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     @_capture_exceptions
     def clear_vars(self):
         """
         Clears all built-in variables.
         """
-        self._built_in_vars = {}
+        protected_values = {
+            k: v for k, v in self._built_in_vars.items() if k in PROTECTED_VARS
+        }
+        self._built_in_vars = protected_values
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
     @_capture_exceptions
