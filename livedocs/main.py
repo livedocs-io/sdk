@@ -134,6 +134,9 @@ class Livedocs:
         Returns:
             str: The variable value.
         """
+        if key == "run_context":
+            return os.getenv("RUN_CONTEXT")
+
         return self._built_in_vars.get(key, None)
 
     @_capture_exceptions
