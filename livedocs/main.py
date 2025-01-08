@@ -17,6 +17,7 @@ from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
+    DBSaveConfig,
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
@@ -38,6 +39,7 @@ from livedocs.utils.common import (
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
     process_postgres_schema,
+    write_df_to_table,
 )
 from livedocs.utils.serialize import _json_serializer
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
@@ -246,6 +248,26 @@ class Livedocs:
             post_span.finish()
 
             return (df, payload)
+   
+    @_capture_exceptions
+    @sentry_sdk.trace
+    def save_to_database(
+        self,
+        dataframe: pl.DataFrame,
+        str_save_config: str
+    ) -> tuple[pl.DataFrame, str]:
+        with sentry_sdk.start_transaction(op="task", name="save to database"):
+            save_config: DBSaveConfig = json.loads(str_save_config)
+
+            print("save_to_database")
+            print(save_config["database_type"])
+            print(DatabaseType.Postgres)
+
+            if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
+                print("writing first...")
+                self._write_to_postgres(dataframe, save_config)
+
+            return (dataframe)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -758,6 +780,66 @@ class Livedocs:
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
+    
+    def _write_to_postgres(
+        self, df: pl.DataFrame, save_config: DBSaveConfig
+    ):
+        """
+        Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
+        write operation under the alias same as the database name.
+
+        Args:
+            df (pl.DataFrame): The DataFrame to write to the database.
+            save_config (DBSaveConfig): The save configuration.
+
+        Returns:
+            Error, Result and Metrics in a tuple
+            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+        """
+
+        print("_write_to_postgres")
+        try:
+            db_connector_id = save_config["database_id"]
+            # This won't throw an error if the credentials are not found
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                # This will throw an error if the credentials are not found
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            parsed_credentials = json.loads(credentials["connection_details"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            if parsed_credentials.get("connect_using") == "url":
+                connection_string = parsed_credentials["connection_url"]
+            else:
+                connection_string = create_postgres_connection_url(parsed_credentials)
+        except KeyError as e:
+            raise ValueError(f"Missing required database connection detail: {e}")
+
+        # This is unique to the workspace, so no chance of conflict
+        alias = credentials["db_name"]
+
+        try:
+            self._duckdb.attach_postgres(connection_string, alias)
+        except Exception as e:
+            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
+
+        try:
+            print(save_config)
+            qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
+            write_df_to_table(df, self._duckdb.conn, qualified_table_name)
+        except Exception as e:
+            raise RuntimeError(f"Error executing query: {e}")
+
+        return "ok"
+
 
     def _get_signed_url(self, file_id: str) -> str:
         """

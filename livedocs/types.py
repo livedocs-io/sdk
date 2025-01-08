@@ -235,6 +235,17 @@ class Schema(TypedDict):
     children: List
 
 
+class DBSaveConfig(TypedDict):
+    dataframe_name: str
+    dataframe_element_id: str
+    database_name: str
+    database_id: str
+    database_type: DatabaseType
+    schema_name: str
+    table_name: str
+    write_mode: Literal["append", "overwrite"]
+    run_settings: List[Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]]
+
 # Vega Chart Spec
 
 
@@ -376,4 +387,5 @@ __all__ = [
     "Schema",
     "LivedocsChartSpec",
     "Spec",
+    "DBSaveConfig",
 ]
