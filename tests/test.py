@@ -19,7 +19,7 @@ import json
 livedocs = Livedocs()
 livedocs.initialize(
     "1f836c4b-442f-4144-a02f-5b70a4a78581",
-    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIxZDYzNTYyYy0wNjAyLTQyYTktYjZjNy0yMjliMTU0YzlmNDMiLCJyZXBvcnRfaWQiOiIxZjgzNmM0Yi00NDJmLTQxNDQtYTAyZi01YjcwYTRhNzg1ODEiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImV4cCI6MTczNjMzMzQ4OX0.E4X6wYg1irNXa8dua780-NvjU3s77S7HDlZJTWWXm_w"
+    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIxZDYzNTYyYy0wNjAyLTQyYTktYjZjNy0yMjliMTU0YzlmNDMiLCJyZXBvcnRfaWQiOiIxZjgzNmM0Yi00NDJmLTQxNDQtYTAyZi01YjcwYTRhNzg1ODEiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImV4cCI6MTczNjQ4NDg0NH0.42Z_GI4S_wfU4YnX-MYrKHE3CnJT7xqtlBHzgIkmVso"
 )
 
 # User code (i.e, the test)
@@ -115,8 +115,8 @@ df = pl.DataFrame(
     data=[
         {
             "id": "f68ad0ab-1f0c-4ad4-98da-3fc2eafdb9ce",
-            "email": "test@example.com",
-            "workspace_id": "4a53bb93-56b7-4b57-b581-02278b0af71d",
+            "email": "test2@example.com",
+            "workspace_id": "1d63562c-0602-42a9-b6c7-229b154c9f43",
             "ws_permission_level": "admin",
             "deleted_at": None
         }
@@ -141,6 +141,24 @@ save_config = {
   "schema_name": "public",
   "table_name": "invites",
   "table_is_new": False,
+  "write_mode": "overwrite",
+  "run_settings": [
+    "edit_mode",
+    "view_mode",
+    "scheduled_runs",
+    "webhook_runs"
+  ]
+}
+
+_new_save_config = {
+  "dataframe_name": "df",
+  "dataframe_element_id": "IRRELEVANT",
+  "database_name": "appstoreb",
+  "database_id": "d97d43ef-66c4-477c-9b27-a1211002aea9",
+  "database_type": "postgres",
+  "schema_name": "public",
+  "table_name": "newtable",
+  "table_is_new": True,
   "write_mode": "append",
   "run_settings": [
     "edit_mode",
@@ -151,8 +169,10 @@ save_config = {
 }
 
 str_save_config = json.dumps(save_config)
+str_save_config_new = json.dumps(_new_save_config)
 
 livedocs.save_to_database(df, str_save_config)
+livedocs.save_to_database(df, str_save_config_new)
 
 print("done")
 # livedocs._get_dataframe_schema(df_polars)

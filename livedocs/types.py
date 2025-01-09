@@ -243,6 +243,7 @@ class DBSaveConfig(TypedDict):
     database_type: DatabaseType
     schema_name: str
     table_name: str
+    table_is_new: bool
     write_mode: Literal["append", "overwrite"]
     run_settings: List[Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]]
 

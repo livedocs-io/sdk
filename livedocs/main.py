@@ -834,7 +834,7 @@ class Livedocs:
         try:
             print(save_config)
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            write_df_to_table(df, self._duckdb.conn, qualified_table_name)
+            write_df_to_table(df, self._duckdb.conn, qualified_table_name, save_config["table_is_new"], save_config["write_mode"])
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
 
