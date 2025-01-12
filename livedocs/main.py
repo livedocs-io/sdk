@@ -255,19 +255,18 @@ class Livedocs:
         self,
         dataframe: pl.DataFrame,
         str_save_config: str
-    ) -> tuple[pl.DataFrame, str]:
+    ):
         with sentry_sdk.start_transaction(op="task", name="save to database"):
             save_config: DBSaveConfig = json.loads(str_save_config)
-
-            print("save_to_database")
-            print(save_config["database_type"])
-            print(DatabaseType.Postgres)
-
             if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
-                print("writing first...")
-                self._write_to_postgres(dataframe, save_config)
+                if os.getenv("RUN_CONTEXT") in save_config["run_settings"]:
+                    result = self._write_to_postgres(dataframe, save_config)
+                    return result
+                else:
+                    pass
+            else:
+                raise Exception("Unsupported database type")
 
-            return (dataframe)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -796,8 +795,6 @@ class Livedocs:
             Error, Result and Metrics in a tuple
             Tuple[Result (Dict), Metrics (Dict), Error (str)]
         """
-
-        print("_write_to_postgres")
         try:
             db_connector_id = save_config["database_id"]
             # This won't throw an error if the credentials are not found
@@ -832,13 +829,24 @@ class Livedocs:
             raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
 
         try:
-            print(save_config)
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            write_df_to_table(df, self._duckdb.conn, qualified_table_name, save_config["table_is_new"], save_config["write_mode"])
+            result = write_df_to_table(df, self._duckdb.conn, qualified_table_name, save_config["table_is_new"], save_config["write_mode"])
+            
+            # Compress and encode response
+            output = QueryResult(
+                data=result["result"],
+                metadata=QueryResultMetadata(
+                    limit=50,
+                    offset=0,
+                    total_rows=result["rows_written"],
+                    run_date=result["run_date"],
+                    cache_info=None,
+                ),
+            )
+            payload = LivedocsResult(output)
+            return payload
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
-
-        return "ok"
 
 
     def _get_signed_url(self, file_id: str) -> str:

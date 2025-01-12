@@ -19,7 +19,7 @@ import json
 livedocs = Livedocs()
 livedocs.initialize(
     "1f836c4b-442f-4144-a02f-5b70a4a78581",
-    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIxZDYzNTYyYy0wNjAyLTQyYTktYjZjNy0yMjliMTU0YzlmNDMiLCJyZXBvcnRfaWQiOiIxZjgzNmM0Yi00NDJmLTQxNDQtYTAyZi01YjcwYTRhNzg1ODEiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImV4cCI6MTczNjQ4NDg0NH0.42Z_GI4S_wfU4YnX-MYrKHE3CnJT7xqtlBHzgIkmVso"
+    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIxZDYzNTYyYy0wNjAyLTQyYTktYjZjNy0yMjliMTU0YzlmNDMiLCJyZXBvcnRfaWQiOiIxZjgzNmM0Yi00NDJmLTQxNDQtYTAyZi01YjcwYTRhNzg1ODEiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImV4cCI6MTczNjY3MjA2MH0.5aavGKd42SslV0JlROMntWsHoG9kG-dKN6PLD2_M5d8"
 )
 
 # User code (i.e, the test)
@@ -171,10 +171,11 @@ _new_save_config = {
 str_save_config = json.dumps(save_config)
 str_save_config_new = json.dumps(_new_save_config)
 
-livedocs.save_to_database(df, str_save_config)
-livedocs.save_to_database(df, str_save_config_new)
+x = livedocs.save_to_database(df, str_save_config)
+a = livedocs.save_to_database(df, str_save_config_new)
 
-print("done")
+print(x)
+print(a)
 # livedocs._get_dataframe_schema(df_polars)
 # livedocs._get_dataframe_schema(df_pandas)
 

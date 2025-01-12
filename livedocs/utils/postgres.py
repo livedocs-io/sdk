@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import traceback
 from typing import Dict
 from typing_extensions import Literal
 import polars as pl
@@ -68,31 +69,39 @@ def process_postgres_schema(schema_data: pl.DataFrame) -> dict:
         processed_schema[row["column_name"]] = map_duckdb_type(row["column_type"])
     return processed_schema
 
+
 def write_df_to_table(df: pl.DataFrame, duckdb_conn, table_name: str, create_table: bool = False, write_mode: Literal["append", "overwrite"] = "append"):
     """
     Aligns a Polars DataFrame to match a DuckDB table schema and writes the DataFrame to the table.
-    If create_table is True, creates the table based on DataFrame schema before writing.
     
     Args:
         df: Polars DataFrame to align
         duckdb_conn: DuckDB connection
         table_name: Name of the target DuckDB table
         create_table: If True, create the table before writing
+        write_mode: Either "append" or "overwrite"
         
     Returns:
-        Polars DataFrame with aligned schema
-        
-    Raises:
-        ValueError: If required columns are missing
+        dict with keys:
+            result: DataFrame with types as first row + first 19 rows of data
+            error: Dict with error message and stack trace, or empty dict on success
+            rows_written: Number of rows written (0 if failed)
+            run_date: UTC timestamp of operation
     """
-
-    if write_mode not in ["append", "overwrite"]:
-        raise ValueError('write_mode must be either "append" or "overwrite"')
-    
-    # Begin transaction
-    duckdb_conn.sql("BEGIN TRANSACTION")
+    output = {
+        "result": pl.DataFrame(),
+        "error": {},
+        "rows_written": 0,
+        "run_date": datetime.now(timezone.utc)
+    }
 
     try:
+        if write_mode not in ["append", "overwrite"]:
+            raise ValueError('write_mode must be either "append" or "overwrite"')
+        
+        # Begin transaction
+        duckdb_conn.sql("BEGIN TRANSACTION")
+
         if create_table:
             # Check if table exists
             check_table_query = f"""
@@ -108,7 +117,6 @@ def write_df_to_table(df: pl.DataFrame, duckdb_conn, table_name: str, create_tab
                 # CREATE TABLE based on DataFrame schema
                 columns = []
                 for col_name, dtype in zip(df.columns, df.dtypes):
-                    print(col_name, dtype)
                     duck_type = polars_to_duckdb_type(dtype)
                     columns.append(f'"{col_name}" {duck_type}')
                 
@@ -119,13 +127,9 @@ def write_df_to_table(df: pl.DataFrame, duckdb_conn, table_name: str, create_tab
                 """
                 duckdb_conn.sql(create_stmt)
             
-            # Get schema for DF casting regardless of whether we created the table
-            schema_query = f"DESCRIBE {table_name}"
-            schema_df = duckdb_conn.sql(schema_query).pl()
-        else:
-            # If table already exists, get its schema
-            schema_query = f"DESCRIBE {table_name}"
-            schema_df = duckdb_conn.sql(schema_query).pl()
+        # Get schema for DF casting
+        schema_query = f"DESCRIBE {table_name}"
+        schema_df = duckdb_conn.sql(schema_query).pl()
         
         # Create mapping of column name to data type and nullability
         duck_schema = {}
@@ -135,12 +139,12 @@ def write_df_to_table(df: pl.DataFrame, duckdb_conn, table_name: str, create_tab
 
         # Check for missing required columns
         missing_required = [
-            col for col, info in duck_schema.items() if not info["nullable"] and col not in df.columns
+            col for col, info in duck_schema.items() 
+            if not info["nullable"] and col not in df.columns
         ]
 
         if missing_required:
             raise ValueError(f"Missing required columns: {missing_required}")
-        
 
         expressions = []
         for col_name, info in duck_schema.items():
@@ -152,9 +156,7 @@ def write_df_to_table(df: pl.DataFrame, duckdb_conn, table_name: str, create_tab
                 expr = pl.col(col_name)
                 
                 if 'ENUM' in duck_type.upper():
-                    # Get valid enum values
                     enum_values = get_enum_values(duck_type)
-                    # Validate enum values before casting
                     if not nullable:
                         expr = (
                             expr.cast(pl.Utf8)
@@ -189,22 +191,63 @@ def write_df_to_table(df: pl.DataFrame, duckdb_conn, table_name: str, create_tab
         # Select and cast columns
         aligned_df = df.select(expressions)
 
-        print("alignment done...")
-        print(aligned_df)
-
         if write_mode == "overwrite":
             duckdb_conn.sql(f"TRUNCATE TABLE {table_name}")
         
+        # Insert the data
         query = f"INSERT INTO {table_name} SELECT * FROM aligned_df"
         duckdb_conn.sql(query)
 
-        # If we got here without errors, commit the transaction
-        duckdb_conn.sql("COMMIT")
-        
-        return aligned_df
+        try:
+            # Convert aligned DataFrame to strings for consistent concatenation
+            result_df = aligned_df.head(19).select([
+                pl.col(col).cast(pl.Utf8) for col in aligned_df.columns
+            ])
+
+            # Create types row with string values
+            types_row = {col_name: info["type"] for col_name, info in duck_schema.items()}
+            types_df = pl.DataFrame([types_row])
+
+            # Concatenate types with data
+            output["result"] = pl.concat([
+                types_df,
+                result_df
+            ])
+            
+            output["rows_written"] = len(df)
+            
+            # Commit the transaction
+            duckdb_conn.sql("COMMIT")
+            
+            return output
+            
+        except Exception as e:
+            # If there's an error in preparing the output but after successful insert
+            duckdb_conn.sql("COMMIT")  # Still commit the successful insert
+            
+            output["error"] = {
+                "message": f"Data written successfully but error in preparing output: {str(e)}",
+                "stacktrace": traceback.format_exc()
+            }
+            output["rows_written"] = len(df)
+            return output
+            
     except Exception as e:
-        duckdb_conn.sql("ROLLBACK")
-        raise e
+        # Main error handling for failures during insert
+        try:
+            duckdb_conn.sql("ROLLBACK")
+        except Exception as rollback_error:
+            output["error"] = {
+                "message": f"Insert failed: {str(e)}. Additionally, rollback failed: {str(rollback_error)}",
+                "stacktrace": traceback.format_exc()
+            }
+            return output
+
+        output["error"] = {
+            "message": str(e),
+            "stacktrace": traceback.format_exc()
+        }
+        return output
 
 def get_default_value(duck_type):
     """
