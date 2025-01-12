@@ -11,6 +11,7 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
+from IPython.display import display
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -259,7 +260,9 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="save to database"):
             save_config: DBSaveConfig = json.loads(str_save_config)
             if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
-                if os.getenv("RUN_CONTEXT") in save_config["run_settings"]:
+                display(os.getenv("RUN_CONTEXT"))
+                # WIP: RUN_CONTEXT only has logic and scheduled
+                if True: # os.getenv("RUN_CONTEXT") in save_config["run_settings"]:
                     result = self._write_to_postgres(dataframe, save_config)
                     return result
                 else:
