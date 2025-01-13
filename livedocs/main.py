@@ -36,6 +36,7 @@ from livedocs.utils.common import (
     _get_dataframe_schema,
     _persist_built_in_vars,
     PROTECTED_VARS,
+    get_run_context,
 )
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
@@ -260,16 +261,14 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="save to database"):
             save_config: DBSaveConfig = json.loads(str_save_config)
             if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
-                display(os.getenv("RUN_CONTEXT"))
-                # WIP: RUN_CONTEXT only has logic and scheduled
-                if True: # os.getenv("RUN_CONTEXT") in save_config["run_settings"]:
+                current_run_context = get_run_context()
+                if current_run_context in save_config["run_settings"]:
                     result = self._write_to_postgres(dataframe, save_config)
                     return result
                 else:
                     pass
             else:
                 raise Exception("Unsupported database type")
-
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -835,21 +834,24 @@ class Livedocs:
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
             result = write_df_to_table(df, self._duckdb.conn, qualified_table_name, save_config["table_is_new"], save_config["write_mode"])
             
-            # Compress and encode response
-            output = QueryResult(
-                data=result["result"],
-                metadata=QueryResultMetadata(
-                    limit=50,
-                    offset=0,
-                    total_rows=result["rows_written"],
-                    run_date=result["run_date"],
-                    cache_info=None,
-                ),
-            )
-            payload = LivedocsResult(output)
-            return payload
+            if result["error"]:
+                raise RuntimeError(f"Error writing to PostgreSQL: {result['error']}")
+            else:
+                # Compress and encode response
+                output = QueryResult(
+                    data=result["result"],
+                    metadata=QueryResultMetadata(
+                        limit=50,
+                        offset=0,
+                        total_rows=result["rows_written"],
+                        run_date=result["run_date"],
+                        cache_info=None,
+                    ),
+                )
+                payload = LivedocsResult(output)
+                return payload
         except Exception as e:
-            raise RuntimeError(f"Error executing query: {e}")
+            raise RuntimeError(f"DBSave Error: {e}")
 
 
     def _get_signed_url(self, file_id: str) -> str:

@@ -31,6 +31,18 @@ _LIVEDOCS_COLORS = [
 
 PROTECTED_VARS = {"run_context", "last_scheduled_run"}
 
+def get_run_context() -> str:
+    current_run_context = "edit_mode"
+    match os.getenv("RUN_CONTEXT"):
+        case "logic":
+            current_run_context = "edit_mode"
+        case "scheduled":
+            current_run_context = "scheduled_runs"
+        case "webhook":
+            current_run_context = "webhook_runs"
+        case _:
+            current_run_context = "unknown_run_context"
+    return current_run_context
 
 def _capture_exceptions(func):
     @wraps(func)
@@ -222,5 +234,6 @@ __all__ = [
     "_get_user_defined_color",
     "_get_user_defined_opacity",
     "_capture_exceptions",
+    "get_run_context",
     "PROTECTED_VARS",
 ]
