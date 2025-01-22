@@ -1,5 +1,6 @@
 # Setup the test file and environment
 
+from datetime import datetime
 import sys
 import os
 
@@ -17,8 +18,8 @@ import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "66de1ead-1031-43dc-a35f-b071248bfc3c",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiI2ZDk4YTVhOC01OWNjLTQ5Y2YtYTMyMS0wMTY2NjE3ODdiMDciLCJyZXBvcnRfaWQiOiI2NmRlMWVhZC0xMDMxLTQzZGMtYTM1Zi1iMDcxMjQ4YmZjM2MiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImlhdCI6MTcyNTk1ODY1OSwiZXhwIjoxNzI1OTg3NDU5fQ.lHspGGbzA8CdMG9MloHeyQzdZQ2c4TvKfWDlbvTBpII"
+    "1f836c4b-442f-4144-a02f-5b70a4a78581",
+    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiIxZDYzNTYyYy0wNjAyLTQyYTktYjZjNy0yMjliMTU0YzlmNDMiLCJyZXBvcnRfaWQiOiIxZjgzNmM0Yi00NDJmLTQxNDQtYTAyZi01YjcwYTRhNzg1ODEiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsImV4cCI6MTczNjY3MjA2MH0.5aavGKd42SslV0JlROMntWsHoG9kG-dKN6PLD2_M5d8"
 )
 
 # User code (i.e, the test)
@@ -110,17 +111,81 @@ headers = [f"col{i}" for i in range(20)]
 df_polars = pl.DataFrame(data_df, schema=headers)
 df_pandas = pd.DataFrame(data_df, columns=headers)
 
+df = pl.DataFrame(
+    data=[
+        {
+            "id": "f68ad0ab-1f0c-4ad4-98da-3fc2eafdb9ce",
+            "email": "test2@example.com",
+            "workspace_id": "1d63562c-0602-42a9-b6c7-229b154c9f43",
+            "ws_permission_level": "admin",
+            "deleted_at": None
+        }
+    ],
+    schema={
+        "id": pl.Utf8,
+        "email": pl.Utf8,
+        "workspace_id": pl.Utf8,
+        "ws_permission_level": pl.Utf8,
+        "updated_at": pl.Datetime,
+        "created_at": pl.Datetime,
+        "deleted_at": pl.Datetime
+    }
+)
 
+save_config = {
+  "dataframe_name": "df",
+  "dataframe_element_id": "IRRELEVANT",
+  "database_name": "appstoreb",
+  "database_id": "d97d43ef-66c4-477c-9b27-a1211002aea9",
+  "database_type": "postgres",
+  "schema_name": "public",
+  "table_name": "invites",
+  "table_is_new": False,
+  "write_mode": "overwrite",
+  "run_settings": [
+    "edit_mode",
+    "view_mode",
+    "scheduled_runs",
+    "webhook_runs"
+  ]
+}
+
+_new_save_config = {
+  "dataframe_name": "df",
+  "dataframe_element_id": "IRRELEVANT",
+  "database_name": "appstoreb",
+  "database_id": "d97d43ef-66c4-477c-9b27-a1211002aea9",
+  "database_type": "postgres",
+  "schema_name": "public",
+  "table_name": "newtable",
+  "table_is_new": True,
+  "write_mode": "append",
+  "run_settings": [
+    "edit_mode",
+    "view_mode",
+    "scheduled_runs",
+    "webhook_runs"
+  ]
+}
+
+str_save_config = json.dumps(save_config)
+str_save_config_new = json.dumps(_new_save_config)
+
+x = livedocs.save_to_database(df, str_save_config)
+a = livedocs.save_to_database(df, str_save_config_new)
+
+print(x)
+print(a)
 # livedocs._get_dataframe_schema(df_polars)
 # livedocs._get_dataframe_schema(df_pandas)
 
 
-polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {}, df_polars)
-pandas_result = livedocs.query("select * from df_pandas limit 10", json.dumps(pandas_datasource), {}, df_pandas)
+# polars_result = livedocs.query("select * from df_polars limit 10", json.dumps(polars_datasource), {}, df_polars)
+# pandas_result = livedocs.query("select * from df_pandas limit 10", json.dumps(pandas_datasource), {}, df_pandas)
 
 
 # print(pandas_result)
-print(polars_result)
+# print(polars_result)
 # print(pandas_result)
 
 # print(livedocs.secrets('CLIENT_ID', 'not the actual value'))
