@@ -768,6 +768,11 @@ def main_chart(
                 color_by_type if color_by_aggregate == "none" else "quantitative"
             )
 
+            text_encoding = alt.Text(
+                field=y_field,
+                aggregate=y_aggregate
+                )
+
             legend = None
             if legend_show:
                 legend = alt.Legend(
@@ -853,6 +858,13 @@ def main_chart(
             tooltip_show=tooltip_show,
             axis1_title=x_field,
             axis2_title=y_field
+        )
+
+        text = alt.Chart(df).mark_text(
+            x=x_encoding,
+            y=y_encoding,
+            text=text_encoding,
+            yOffset=alt.value(-5)
         )
 
         # Create the appropriate mark type
