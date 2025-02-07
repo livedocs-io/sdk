@@ -692,6 +692,7 @@ def main_chart(
         "temporalFormat": x_temporal_format,
     }
 
+
     # Add transformation for temporal fields
     transform = []
     if x_type == "temporal":
@@ -767,11 +768,6 @@ def main_chart(
             usermeta["yAxis"]["primary"][index]["color_by"]["type"] = (
                 color_by_type if color_by_aggregate == "none" else "quantitative"
             )
-
-            text_encoding = alt.Text(
-                field=y_field,
-                aggregate=y_aggregate
-                )
 
             legend = None
             if legend_show:
@@ -860,7 +856,13 @@ def main_chart(
             axis2_title=y_field
         )
 
-        text = alt.Chart(df).mark_text(
+        # Add text encoding for data labels
+        text_encoding = alt.Text(
+                field=y_field,
+                aggregate=y_aggregate
+                )
+
+        text = alt.Chart(df).mark_text().encode(
             x=x_encoding,
             y=y_encoding,
             text=text_encoding,
@@ -1232,6 +1234,7 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
+        inner_layers.append(text)
         chart = alt.layer(*inner_layers)
 
     for t in transform:
