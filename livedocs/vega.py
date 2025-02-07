@@ -862,7 +862,8 @@ def main_chart(
         if y_aggregate!='none':
             text_encoding = alt.Text(
                     field=y_field,
-                    aggregate=y_aggregate
+                    aggregate=y_aggregate,
+                    format=',.1f'
                     )
 
             text = alt.Chart(df).mark_text().encode(
