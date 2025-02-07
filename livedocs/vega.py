@@ -857,17 +857,20 @@ def main_chart(
         )
 
         # Add text encoding for data labels
-        text_encoding = alt.Text(
-                field=y_field,
-                aggregate=y_aggregate
-                )
+        text=None
 
-        text = alt.Chart(df).mark_text().encode(
-            x=x_encoding,
-            y=y_encoding,
-            text=text_encoding,
-            yOffset=alt.value(-5)
-        )
+        if y_aggregate!='none':
+            text_encoding = alt.Text(
+                    field=y_field,
+                    aggregate=y_aggregate
+                    )
+
+            text = alt.Chart(df).mark_text().encode(
+                x=x_encoding,
+                y=y_encoding,
+                text=text_encoding,
+                yOffset=alt.value(-5)
+            )
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1234,7 +1237,8 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
-        inner_layers.append(text)
+        if text:
+            inner_layers.append(text)
         chart = alt.layer(*inner_layers)
 
     for t in transform:
