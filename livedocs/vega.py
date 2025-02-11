@@ -870,8 +870,7 @@ def main_chart(
                 x=x_encoding,
                 y=y_encoding,
                 text=text_encoding,
-                yOffset=alt.value(-5)
-            )
+                yOffset=alt.value(-5)            )
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
