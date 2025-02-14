@@ -859,7 +859,7 @@ def main_chart(
         # Add text encoding for data labels
         text=None
 
-        if y_aggregate!='none':
+        if y_aggregate!='none' and not mark_type.startswith("full"):
             text_encoding = alt.Text(
                     field=y_field,
                     aggregate=y_aggregate,
