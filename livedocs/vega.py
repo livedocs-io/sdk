@@ -873,6 +873,9 @@ def main_chart(
                 yOffset=alt.value(-5),
                 xOffset=color_by_field
                 if mark_type=="grouped_column" and color_by_field
+                else alt.Undefined, 
+                detail=color_by_field
+                if mark_type=="line" and color_by_field
                 else alt.Undefined
                 )
 
