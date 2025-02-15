@@ -1,10 +1,12 @@
-from abc import ABC, abstractmethod
 import base64
 import gzip
 import json
+from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
+import msgpack
+from IPython.core.display import DisplayObject
 from polars import DataFrame
 from pydantic import BaseModel, model_validator
 
@@ -102,6 +104,35 @@ class LivedocsResult:
         metadata = self.result.get_metadata()
 
         return data, metadata
+
+
+class MsgPackDisplay(DisplayObject):
+    """
+    Custom display class for msgpack data in IPython
+    """
+
+    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+        super().__init__(data, metadata=metadata)
+        self.data = data
+        self.metadata = metadata or {}
+
+    def _pack_data(self) -> bytes:
+        """Pack the data using msgpack"""
+        return msgpack.packb(self.data, use_bin_type=True)
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """
+        Return the data as a mime bundle
+
+        This method is called by IPython to get all mime types for the object
+        """
+        packed = self._pack_data()
+
+        data = {
+            "application/vnd.msgpack": packed,
+        }
+
+        return data, self.metadata
 
 
 class UserMeta(BaseModel):
@@ -245,7 +276,10 @@ class DBSaveConfig(TypedDict):
     table_name: str
     table_is_new: bool
     write_mode: Literal["append", "overwrite"]
-    run_settings: List[Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]]
+    run_settings: List[
+        Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]
+    ]
+
 
 # Vega Chart Spec
 
