@@ -11,31 +11,31 @@ import requests
 import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
-from IPython.display import display
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
-    DBSaveConfig,
     DatabaseType,
+    DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
     GCSBucketType,
     LivedocsChartSpec,
     LivedocsResult,
+    MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
     Schema,
 )
 from livedocs.utils.common import (
+    PROTECTED_VARS,
     _capture_exceptions,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
-    PROTECTED_VARS,
     get_run_context,
 )
 from livedocs.utils.postgres import (
@@ -45,7 +45,6 @@ from livedocs.utils.postgres import (
 )
 from livedocs.utils.serialize import _json_serializer
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
-from IPython.core.display import display
 
 
 def _setup_sentry():
@@ -250,14 +249,10 @@ class Livedocs:
             post_span.finish()
 
             return (df, payload)
-   
+
     @_capture_exceptions
     @sentry_sdk.trace
-    def save_to_database(
-        self,
-        dataframe: pl.DataFrame,
-        str_save_config: str
-    ):
+    def save_to_database(self, dataframe: pl.DataFrame, str_save_config: str):
         with sentry_sdk.start_transaction(op="task", name="save to database"):
             save_config: DBSaveConfig = json.loads(str_save_config)
             if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
@@ -293,9 +288,7 @@ class Livedocs:
             "system": self.add_jinja_vars(system, context),
             "user": self.add_jinja_vars(user, context),
         }
-        return json.dumps(
-            enriched_prompt, default=_json_serializer, separators=(",", ":")
-        )
+        return MsgPackDisplay(enriched_prompt)
 
     def add_jinja_vars(self, text: str, context: dict) -> str:
         """
@@ -781,10 +774,8 @@ class Livedocs:
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
-    
-    def _write_to_postgres(
-        self, df: pl.DataFrame, save_config: DBSaveConfig
-    ):
+
+    def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
         Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
         write operation under the alias same as the database name.
@@ -832,8 +823,14 @@ class Livedocs:
 
         try:
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            result = write_df_to_table(df, self._duckdb.conn, qualified_table_name, save_config["table_is_new"], save_config["write_mode"])
-            
+            result = write_df_to_table(
+                df,
+                self._duckdb.conn,
+                qualified_table_name,
+                save_config["table_is_new"],
+                save_config["write_mode"],
+            )
+
             if result["error"]:
                 raise RuntimeError(f"Error writing to PostgreSQL: {result['error']}")
             else:
@@ -852,7 +849,6 @@ class Livedocs:
                 return payload
         except Exception as e:
             raise RuntimeError(f"DBSave Error: {e}")
-
 
     def _get_signed_url(self, file_id: str) -> str:
         """
