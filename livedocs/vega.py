@@ -866,7 +866,11 @@ def main_chart(
                     format=',.1f'
                     )
 
-            text = alt.Chart(df).mark_text().encode(
+            text = alt.Chart(df).mark_text(
+                align="left" 
+                if x_temporal_format 
+                else "center"
+                ).encode(
                 x=x_encoding,
                 y=y_encoding,
                 text=text_encoding,
