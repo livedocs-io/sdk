@@ -13,6 +13,7 @@ from livedocs.types import (
     PieChartSpec,
     Spec,
     StyleSettings,
+    SubplotSettings,
     VegaSpec,
 )
 from livedocs.utils.common import (
@@ -144,21 +145,22 @@ def create_vega_spec(
         return validated_spec.model_dump_json()
     else:
         if spec.get("chartType"):
+            subplots = spec.get("subplots", {})
             if spec["chartType"] == "main":
                 (vega_spec, status) = main_chart(
-                    df, spec["chartSettings"], schema, style_settings
+                    df, spec["chartSettings"], schema, style_settings, subplots
                 )
             if spec["chartType"] == "swapped_main":
                 (vega_spec, status) = swapped_main_chart(
-                    df, spec["swappedChartSettings"], schema, style_settings
+                    df, spec["swappedChartSettings"], schema, style_settings, subplots
                 )
             elif spec["chartType"] == "histogram":
                 (vega_spec, status) = histogram(
-                    df, spec["histogramSettings"], schema, style_settings
+                    df, spec["histogramSettings"], schema, style_settings, subplots
                 )
             elif spec["chartType"] == "pie":
                 (vega_spec, status) = pie(
-                    df, spec["pieSettings"], schema, style_settings
+                    df, spec["pieSettings"], schema, style_settings, subplots
                 )
 
             validated_spec = VegaSpec(
@@ -199,6 +201,7 @@ def pie(
     settings: PieChartSpec,
     schema: dict,
     style: StyleSettings, ###
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
     usermeta = settings
     if "color_by" in settings:
@@ -373,6 +376,7 @@ def pie(
             "chartType": "pie",
             "pieSettings": usermeta,
             "styleSettings": style,
+            "subplots": subplots,
         },
     )
 
@@ -392,6 +396,7 @@ def histogram(
     settings: HistogramSpec,
     schema: dict,
     style: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
     if "field" not in settings:
         empty_chart = {
@@ -552,6 +557,7 @@ def histogram(
             "chartType": "histogram",
             "histogramSettings": usermeta,
             "styleSettings": style,
+            "subplots": subplots,
         },
     )
 
@@ -624,6 +630,7 @@ def main_chart(
     settings: LivedocsChartSpec,
     schema: dict,
     style_settings: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
     usermeta = settings
 
@@ -1239,6 +1246,7 @@ def main_chart(
             "chartSettings": usermeta,
             "styleSettings": style_settings,
             "colorGroups": color_groups,
+            "subplots": subplots,
         },
     )
 
@@ -1258,6 +1266,7 @@ def swapped_main_chart(
     settings: LivedocsSwappedChartSpec,
     schema: dict,
     style_settings: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
     usermeta = settings
 
@@ -1562,6 +1571,7 @@ def swapped_main_chart(
             "chartType": "swapped_main",
             "swappedChartSettings": usermeta,
             "styleSettings": style_settings,
+            "subplots": subplots,
         },
     )
 

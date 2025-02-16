@@ -23,11 +23,11 @@ from livedocs.types import (
     ElementDataSource,
     ElementDatasourceType,
     GCSBucketType,
-    LivedocsChartSpec,
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
     Schema,
+    Spec,
 )
 from livedocs.utils.common import (
     _capture_exceptions,
@@ -378,7 +378,7 @@ class Livedocs:
             dict: The Vega specification as a base64 encoded string.
         """
         with sentry_sdk.start_transaction(op="task", name="run chart element"):
-            settings: LivedocsChartSpec = json.loads(settings_str)
+            settings: Spec = json.loads(settings_str)
             datasource: ElementDataSource = json.loads(datasource_str)
 
             # Run actual span
