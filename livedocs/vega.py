@@ -862,6 +862,64 @@ def main_chart(
             axis2_title=y_field
         )
 
+        # MarkDataLabelsSettings
+
+        # legend_show = style_settings.get("legend", {}).get("show", True)
+
+        labels_show=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("show", False)
+        labels_color=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("color", "black")
+        labels_angle=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("angle", 0)
+        labels_fontsize=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("fontSize", 10)
+        labels_position_input=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("position", "outside-top")
+
+        # Labels position mapping
+        label_position_map = {"inside-top": "top",
+            "outside-top": "bottom",
+            "center": "middle"
+            }
+
+        labels_position=label_position_map.get(labels_position_input, "bottom")
+
+        # Black as default color
+        if labels_color=="auto":
+            labels_color="black"
+
+        # label_settings = mark_settings.get("")
+        print(style_settings)
+        print("Labels_show:", labels_show)
+
+
+        # Add text encoding for data labels
+        text=None
+
+        # if y_aggregate!='none' and not mark_type.startswith("full"):
+        text_encoding = alt.Text(
+            field=y_field,
+            aggregate=y_aggregate,
+            format=',.1f'
+            )
+
+        text = alt.Chart(df).mark_text(
+            align="left" 
+            if x_temporal_format 
+            else "center",
+            baseline=labels_position
+            ).encode(
+            x=x_encoding,
+            y=y_encoding,
+            text=text_encoding,
+            yOffset=alt.value(0),
+            xOffset=color_by_field
+            if mark_type=="grouped_column" and color_by_field
+            else alt.Undefined, 
+            detail=color_by_field
+            if mark_type=="line" and color_by_field
+            else alt.Undefined,
+            color=alt.value(labels_color), 
+            angle=alt.value(labels_angle), 
+            size=alt.value(labels_fontsize),
+            )
+
         # Create the appropriate mark type
         if mark_type == "grouped_column":
             if color_by_field:
@@ -1227,6 +1285,8 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
+        if labels_show==True:
+            inner_layers.append(text)
         chart = alt.layer(*inner_layers)
 
     for t in transform:
