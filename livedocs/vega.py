@@ -892,7 +892,6 @@ def main_chart(
         # Add text encoding for data labels
         text=None
 
-        # if y_aggregate!='none' and not mark_type.startswith("full"):
         text_encoding = alt.Text(
             field=y_field,
             aggregate=y_aggregate
@@ -921,6 +920,23 @@ def main_chart(
             angle=alt.value(labels_angle), 
             size=alt.value(labels_fontsize),
             )
+
+        # Place text in center of bar
+        if labels_position=="middle":
+
+            text=text.encode(
+                y=alt.Y(field="__label_position",
+                        type="quantitative",
+                        aggregate=y_aggregate
+                        if y_aggregate!="none"
+                        else alt.Undefined
+                        )
+                ).transform_calculate(
+                calculate=f"datum['{y_field}'] / 2",
+                as_="__label_position"
+            )
+
+
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
