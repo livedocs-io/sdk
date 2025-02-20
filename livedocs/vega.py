@@ -895,7 +895,9 @@ def main_chart(
         # if y_aggregate!='none' and not mark_type.startswith("full"):
         text_encoding = alt.Text(
             field=y_field,
-            aggregate=y_aggregate,
+            aggregate=y_aggregate
+            if y_aggregate!="none"
+            else alt.Undefined,
             format=',.1f'
             )
 
@@ -906,7 +908,7 @@ def main_chart(
             baseline=labels_position
             ).encode(
             x=x_encoding,
-            y=y_encoding,
+            y=y_encoding.stack('zero'),
             text=text_encoding,
             yOffset=alt.value(0),
             xOffset=color_by_field
