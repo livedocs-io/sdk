@@ -744,6 +744,7 @@ def main_chart(
         color_by_type=None
         color_by_encoding=None
         color_by_aggregate=None
+        color_by_sort=None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"].get("field", "none")
@@ -871,6 +872,8 @@ def main_chart(
         labels_angle=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("angle", 0)
         labels_fontsize=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("fontSize", 10)
         labels_position_input=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("position", "outside-top")
+        labels_mode=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("mode", "total") # or 'per_color'
+
 
         # Labels position mapping
         label_position_map = {"inside-top": "top",
@@ -914,11 +917,15 @@ def main_chart(
             if mark_type=="grouped_column" and color_by_field
             else alt.Undefined, 
             detail=color_by_field
-            if mark_type=="line" and color_by_field
+            # if mark_type=="line" and color_by_field
+            if color_by_field and labels_mode=="per_color"
             else alt.Undefined,
             color=alt.value(labels_color), 
             angle=alt.value(labels_angle), 
             size=alt.value(labels_fontsize),
+            order=alt.Order(sort=color_by_sort)
+            if color_by_sort
+            else alt.Undefined
             )
 
         # Place text in center of bar
@@ -1412,6 +1419,7 @@ def swapped_main_chart(
     color_by_type=None
     color_by_encoding=None
     color_by_aggregate=None
+    color_by_sort=None
 
     if x_color_by:
         color_by_field = x_color_by["field"]
