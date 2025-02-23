@@ -15,7 +15,6 @@ from jinja2 import Template
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import json
-from IPython.display import display
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
