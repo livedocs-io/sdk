@@ -3,7 +3,7 @@ import uuid
 
 import altair as alt
 import polars as pl
-
+from IPython.display import display
 from livedocs.types import (
     CacheInfo,
     ElementDataSource,

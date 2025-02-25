@@ -14,6 +14,7 @@ from duckdb import CatalogException
 from jinja2 import Template
 from google.cloud import bigquery
 from google.oauth2 import service_account
+from IPython.display import display 
 import json
 
 from livedocs.cache import QueryCache
