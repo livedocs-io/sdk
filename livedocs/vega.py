@@ -87,7 +87,10 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
         case "dataframe":
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
         case "database_table":
-            return f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}"
+            if datasource['database_info']['database_name'] == "PostgreSQL":
+                return f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}"
+            else:
+                return f"SELECT * FROM `{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}`"
         case _:
             return "unknown datasource"
 
