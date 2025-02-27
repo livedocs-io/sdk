@@ -867,12 +867,14 @@ def main_chart(
 
         # legend_show = style_settings.get("legend", {}).get("show", True)
 
-        labels_show=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("show", False)
-        labels_color=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("color", "black")
-        labels_angle=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("angle", 0)
-        labels_fontsize=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("fontSize", 10)
-        labels_position_input=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("position", "outside-top")
-        labels_mode=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("mode", "total") # or 'per_color'
+        label_settings=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {})
+
+        labels_show=label_settings.get("show", False)
+        labels_color=label_settings.get("color", "black")
+        labels_angle=label_settings.get("angle", 0)
+        labels_fontsize=label_settings.get("fontSize", 10)
+        labels_position_input=label_settings.get("position", "outside-top")
+        labels_mode=label_settings.get("mode", "per_color") #  'per_color' or 'total'
 
 
         # Labels position mapping
