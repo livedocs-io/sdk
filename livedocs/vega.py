@@ -578,7 +578,8 @@ def create_tooltip(axis1_field,
                    axis1_title=None,
                    axis2_title=None,
                    axis1_format="none",
-                   axis2_format="none"):
+                   axis2_format="none"
+                   ):
     
     if not tooltip_show:
         return alt.Undefined
@@ -904,7 +905,7 @@ def main_chart(
             else alt.Undefined,
             format=',.1f'
             )
-
+        
         text = alt.Chart(df).mark_text(
             align="left" 
             if x_temporal_format 
@@ -931,19 +932,23 @@ def main_chart(
             )
 
         # Place text in center of bar
-        if labels_position=="middle":
-
+        if labels_position=="middle" and labels_mode=="per_color":
             text=text.encode(
-                y=alt.Y(field="__label_position",
+                y=y_encoding.bandPosition(0.5).stack("zero")
+            )
+        elif labels_position=="middle" and labels_mode=="total":
+                text=text.encode(
+                    y=alt.Y(field="__label_position",
                         type="quantitative",
                         aggregate=y_aggregate
                         if y_aggregate!="none"
                         else alt.Undefined
-                        )
+                    )
                 ).transform_calculate(
                 calculate=f"datum['{y_field}'] / 2",
                 as_="__label_position"
             )
+
 
 
 
@@ -995,6 +1000,7 @@ def main_chart(
                 )
 
         elif mark_type == "stacked_column":
+            
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -1311,11 +1317,12 @@ def main_chart(
                 )
 
         # Create the layer and add to inner layers
+        
         inner_layers.append(base_layer)
         if labels_show==True:
             inner_layers.append(text)
         chart = alt.layer(*inner_layers)
-
+    
     for t in transform:
         if "calculate" in t:
             chart = chart.transform_calculate(**t)
