@@ -932,9 +932,7 @@ def main_chart(
             )
 
         # Place text in center of bar
-        if (labels_position=="middle"
-        and (labels_mode=="per_color" and mark_type=="stacked_column")
-        or (labels_mode=="per_color" and mark_type=="grouped_column")):
+        if labels_position=="middle" and labels_mode=="per_color" and mark_type=="stacked_column":
             text=text.encode(
                 y=y_encoding.bandPosition(0.5).stack("zero")
             )
