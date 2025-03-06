@@ -862,6 +862,23 @@ def main_chart(
             axis2_title=y_field
         )
 
+        print(subplots)
+
+        ## Subplots
+        h_subplot_settings=subplots.get("horizontal", {})
+        h_subplot_field=h_subplot_settings.get("field", "none")
+        h_subplot_wrap=h_subplot_settings.get("wrap", False)
+        h_subplot_cols=h_subplot_settings.get("columns", 3)
+        h_subplot_sort=h_subplot_settings.get("sort", "ascending")
+        h_subplot_bin_bool=h_subplot_settings.get("bin", True)
+        h_subplot_bin_count=h_subplot_settings.get("bin_count", 5)
+
+        
+        v_subplot_settings=subplots.get("vertical", {})
+        v_subplot_field=h_subplot_settings.get("field", "none")
+        v_subplot_linkYAxis=h_subplot_settings.get("linkYAxis", True)
+
+
         # Create the appropriate mark type
         if mark_type == "grouped_column":
             if color_by_field:
