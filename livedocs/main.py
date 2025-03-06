@@ -6,11 +6,16 @@ import tempfile
 from typing import Dict, List
 
 import pandas as pd
+from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 import polars as pl
 import requests
 import sentry_sdk
 from duckdb import CatalogException
 from jinja2 import Template
+from google.cloud import bigquery
+from google.oauth2 import service_account
+from IPython.display import display 
+import json
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -259,6 +264,13 @@ class Livedocs:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
                     result = self._write_to_postgres(dataframe, save_config)
+                    return result
+                else:
+                    pass
+            elif DatabaseType(save_config["database_type"]) == DatabaseType.Bigquery:
+                current_run_context = get_run_context()
+                if current_run_context in save_config["run_settings"]:
+                    result = self._write_to_bigquery(dataframe, save_config)
                     return result
                 else:
                     pass
@@ -587,31 +599,16 @@ class Livedocs:
             case DatabaseType.Postgres:
                 # Get the schema directly from the query
                 schema_query = f"DESCRIBE {query}"
-                _schema = self._query_database(schema_query, datasource)
+                _schema = self._query_postgres(schema_query, datasource)
                 schema = process_postgres_schema(_schema)
 
                 # Execute the original query
-                result = self._query_database(query, datasource)
+                result = self._query_postgres(query, datasource)
                 return [result, schema]
-            case _:
-                return "Unknown DatabaseType"
-
-    def _query_database(
-        self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
-        """
-        Queries a database. Currently only supports Postgres.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        match DatabaseType(datasource["database_info"]["database_type"]):
-            case DatabaseType.Postgres:
-                return self._query_postgres(query, datasource)
+            case DatabaseType.Bigquery:
+                result, raw_schema = self._query_bigquery(query, datasource)
+                schema = process_bigquery_schema(raw_schema)
+                return [result, schema]
             case _:
                 return "Unknown DatabaseType"
 
@@ -672,6 +669,59 @@ class Livedocs:
             raise RuntimeError(f"Error executing query: {e}")
 
         return result
+    
+    def _query_bigquery(
+        self, query: str, datasource: ElementDataSource
+    ) -> pl.DataFrame:
+        """
+        Queries a Postgres database. Attaches the database to DuckDB and executes the
+        query under the alias same as the database name.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            pl.DataFrame: The resulting DataFrame.
+        """
+        try:
+            db_connector_id = datasource["database_info"]["database_connector_id"]
+            # This won't throw an error if the credentials are not found
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                # This will throw an error if the credentials are not found
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            # Needs to be parsed twice
+            outer_parsed = json.loads(credentials["connection_details"])
+            service_account_parsed = json.loads(outer_parsed["service_account_key"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+
+        try:
+            # Setup: Create BigQuery client with the given credentials
+            credentials = service_account.Credentials.from_service_account_info(service_account_parsed)
+            client = bigquery.Client(credentials=credentials, project=outer_parsed["project_id"])
+
+            # Execute query
+            query_job = client.query(query)
+
+            # Get schema before fetching results
+            schema = query_job.result().schema
+
+            # Convert query results to a DataFrame pointer
+            df_pointer = query_job.to_dataframe(create_bqstorage_client=True)
+            df_polars = pl.from_pandas(df_pointer)
+        except Exception as e:
+            raise RuntimeError(f"Error querying BigQuery: {e}")
+
+        return df_polars, schema
 
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         """
@@ -774,7 +824,7 @@ class Livedocs:
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
-
+    
     def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
         Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
@@ -833,6 +883,73 @@ class Livedocs:
 
             if result["error"]:
                 raise RuntimeError(f"Error writing to PostgreSQL: {result['error']}")
+            else:
+                # Compress and encode response
+                output = QueryResult(
+                    data=result["result"],
+                    metadata=QueryResultMetadata(
+                        limit=50,
+                        offset=0,
+                        total_rows=result["rows_written"],
+                        run_date=result["run_date"],
+                        cache_info=None,
+                    ),
+                )
+                payload = LivedocsResult(output)
+                return payload
+        except Exception as e:
+            raise RuntimeError(f"DBSave Error: {e}")
+    
+    
+    def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
+        """
+        Writes a DataFrame to a BigQuery database.
+
+        Args:
+            df (pl.DataFrame): The DataFrame to write to the database.
+            save_config (DBSaveConfig): The save configuration.
+
+        Returns:
+            Error, Result and Metrics in a tuple
+            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+        """
+        try:
+            db_connector_id = save_config["database_id"]
+            # This won't throw an error if the credentials are not found
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                # This will throw an error if the credentials are not found
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            # Needs to be parsed twice
+            outer_parsed = json.loads(credentials["connection_details"])
+            service_account_parsed = json.loads(outer_parsed["service_account_key"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+       
+
+        try:
+            qualified_table_name = f"{outer_parsed['project_id']}.{save_config['schema_name']}.{save_config['table_name']}"
+
+            credentials = service_account.Credentials.from_service_account_info(service_account_parsed)
+            client = bigquery.Client(credentials=credentials, project=outer_parsed["project_id"])
+
+            result = write_df_to_bigquery(
+                df,
+                client,
+                qualified_table_name,
+                save_config["table_is_new"],
+                save_config["write_mode"],
+            )
+
+            if result["error"]:
+                raise RuntimeError(f"Error writing to BigQuery: {result['error']}")
             else:
                 # Compress and encode response
                 output = QueryResult(
