@@ -16,7 +16,7 @@ def apply_sort(df: pl.DataFrame, sort_operation: Dict[str, Any]) -> pl.DataFrame
         print(f"Warning: Sort column '{column}' not found in DataFrame")
         return df 
     
-    # Apply sort - corrected to use 'descending' instead of 'reverse'
+    # Apply sort - 
     is_descending = direction.lower() == "desc"
     return df.sort(column, descending=is_descending)
 
@@ -34,6 +34,7 @@ def apply_filters(df: pl.DataFrame, filter_conditions: List[Dict[str, Any]]) -> 
     if not filter_conditions:
         return df
     
+    print(f"Applying filters: {filter_conditions}")
     result_df = df
     
     for condition in filter_conditions:
@@ -46,8 +47,16 @@ def apply_filters(df: pl.DataFrame, filter_conditions: List[Dict[str, Any]]) -> 
             continue
             
         try:
+            print(f"Applying filter: {column} {operator} {value}")
             if operator == 'eq':
-                result_df = result_df.filter(pl.col(column) == value)
+                try:
+                    # Try to convert to number for numeric comparison
+                    num_value = float(value)
+             
+                    result_df = result_df.filter(pl.col(column) == num_value)
+                except ValueError:
+                    # Fall back to string comparison if not a number          
+                    result_df = result_df.filter(pl.col(column) == value)
             elif operator == 'gt':
                 try:
                     num_value = float(value)
