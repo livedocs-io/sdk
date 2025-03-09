@@ -34,6 +34,7 @@ from livedocs.types import (
     QueryResultMetadata,
     Schema,
 )
+from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.utils.common import (
     PROTECTED_VARS,
     _capture_exceptions,
@@ -206,6 +207,7 @@ class Livedocs:
         limit=10,
         offset=0,
         use_cache=True,
+        table_metadata=None,
     ) -> tuple[pl.DataFrame, str]:
         """
         Executes a query on a given datasource and returns the result as a Polars DataFrame and JSON string.
@@ -218,7 +220,7 @@ class Livedocs:
             limit (int, optional): The number of rows to return. Defaults to 10.
             offset (int, optional): The offset for the rows to return. Defaults to 0.
             use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
-
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
         Returns:
             tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
         """
@@ -235,7 +237,13 @@ class Livedocs:
                 final_query, datasource, dataframe, use_cache
             )
             query_span.finish()
-
+            
+            # Apply table operations
+            applied_metadata = None
+            if table_metadata:
+                df = apply_table_operations(df, table_metadata)
+                applied_metadata = table_metadata
+                
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
@@ -248,6 +256,7 @@ class Livedocs:
                     offset=offset,
                     total_rows=len(df),
                     cache_info=cache_info,
+                    applied_metadata=applied_metadata,
                 ),
             )
             payload = LivedocsResult(result)
@@ -418,6 +427,7 @@ class Livedocs:
         limit=10,
         offset=0,
         use_cache=True,
+        table_metadata=None,
     ) -> pl.DataFrame:
         """
         Gets a Polars table for a given datasource.
@@ -425,6 +435,10 @@ class Livedocs:
         Args:
             str_datasource (ElementDataSource): The datasource as a JSON string.
             dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+            limit (int, optional): The number of rows to return. Defaults to 10.
+            offset (int, optional): The offset for the rows to return. Defaults to 0.
+            use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
 
         Returns:
             pl.DataFrame: The resulting Polars DataFrame.
@@ -441,6 +455,12 @@ class Livedocs:
             )
             query_span.finish()
 
+            # Apply table operations
+            applied_metadata = None
+            if table_metadata:
+                df = apply_table_operations(df, table_metadata)
+                applied_metadata = table_metadata
+
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
@@ -453,6 +473,7 @@ class Livedocs:
                     offset=offset,
                     total_rows=len(df),
                     cache_info=cache_info,
+                    applied_metadata=applied_metadata,
                 ),
             )
             payload = LivedocsResult(result)
