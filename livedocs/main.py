@@ -15,7 +15,6 @@ from jinja2 import Template
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from IPython.display import display 
-import json
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -51,6 +50,7 @@ from livedocs.utils.postgres import (
 )
 from livedocs.utils.serialize import _json_serializer
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
+import json
 
 
 def _setup_sentry():
