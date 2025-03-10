@@ -240,8 +240,9 @@ class Livedocs:
             
             # Apply table operations
             applied_metadata = None
+            additional_metadata = {}
             if table_metadata:
-                df = apply_table_operations(df, table_metadata)
+                df, additional_metadata = apply_table_operations(df, table_metadata)
                 applied_metadata = table_metadata
                 
             # Prepare paginated results
@@ -257,6 +258,7 @@ class Livedocs:
                     total_rows=len(df),
                     cache_info=cache_info,
                     applied_metadata=applied_metadata,
+                    calculation_results=additional_metadata.get("calculation_results"),
                 ),
             )
             payload = LivedocsResult(result)
@@ -457,8 +459,9 @@ class Livedocs:
 
             # Apply table operations
             applied_metadata = None
+            additional_metadata = {}
             if table_metadata:
-                df = apply_table_operations(df, table_metadata)
+                df, additional_metadata = apply_table_operations(df, table_metadata)
                 applied_metadata = table_metadata
 
             # Prepare paginated results
@@ -474,6 +477,7 @@ class Livedocs:
                     total_rows=len(df),
                     cache_info=cache_info,
                     applied_metadata=applied_metadata,
+                    calculation_results=additional_metadata.get("calculation_results"),
                 ),
             )
             payload = LivedocsResult(result)

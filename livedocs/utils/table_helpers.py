@@ -1,5 +1,6 @@
 import polars as pl
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
+import json
 
 def apply_sort(df: pl.DataFrame, sort_operation: Dict[str, Any]) -> pl.DataFrame:
     """
@@ -105,7 +106,7 @@ def apply_filters(df: pl.DataFrame, filter_conditions: List[Dict[str, Any]]) -> 
     
     return result_df
 
-def apply_table_operations(df: pl.DataFrame, metadata: Dict[str, Any]) -> pl.DataFrame:
+def apply_table_operations(df: pl.DataFrame, metadata: Dict[str, Any]) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
     Apply all table operations from metadata to a DataFrame.
     
@@ -114,12 +115,13 @@ def apply_table_operations(df: pl.DataFrame, metadata: Dict[str, Any]) -> pl.Dat
         metadata: Table metadata containing operations
     
     Returns:
-        Processed DataFrame
+        Tuple of processed DataFrame and additional metadata
     """
     if not metadata:
-        return df
+        return df, {}
     
     result_df = df
+    additional_metadata = {}
     
     # Apply filters first
     if "filters" in metadata and metadata["filters"]:
@@ -134,9 +136,9 @@ def apply_table_operations(df: pl.DataFrame, metadata: Dict[str, Any]) -> pl.Dat
         # Note: calculations don't modify the dataframe, they produce stats
         # Calculate and return results separately
         calculation_results = _compute_calculations(result_df, metadata["calculations"])
-        # Could attach to result metadata if needed
+        additional_metadata["calculation_results"] = calculation_results
     
-    return result_df
+    return result_df, additional_metadata
 
 def _get_column_types(df: pl.DataFrame) -> Dict[str, str]:
     """
@@ -195,7 +197,7 @@ def _compute_calculations(df: pl.DataFrame, calculations: List[Dict[str, Any]]) 
     
     for calc in calculations:
         column = calc.get('column')
-        calc_type = calc.get('type')
+        calc_type = calc.get('calculation_type')
         
         if not column or not calc_type or column not in df.columns:
             continue

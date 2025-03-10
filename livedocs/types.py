@@ -34,6 +34,7 @@ class QueryResultMetadata(TypedDict, total=False):
     total_rows: int
     cache_info: CacheInfo
     applied_metadata: Optional[Dict[str, Any]]
+    calculation_results: Optional[Dict[str, Dict[str, Any]]]
 
 
 class LivedocsResultInterface(ABC):
