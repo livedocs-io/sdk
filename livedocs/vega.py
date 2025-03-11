@@ -864,7 +864,7 @@ def main_chart(
 
         print(subplots)
 
-        ## Subplots
+        # Subplots
         h_subplot_settings=subplots.get("horizontal", {})
         h_subplot_field=h_subplot_settings.get("field", "none")
         h_subplot_wrap=h_subplot_settings.get("wrap", False)
@@ -878,6 +878,22 @@ def main_chart(
         v_subplot_field=h_subplot_settings.get("field", "none")
         v_subplot_linkYAxis=h_subplot_settings.get("linkYAxis", True)
 
+
+        # Make facet plot
+
+        facet=None
+
+        if h_subplot_field!="none":
+            facet=alt.Facet(
+                field=h_subplot_field,
+                # columns=h_subplot_cols
+                # if h_subplot_wrap
+                # else alt.Undefined,
+                sort=h_subplot_sort,
+                bin=alt.Bin(maxbins=h_subplot_bin_count)
+                if h_subplot_bin_bool
+                else alt.Undefined
+            )
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -901,8 +917,7 @@ def main_chart(
                             select, opacity_encoding, alt.value(0.3)
                         ),
                         strokeWidth=conditional_stroke,
-
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -921,7 +936,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1242,9 +1257,12 @@ def main_chart(
                     )
                 )
 
+        
+
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
         chart = alt.layer(*inner_layers)
+        
 
     for t in transform:
         if "calculate" in t:
@@ -1255,17 +1273,40 @@ def main_chart(
     # Add scale resolution
     chart = chart.resolve_scale(color="independent", y="shared")
 
-    chart = chart.properties(
-        width="container",
-        height="container",
-        usermeta={
+    if facet:
+        chart = chart.properties(
+            width=200,
+            height=200,
+        )   
+    else:
+        chart = chart.properties(
+            width="container",
+            height="container",
+            usermeta={
+                "chartType": "main",
+                "chartSettings": usermeta,
+                "styleSettings": style_settings,
+                "colorGroups": color_groups,
+                "subplots": subplots
+                }
+            )
+
+
+    # Facet if required
+    if facet:
+        print(facet)
+        chart=chart.facet(facet, 
+                columns=h_subplot_cols
+                if h_subplot_wrap
+                else alt.Undefined,
+                usermeta={
             "chartType": "main",
             "chartSettings": usermeta,
             "styleSettings": style_settings,
             "colorGroups": color_groups,
             "subplots": subplots,
-        },
-    )
+        }
+        )
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
