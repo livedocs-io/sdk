@@ -6,16 +6,13 @@ import tempfile
 from typing import Dict, List
 
 import pandas as pd
-from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 import polars as pl
 import requests
 import sentry_sdk
 from duckdb import CatalogException
-from jinja2 import Template
 from google.cloud import bigquery
 from google.oauth2 import service_account
-from IPython.display import display 
-import json
+from jinja2 import Template
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -34,6 +31,7 @@ from livedocs.types import (
     QueryResultMetadata,
     Schema,
 )
+from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
     PROTECTED_VARS,
     _capture_exceptions,
@@ -49,6 +47,7 @@ from livedocs.utils.postgres import (
     write_df_to_table,
 )
 from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 
 
@@ -206,6 +205,7 @@ class Livedocs:
         limit=10,
         offset=0,
         use_cache=True,
+        table_metadata=None,
     ) -> tuple[pl.DataFrame, str]:
         """
         Executes a query on a given datasource and returns the result as a Polars DataFrame and JSON string.
@@ -218,7 +218,7 @@ class Livedocs:
             limit (int, optional): The number of rows to return. Defaults to 10.
             offset (int, optional): The offset for the rows to return. Defaults to 0.
             use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
-
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
         Returns:
             tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
         """
@@ -236,6 +236,13 @@ class Livedocs:
             )
             query_span.finish()
 
+            # Apply table operations
+            applied_metadata = None
+            additional_metadata = {}
+            if table_metadata:
+                df, additional_metadata = apply_table_operations(df, table_metadata)
+                applied_metadata = table_metadata
+
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
@@ -248,6 +255,8 @@ class Livedocs:
                     offset=offset,
                     total_rows=len(df),
                     cache_info=cache_info,
+                    applied_metadata=applied_metadata,
+                    calculation_results=additional_metadata.get("calculation_results"),
                 ),
             )
             payload = LivedocsResult(result)
@@ -418,6 +427,7 @@ class Livedocs:
         limit=10,
         offset=0,
         use_cache=True,
+        table_metadata=None,
     ) -> pl.DataFrame:
         """
         Gets a Polars table for a given datasource.
@@ -425,6 +435,10 @@ class Livedocs:
         Args:
             str_datasource (ElementDataSource): The datasource as a JSON string.
             dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+            limit (int, optional): The number of rows to return. Defaults to 10.
+            offset (int, optional): The offset for the rows to return. Defaults to 0.
+            use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
 
         Returns:
             pl.DataFrame: The resulting Polars DataFrame.
@@ -441,6 +455,13 @@ class Livedocs:
             )
             query_span.finish()
 
+            # Apply table operations
+            applied_metadata = None
+            additional_metadata = {}
+            if table_metadata:
+                df, additional_metadata = apply_table_operations(df, table_metadata)
+                applied_metadata = table_metadata
+
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
@@ -453,6 +474,8 @@ class Livedocs:
                     offset=offset,
                     total_rows=len(df),
                     cache_info=cache_info,
+                    applied_metadata=applied_metadata,
+                    calculation_results=additional_metadata.get("calculation_results"),
                 ),
             )
             payload = LivedocsResult(result)
@@ -669,7 +692,7 @@ class Livedocs:
             raise RuntimeError(f"Error executing query: {e}")
 
         return result
-    
+
     def _query_bigquery(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
@@ -703,11 +726,14 @@ class Livedocs:
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
 
-
         try:
             # Setup: Create BigQuery client with the given credentials
-            credentials = service_account.Credentials.from_service_account_info(service_account_parsed)
-            client = bigquery.Client(credentials=credentials, project=outer_parsed["project_id"])
+            credentials = service_account.Credentials.from_service_account_info(
+                service_account_parsed
+            )
+            client = bigquery.Client(
+                credentials=credentials, project=outer_parsed["project_id"]
+            )
 
             # Execute query
             query_job = client.query(query)
@@ -824,7 +850,7 @@ class Livedocs:
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
-    
+
     def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
         Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
@@ -899,8 +925,7 @@ class Livedocs:
                 return payload
         except Exception as e:
             raise RuntimeError(f"DBSave Error: {e}")
-    
-    
+
     def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
         Writes a DataFrame to a BigQuery database.
@@ -932,13 +957,15 @@ class Livedocs:
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
 
-       
-
         try:
             qualified_table_name = f"{outer_parsed['project_id']}.{save_config['schema_name']}.{save_config['table_name']}"
 
-            credentials = service_account.Credentials.from_service_account_info(service_account_parsed)
-            client = bigquery.Client(credentials=credentials, project=outer_parsed["project_id"])
+            credentials = service_account.Credentials.from_service_account_info(
+                service_account_parsed
+            )
+            client = bigquery.Client(
+                credentials=credentials, project=outer_parsed["project_id"]
+            )
 
             result = write_df_to_bigquery(
                 df,
