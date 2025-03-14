@@ -28,11 +28,13 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
-class QueryResultMetadata(TypedDict):
+class QueryResultMetadata(TypedDict, total=False):
     limit: int
     offset: int
     total_rows: int
     cache_info: CacheInfo
+    applied_metadata: Optional[Dict[str, Any]]
+    calculation_results: Optional[Dict[str, Dict[str, Any]]]
 
 
 class LivedocsResultInterface(ABC):
