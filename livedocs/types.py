@@ -250,6 +250,7 @@ class DBSaveConfig(TypedDict):
 # Vega Chart Spec
 
 class ReferenceLineSettings(TypedDict):
+    label: Optional[str]
     value: Optional[str]
     color: Optional[str]
     labelPosition: Optional[Literal["none", "outside", "top-left", "top-right", "bottom-left", "bottom-right"]]

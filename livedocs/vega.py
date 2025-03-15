@@ -1,5 +1,6 @@
 import json
 import uuid
+import dateutil.parser
 
 import altair as alt
 import polars as pl
@@ -1667,6 +1668,15 @@ def create_x_encoding(
                 else alt.Undefined,
                 labelOverlap=True,
             ),
+            scale=alt.Scale(
+                domainMax= iso_to_alt_datetime(axis_settings["max"]) 
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=iso_to_alt_datetime(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", alt.Undefined),
+            ),
         )
     else:
         return alt.X(
@@ -1724,6 +1734,15 @@ def create_y_encoding(
                 else alt.Undefined,
                 labelOverlap=True,
             ),
+             scale=alt.Scale(
+                domainMax=iso_to_alt_datetime(axis_settings["max"]) 
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=iso_to_alt_datetime(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", alt.Undefined),
+            ),
         )
     else:
         return alt.Y(
@@ -1770,6 +1789,18 @@ def get_axis_format(timeunit: str) -> str:
     }
     return format_map.get(timeunit, "")
 
+
+def iso_to_alt_datetime(iso_string):
+    """Convert ISO date string to alt.DateTime object"""
+    dt = dateutil.parser.parse(iso_string)
+    return alt.DateTime(
+        year=dt.year,
+        month=dt.month,
+        date=dt.day,
+        hours=dt.hour,
+        minutes=dt.minute,
+        seconds=dt.second
+    )
 
 """
 Picks a random field from a given schema to be used in a secondary axis
