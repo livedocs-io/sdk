@@ -870,7 +870,7 @@ def main_chart(
         h_subplot_wrap=h_subplot_settings.get("wrap", False)
         h_subplot_cols=h_subplot_settings.get("columns", 3)
         h_subplot_sort=h_subplot_settings.get("sort", "ascending")
-        h_subplot_bin_bool=h_subplot_settings.get("bin", True)
+        h_subplot_bin_bool=h_subplot_settings.get("bin", False)
         h_subplot_bin_count=h_subplot_settings.get("bin_count", 5)
 
         
