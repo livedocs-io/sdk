@@ -863,8 +863,6 @@ def main_chart(
             axis2_title=y_field
         )
 
-        print(subplots)
-
         # Subplots
         h_subplot_settings=subplots.get("horizontal", {})
         h_subplot_field=h_subplot_settings.get("field", "none")
@@ -895,6 +893,33 @@ def main_chart(
                 if h_subplot_bin_bool
                 else alt.Undefined
             )
+
+        # Reference line
+        print(style_settings)
+
+        x_ref=style_settings.get("xAxis", {}).get("referenceLines")[0]
+        x_ref_col=x_ref.get("color", "#93715A")
+        x_ref_label=x_ref.get("label", "Reference Line")
+        x_ref_label_angle=x_ref.get("labelAngle", 0)
+        x_ref_label_position=x_ref.get("labelPosition", "none")
+        x_ref_line_style=x_ref.get("lineStyle", "solid") #solid, dashed, dotted
+        x_ref_line_width=x_ref.get("lineWidth", 1)
+        x_ref_value=x_ref.get("value", "")
+
+        x_ref_stroke_dash={"solid":[0,0],
+                           "dashed":[5,5],
+                           "dotted":[2,5]}
+
+        ref_line=alt.Chart(df).mark_rule(
+            color=x_ref_col,
+            # label=x_ref_label,
+            # labelAngle=x_ref_label_angle,
+            # labelPosition=x_ref_label_position,
+            strokeDash=x_ref_stroke_dash[x_ref_line_style],
+            strokeWidth=x_ref_line_width
+        ).encode(
+            x=alt.datum(x_ref_value)
+        )
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1262,6 +1287,8 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
+        if x_ref:
+            inner_layers.append(ref_line)
         chart = alt.layer(*inner_layers)
         
 
