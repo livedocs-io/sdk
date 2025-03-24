@@ -897,29 +897,58 @@ def main_chart(
         # Reference line
         print(style_settings)
 
-        x_ref=style_settings.get("xAxis", {}).get("referenceLines")[0]
-        x_ref_col=x_ref.get("color", "#93715A")
-        x_ref_label=x_ref.get("label", "Reference Line")
-        x_ref_label_angle=x_ref.get("labelAngle", 0)
-        x_ref_label_position=x_ref.get("labelPosition", "none")
-        x_ref_line_style=x_ref.get("lineStyle", "solid") #solid, dashed, dotted
-        x_ref_line_width=x_ref.get("lineWidth", 1)
-        x_ref_value=x_ref.get("value", "")
+        x_style=style_settings.get("xAxis", {})
+        x_ref_list=x_style.get("referenceLines", [])
+        x_ref=None
 
-        x_ref_stroke_dash={"solid":[0,0],
-                           "dashed":[5,5],
-                           "dotted":[2,5]}
+        if len(x_ref_list)>0:
+            x_ref=x_style.get("referenceLines")[0]
+            x_ref_col=x_ref.get("color", "#93715A")
+            x_ref_label=x_ref.get("label", "Reference Line")
+            x_ref_label_angle=x_ref.get("labelAngle", 0)
+            x_ref_label_position=x_ref.get("labelPosition", "outside")
+            x_ref_line_style=x_ref.get("lineStyle", "solid") #solid, dashed, dotted
+            x_ref_line_width=x_ref.get("lineWidth", 1)
+            x_ref_value=x_ref.get("value", "")
 
-        ref_line=alt.Chart(df).mark_rule(
-            color=x_ref_col,
-            # label=x_ref_label,
-            # labelAngle=x_ref_label_angle,
-            # labelPosition=x_ref_label_position,
-            strokeDash=x_ref_stroke_dash[x_ref_line_style],
-            strokeWidth=x_ref_line_width
-        ).encode(
-            x=alt.datum(x_ref_value)
-        )
+            x_ref_stroke_dash={"solid":[0,0],
+                            "dashed":[5,5],
+                            "dotted":[2,5]}
+
+            x_ref_baseline={
+                            "outside":"bottom",
+                            "top-left":"bottom",
+                            "top-right":"bottom",
+                            "bottom-left":"top",
+                            "bottom-right":"top"
+                            }
+            x_ref_align={
+                            "outside":"center",
+                            "top-left":"right",
+                            "top-right":"left",
+                            "bottom-left":"right",
+                            "bottom-right":"left"
+                            }
+
+            ref_line=alt.Chart(df).mark_rule(
+                color=x_ref_col,
+                strokeDash=x_ref_stroke_dash[x_ref_line_style],
+                strokeWidth=x_ref_line_width
+            ).encode(
+                x=alt.datum(x_ref_value)
+            )
+
+            ref_line_label=ref_line.mark_text(
+                        baseline=x_ref_baseline[x_ref_label_position],
+                        align=x_ref_align[x_ref_label_position],
+                        size=12,
+                        angle=x_ref_label_angle,
+                        dx=-5,
+                        dy=5.5
+            ).encode(
+                        text=alt.value(x_ref_label),
+                        y=alt.value(0)
+            )
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1289,6 +1318,7 @@ def main_chart(
         inner_layers.append(base_layer)
         if x_ref:
             inner_layers.append(ref_line)
+            inner_layers.append(ref_line_label)
         chart = alt.layer(*inner_layers)
         
 
