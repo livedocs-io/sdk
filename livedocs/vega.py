@@ -22,6 +22,9 @@ from livedocs.utils.common import (
     _get_color_group_key,
     _get_user_defined_color,
     _get_user_defined_opacity,
+    REF_STROKE_DASH,
+    REF_BASELINE,
+    REF_ALIGN
 )
 
 """
@@ -895,34 +898,13 @@ def main_chart(
             )
 
         # Reference line
-        
+
         x_style=style_settings.get("xAxis", {})
         x_ref_list=x_style.get("referenceLines", [])
-        x_ref=None
         x_ref_chart_list = []
 
 
         if len(x_ref_list)>0:
-            x_ref=x_style.get("referenceLines")[0]
-
-            x_ref_stroke_dash={"solid":[0,0],
-                            "dashed":[5,5],
-                            "dotted":[2,5]}
-
-            x_ref_baseline={
-                            "outside":"bottom",
-                            "top-left":"bottom",
-                            "top-right":"bottom",
-                            "bottom-left":"top",
-                            "bottom-right":"top"
-                            }
-            x_ref_align={
-                            "outside":"center",
-                            "top-left":"right",
-                            "top-right":"left",
-                            "bottom-left":"right",
-                            "bottom-right":"left"
-                            }
 
             for line in x_ref_list:
                 if line['labelPosition']=="none":
@@ -930,7 +912,7 @@ def main_chart(
 
                 ref_line=alt.Chart(df).mark_rule(
                     color=line.get("color", "#93715A"),
-                    strokeDash=x_ref_stroke_dash[line.get("lineStyle", "solid")],
+                    strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
                     strokeWidth=line.get("lineWidth", 1)
                 ).encode(
                     x=alt.datum(line.get("value", ""))
@@ -939,8 +921,8 @@ def main_chart(
                 x_ref_chart_list.append(ref_line)
 
                 label=ref_line.mark_text(
-                            baseline=x_ref_baseline[line.get("labelPosition", "outside")],
-                            align=x_ref_align[line.get("labelPosition", "outside")],
+                            baseline=REF_BASELINE[line.get("labelPosition", "outside")],
+                            align=REF_ALIGN[line.get("labelPosition", "outside")],
                             size=12,
                             angle=line.get("labelAngle", 0),
                             dx=-5,

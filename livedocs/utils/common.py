@@ -31,6 +31,25 @@ _LIVEDOCS_COLORS = [
 
 PROTECTED_VARS = {"run_context", "last_scheduled_run"}
 
+REF_STROKE_DASH={"solid":[0,0],
+                "dashed":[5,5],
+                "dotted":[2,5]}
+
+REF_BASELINE={
+                "outside":"bottom",
+                "top-left":"bottom",
+                "top-right":"bottom",
+                "bottom-left":"top",
+                "bottom-right":"top"
+                }
+REF_ALIGN={
+                "outside":"center",
+                "top-left":"right",
+                "top-right":"left",
+                "bottom-left":"right",
+                "bottom-right":"left"
+                }
+
 def get_run_context() -> str:
     current_run_context = "edit_mode"
     match os.getenv("RUN_CONTEXT"):
