@@ -27,6 +27,77 @@ from livedocs.utils.common import (
     REF_ALIGN
 )
 
+def num_converter(num):
+    try:
+        return float(num)
+    except ValueError:
+        pass
+    
+    try:
+        return int(num)
+    except ValueError:
+        pass
+
+    try:
+        return iso_to_alt_datetime(num)
+    except ValueError:
+        pass
+
+    return num
+
+# Reference lines
+
+"""
+Generates an altair line plot and altair label plot to layer on base plot
+"""
+def create_line(
+        df: pl.DataFrame,
+        axis: str, # "x" or "y"
+        style_settings: StyleSettings,
+):
+    
+    if axis not in ["x", "y"]:
+        raise ValueError("Invalid value for 'axis'. Expected 'x' or 'y'.")
+    
+    ref_list=style_settings.get(f"{axis}Axis", {}).get("referenceLines", [])
+    ref_chart_list = []
+
+    if len(ref_list)>0:
+
+        for line in ref_list:
+            val=num_converter(line.get("value", ""))
+
+            if line['labelPosition']=="none":
+                line['labelPosition']="outside"
+
+            ref_line=alt.Chart(df).mark_rule(
+                color=line.get("color", "#93715A"),
+                strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
+                strokeWidth=line.get("lineWidth", 1)
+            ).encode(
+                **{axis:alt.datum(val)}
+            )
+
+            ref_chart_list.append(ref_line)
+
+            label=ref_line.mark_text(
+                        baseline=REF_BASELINE[line.get("labelPosition", "outside")],
+                        align=REF_ALIGN[line.get("labelPosition", "outside")],
+                        size=12,
+                        angle=line.get("labelAngle", 0),
+                        dx=-5,
+                        dy=5.5
+            ).encode(
+                        text=alt.value(line.get("label", "Reference Line")),
+                        **({"y":alt.value(0)} if axis=="x" else {"x":alt.value(0)})
+            )
+
+            print(f"Axis: {axis}\nLine: {line}\n Label: {label}")
+
+            ref_chart_list.append(label)
+
+    return ref_chart_list
+
 """
 Helper function, never used in production environments. 
 It removes the data key from the vega spec dict for clearer logging. 
@@ -111,6 +182,8 @@ def convert_datetime_to_iso(df):
     for column in df.select_dtypes(include=["datetime64"]).columns:
         df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
     return df
+
+
 
 
 """
@@ -897,42 +970,7 @@ def main_chart(
                 else alt.Undefined
             )
 
-        # Reference line
 
-        x_style=style_settings.get("xAxis", {})
-        x_ref_list=x_style.get("referenceLines", [])
-        x_ref_chart_list = []
-
-
-        if len(x_ref_list)>0:
-
-            for line in x_ref_list:
-                if line['labelPosition']=="none":
-                    line['labelPosition']="outside"
-
-                ref_line=alt.Chart(df).mark_rule(
-                    color=line.get("color", "#93715A"),
-                    strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
-                    strokeWidth=line.get("lineWidth", 1)
-                ).encode(
-                    x=alt.datum(line.get("value", ""))
-                )
-
-                x_ref_chart_list.append(ref_line)
-
-                label=ref_line.mark_text(
-                            baseline=REF_BASELINE[line.get("labelPosition", "outside")],
-                            align=REF_ALIGN[line.get("labelPosition", "outside")],
-                            size=12,
-                            angle=line.get("labelAngle", 0),
-                            dx=-5,
-                            dy=5.5
-                ).encode(
-                            text=alt.value(line.get("label", "Reference Line")),
-                            y=alt.value(0)
-                )
-
-                x_ref_chart_list.append(label)
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1296,14 +1334,13 @@ def main_chart(
                     )
                 )
 
-        
+        x_lines=create_line(df, "x", style_settings)
+        y_lines=create_line(df, "y", style_settings)
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
-        # if x_ref:
-        #     inner_layers.append(*x_ref_chart_list)
-        print(x_ref_chart_list)
-        chart = alt.layer(*inner_layers, *x_ref_chart_list)
+        print(x_lines)
+        chart = alt.layer(*inner_layers, *x_lines, *y_lines)
         
 
     for t in transform:
