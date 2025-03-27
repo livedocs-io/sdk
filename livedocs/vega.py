@@ -22,81 +22,15 @@ from livedocs.utils.common import (
     _get_color_group_key,
     _get_user_defined_color,
     _get_user_defined_opacity,
-    REF_STROKE_DASH,
-    REF_BASELINE,
-    REF_ALIGN
+    get_axis_format,
+    iso_to_alt_datetime,
+    create_line
+    # REF_STROKE_DASH,
+    # REF_BASELINE,
+    # REF_ALIGN
 )
 
-def num_converter(num):
-    try:
-        return float(num)
-    except ValueError:
-        pass
-    
-    try:
-        return int(num)
-    except ValueError:
-        pass
 
-    try:
-        return iso_to_alt_datetime(num)
-    except ValueError:
-        pass
-
-    return num
-
-# Reference lines
-
-"""
-Generates an altair line plot and altair label plot to layer on base plot
-"""
-def create_line(
-        df: pl.DataFrame,
-        axis: str, # "x" or "y"
-        style_settings: StyleSettings,
-):
-    
-    if axis not in ["x", "y"]:
-        raise ValueError("Invalid value for 'axis'. Expected 'x' or 'y'.")
-    
-    ref_list=style_settings.get(f"{axis}Axis", {}).get("referenceLines", [])
-    ref_chart_list = []
-
-    if len(ref_list)>0:
-
-        for line in ref_list:
-            val=num_converter(line.get("value", ""))
-
-            if line['labelPosition']=="none":
-                line['labelPosition']="outside"
-
-            ref_line=alt.Chart(df).mark_rule(
-                color=line.get("color", "#93715A"),
-                strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
-                strokeWidth=line.get("lineWidth", 1)
-            ).encode(
-                **{axis:alt.datum(val)}
-            )
-
-            ref_chart_list.append(ref_line)
-
-            label=ref_line.mark_text(
-                        baseline=REF_BASELINE[line.get("labelPosition", "outside")],
-                        align=REF_ALIGN[line.get("labelPosition", "outside")],
-                        size=12,
-                        angle=line.get("labelAngle", 0),
-                        dx=-5,
-                        dy=5.5
-            ).encode(
-                        text=alt.value(line.get("label", "Reference Line")),
-                        **({"y":alt.value(0)} if axis=="x" else {"x":alt.value(0)})
-            )
-
-            print(f"Axis: {axis}\nLine: {line}\n Label: {label}")
-
-            ref_chart_list.append(label)
-
-    return ref_chart_list
 
 """
 Helper function, never used in production environments. 
@@ -167,21 +101,6 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
         case _:
             return "unknown datasource"
 
-
-"""
-Maps the Livedocs primitive type to it's respective Vega field type
-"""
-
-
-def map_datatype_to_scale_type(type: str) -> str:
-    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
-    return type_mapping.get(type, "nominal")
-
-
-def convert_datetime_to_iso(df):
-    for column in df.select_dtypes(include=["datetime64"]).columns:
-        df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
-    return df
 
 
 
@@ -627,24 +546,12 @@ def histogram(
         .resolve_scale(color="independent", y="shared")
     )
 
-    # chart = alt.layer(outer_layer).properties(
-    #     width="container",
-    #     height="container",
-    #     usermeta={
-    #         "chartType": "histogram",
-    #         "histogramSettings": usermeta,
-    #         "styleSettings": style,
-    #         "subplots": subplots,
-    #     },
-    # )
-
     chart=alt.layer(outer_layer)
 
     x_lines=create_line(df, "x", style)
     y_lines=create_line(df, "y", style)
 
     # Create the layer and add to inner layers
-    # inner_layers.append(base_layer)
     chart = alt.layer(chart, *x_lines, *y_lines).properties(
         width="container",
         height="container",
@@ -655,10 +562,6 @@ def histogram(
             "subplots": subplots,
         },
     )
-
-
-    # print(x_lines)
-    # print(style)
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
@@ -1394,7 +1297,6 @@ def main_chart(
 
     # Facet if required
     if facet:
-        print(facet)
         chart=chart.facet(facet, 
                 columns=h_subplot_cols
                 if h_subplot_wrap
@@ -1881,32 +1783,19 @@ def create_y_encoding(
             ),
         )
 
-
-def get_axis_format(timeunit: str) -> str:
-    format_map = {
-        "year": "%Y",
-        "yearquarter": "%Y Q%q",
-        "yearmonth": "%b %Y",
-        "yearweek": "%Y W%W",
-        "yearmonthdate": "%b %d, %Y",
-        "yearmonthdatehours": "%b %d, %Y %I:%M %p",
-        "yearmonthdatehoursminutes": "%b %d, %Y %I:%M",
-        "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
-    }
-    return format_map.get(timeunit, "")
+"""
+Maps the Livedocs primitive type to it's respective Vega field type
+"""
+def map_datatype_to_scale_type(type: str) -> str:
+    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
+    return type_mapping.get(type, "nominal")
 
 
-def iso_to_alt_datetime(iso_string):
-    """Convert ISO date string to alt.DateTime object"""
-    dt = dateutil.parser.parse(iso_string)
-    return alt.DateTime(
-        year=dt.year,
-        month=dt.month,
-        date=dt.day,
-        hours=dt.hour,
-        minutes=dt.minute,
-        seconds=dt.second
-    )
+def convert_datetime_to_iso(df):
+    for column in df.select_dtypes(include=["datetime64"]).columns:
+        df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return df
+
 
 """
 Picks a random field from a given schema to be used in a secondary axis
