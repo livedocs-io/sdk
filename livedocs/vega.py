@@ -277,7 +277,7 @@ def pie(
     df: pl.DataFrame,
     settings: PieChartSpec,
     schema: dict,
-    style: StyleSettings, ###
+    style: StyleSettings,
     subplots: SubplotSettings,
 ) -> tuple[str, str]:
     usermeta = settings
@@ -627,7 +627,25 @@ def histogram(
         .resolve_scale(color="independent", y="shared")
     )
 
-    chart = alt.layer(outer_layer).properties(
+    # chart = alt.layer(outer_layer).properties(
+    #     width="container",
+    #     height="container",
+    #     usermeta={
+    #         "chartType": "histogram",
+    #         "histogramSettings": usermeta,
+    #         "styleSettings": style,
+    #         "subplots": subplots,
+    #     },
+    # )
+
+    chart=alt.layer(outer_layer)
+
+    x_lines=create_line(df, "x", style)
+    y_lines=create_line(df, "y", style)
+
+    # Create the layer and add to inner layers
+    # inner_layers.append(base_layer)
+    chart = alt.layer(chart, *x_lines, *y_lines).properties(
         width="container",
         height="container",
         usermeta={
@@ -637,6 +655,10 @@ def histogram(
             "subplots": subplots,
         },
     )
+
+
+    # print(x_lines)
+    # print(style)
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
@@ -1339,7 +1361,6 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
-        print(x_lines)
         chart = alt.layer(*inner_layers, *x_lines, *y_lines)
         
 
@@ -1693,6 +1714,11 @@ def swapped_main_chart(
 
     chart = alt.layer(base_layer)
 
+    x_lines=create_line(df, "x", style_settings)
+    y_lines=create_line(df, "y", style_settings)
+
+    chart = alt.layer(chart, *x_lines, *y_lines)
+
     for t in transform:
         if "calculate" in t:
             chart = chart.transform_calculate(**t)
@@ -1711,6 +1737,8 @@ def swapped_main_chart(
             "subplots": subplots,
         },
     )
+
+
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
