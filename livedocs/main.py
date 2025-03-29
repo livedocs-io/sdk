@@ -30,6 +30,7 @@ from livedocs.types import (
     QueryResult,
     QueryResultMetadata,
     Schema,
+    JsonDisplay,
 )
 from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
@@ -172,27 +173,19 @@ class Livedocs:
     @_capture_exceptions
     def secrets(self, key, default_value="") -> str:
         """
-        Accesses user-defined secrets.
-
-        Usage: livedocs.secrets('CLIENT_ID', 'some_value')
-
+        Access user-defined secrets with default value if not found.
+        
         Args:
-            key (str): The secret key.
-            default_value (str, optional): The default value if the secret is not found. Defaults to "".
-
+            key: The key of the secret to access
+            default_value: Value to return if the secret is not found
+            
         Returns:
-            str: The secret value.
+            The secret value or default value if not found
         """
-        if self._secrets.get(key):
-            return self._secrets.get(key)
-        else:
-            result = _fetch_credentials(self._report_id, self._token)
-            secrets = result.get("workspace_secrets", {})
-            secrets_dict = {
-                key: secret_info["value"] for key, secret_info in secrets.items()
-            }
-            self._secrets = secrets_dict
-            return self._secrets.get(key, default_value)
+        if not hasattr(self, "_secrets"):
+            return default_value
+        
+        return self._secrets.get(key, default_value)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -1085,3 +1078,18 @@ class Livedocs:
             raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
 
         return json.dumps(schema, default=str, separators=(",", ":"))
+
+    @_capture_exceptions
+    def process_single_value(self, config: str, context: dict = None) -> dict:
+        """
+        Process a SingleValue element with formatting and comparison calculations
+        
+        Args:
+            config (str): JSON string containing single value configuration
+            context (dict, optional): Context containing variables. Defaults to None.
+            
+        Returns:
+            JsonDisplay: Formatted result with main value and comparison data
+        """
+        result = process_single_value(config, context)
+        return JsonDisplay(result)
