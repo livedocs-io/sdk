@@ -132,6 +132,28 @@ class MsgPackDisplay(DisplayObject):
 
         data = {
             "application/vnd.msgpack": packed,
+            "application/json": self.data,
+        }
+
+        return data, self.metadata
+
+
+class JsonDisplay(DisplayObject):
+    """
+    Simple JSON display class for IPython - no msgpack, just JSON
+    """
+
+    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+        super().__init__(data, metadata=metadata)
+        self.data = data
+        self.metadata = metadata or {}
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """
+        Return the data as JSON only
+        """
+        data = {
+            "application/json": self.data,
         }
 
         return data, self.metadata
@@ -425,4 +447,5 @@ __all__ = [
     "LivedocsChartSpec",
     "Spec",
     "DBSaveConfig",
+    "JsonDisplay",
 ]
