@@ -1143,7 +1143,7 @@ def main_chart(
                     .add_params(nearest)
                 )
 
-                
+
                 series_list = settings.get('yAxis', {}).get('primary', [])
                 if len(series_list)==1:
                     base_layer = alt.layer(lines, points, rules)
@@ -1274,9 +1274,7 @@ def main_chart(
 
     ## For tooltips on charts with added series
     series_list = settings.get('yAxis', {}).get('primary', [])
-    print(series_list)
     if len(series_list)>1:
-        print(f"Series list: {series_list}")
 
         nearest2 = alt.selection_point(
         nearest=True,
@@ -1290,8 +1288,6 @@ def main_chart(
             
         tooltip_list = []
         for col in series_list:
-            print(f"\n\nCol: {col}\n\nX-field: {x_field}\n\nY-field: {y_field}\n")
-            print(f"\n\ncol[field]: {col['field']}\n\ncol['type']: {col['type']}\n\ncol[agg]: {col['aggregate']}\n\n")
             if col['field']=='none':
                 tooltip=alt.Tooltip(alt.Undefined)
             else:    
@@ -1302,12 +1298,7 @@ def main_chart(
                     if col['aggregate']!='none'
                     else alt.Undefined
                 )
-
-            print(f"tooltip: {tooltip}\n\n")
             tooltip_list.append(tooltip)
-
-
-        print(f"\n\ntooltip list: {tooltip_list}")
 
         final_rule=alt.Chart(df).mark_rule().encode(
             x=x_encoding,
@@ -1315,14 +1306,9 @@ def main_chart(
             opacity=alt.condition(nearest2, alt.value(1), alt.value(0))
         ).add_params(nearest2)
 
-
         chart = alt.layer(*inner_layers, *x_lines, *y_lines, final_rule)
 
-
-
     else:
-        print("4")
-
         chart = alt.layer(*inner_layers, *x_lines, *y_lines)
         
 
@@ -1333,8 +1319,6 @@ def main_chart(
             chart = chart.transform_filter(t["filter"])
 
     # Add scale resolution
-    print("5")
-
     chart = chart.resolve_scale(color="independent", y="shared")
 
     if facet:
@@ -1370,8 +1354,6 @@ def main_chart(
             "subplots": subplots,
         }
         )
-    print("6")
-    print(chart)
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
 
@@ -1390,7 +1372,6 @@ def swapped_main_chart(
     style_settings: StyleSettings,
     subplots: SubplotSettings,
 ) -> tuple[str, str]:
-    print("uh-oh")
     usermeta = settings
 
     legend_show = style_settings.get("legend", {}).get("show", True)
