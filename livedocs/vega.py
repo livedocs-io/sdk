@@ -1299,9 +1299,18 @@ def main_chart(
                     else alt.Undefined
                 )
             tooltip_list.append(tooltip)
-        tooltip_list.append(
-            alt.Tooltip(x_field)
+
+        tooltip_list.insert(
+            0, 
+            alt.Tooltip(
+                field=x_field,
+                type=x_type,
+                title=x_field,
+                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined,
+                format=alt.Undefined
         )
+        )
+            # alt.Tooltip(x_field)
 
         final_rule=alt.Chart(df).mark_rule().encode(
             x=x_encoding,
