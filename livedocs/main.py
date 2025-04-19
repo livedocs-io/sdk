@@ -49,6 +49,7 @@ from livedocs.utils.postgres import (
 )
 from livedocs.utils.serialize import _json_serializer
 from livedocs.utils.table_helpers import apply_table_operations
+from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 
 
@@ -174,17 +175,17 @@ class Livedocs:
     def secrets(self, key, default_value="") -> str:
         """
         Access user-defined secrets with default value if not found.
-        
+
         Args:
             key: The key of the secret to access
             default_value: Value to return if the secret is not found
-            
+
         Returns:
             The secret value or default value if not found
         """
         if not hasattr(self, "_secrets"):
             return default_value
-        
+
         return self._secrets.get(key, default_value)
 
     @_capture_exceptions
@@ -1083,11 +1084,11 @@ class Livedocs:
     def process_single_value(self, config: str, context: dict = None) -> dict:
         """
         Process a SingleValue element with formatting and comparison calculations
-        
+
         Args:
             config (str): JSON string containing single value configuration
             context (dict, optional): Context containing variables. Defaults to None.
-            
+
         Returns:
             JsonDisplay: Formatted result with main value and comparison data
         """
