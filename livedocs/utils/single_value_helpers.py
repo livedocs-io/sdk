@@ -189,40 +189,29 @@ def process_single_value(config: str, context: Optional[dict] = None) -> Dict[st
             return result
 
         compare_var_name = single_value_config.get("compareVariable")
+        
+        # Validation: Prevent using the same variable for both main value and comparison
+        if compare_var_name == var_name:
+            result["error"] = "Cannot use the same variable for both value and comparison"
+            return result
+            
         if not compare_var_name or compare_var_name not in variable_context:
             result["error"] = f"Comparison variable '{compare_var_name}' not found"
             return result
 
         compare_value = variable_context[compare_var_name]
 
-        # Normalize comparison type/ TODO: why?
-        compare_type_map = {
-            "Value": "compare_value",
-            "Percent": "compare_percent",
-            "AbsoluteChange": "absolute_change",
-        }
-
-        raw_compare_type = single_value_config.get("compareType", "Value")
-        # TODO: why?
-        if "." in raw_compare_type:
-            raw_compare_type = raw_compare_type.split(".")[1]
-        compare_type = compare_type_map.get(raw_compare_type, "compare_value")
-
-        # Normalize comparison format
-        raw_format = single_value_config.get("comparisonFormat", "compare_value")
-        compare_format = (
-            "compare_value"
-            if raw_format == "standard"
-            else "absolute_change"
-            if raw_format == "absolute"
-            else raw_format
-        )
+        # Get comparison type directly - no mapping needed
+        compare_type = single_value_config.get("compareType", "compare_value")
+        
+        # Get comparison format directly
+        compare_format = single_value_config.get("comparisonFormat", "compare_value")
 
         # Calculate comparison
         comparison_result = process_comparison(
             main_value,
             compare_value,
-            single_value_config.get("compareType"),
+            compare_type,
             compare_format,
             fixed_decimals,
         )
