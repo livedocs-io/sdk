@@ -50,6 +50,7 @@ from livedocs.utils.postgres import (
 from livedocs.utils.serialize import _json_serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
+from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
 
 
