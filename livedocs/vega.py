@@ -25,9 +25,6 @@ from livedocs.utils.common import (
     get_axis_format,
     iso_to_alt_datetime,
     create_line
-    # REF_STROKE_DASH,
-    # REF_BASELINE,
-    # REF_ALIGN
 )
 
 
@@ -1294,6 +1291,9 @@ def main_chart(
                 tooltip=alt.Tooltip(
                     field=col['field'],
                     type=col['type'],
+                    title=col['field']
+                    if col['aggregate'] == "none"
+                    else f"{col['aggregate']} of {col['field']}".title(),
                     aggregate=col['aggregate']
                     if col['aggregate']!='none'
                     else alt.Undefined
@@ -1310,7 +1310,6 @@ def main_chart(
                 format=alt.Undefined
         )
         )
-            # alt.Tooltip(x_field)
 
         final_rule=alt.Chart(df).mark_rule().encode(
             x=x_encoding,
@@ -1429,7 +1428,6 @@ def swapped_main_chart(
 
     y_field = settings["yAxis"]["field"]
     y_type = settings["yAxis"].get("type", map_datatype_to_scale_type(schema[y_field]))
-    # y_sort = settings["yAxis"].get("sort", "ascending")
     y_temporal_format = settings["yAxis"].get("temporalFormat")
     mark_type = settings["yAxis"].get("mark", "grouped_bar")
     y_aggregate = settings["yAxis"].get("aggregate", "none")
