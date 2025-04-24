@@ -109,6 +109,22 @@ class QueryCache:
         """
         self.cache.clear()
 
+    def pop(self, key: str) -> bool:
+        """
+        Removes a cache entry by key if it exists.
+
+        Args:
+            key (str): The cache key to remove
+
+        Returns:
+            bool: True if the key was found and removed, False otherwise
+        """
+        with self.lock:
+            if key in self.cache:
+                del self.cache[key]
+                return True
+            return False
+
     def _write_to_parquet(self, key: str, df: pl.DataFrame):
         """
         Writes a DataFrame to GCS as Parquet file.
