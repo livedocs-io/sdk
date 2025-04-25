@@ -771,7 +771,7 @@ class Livedocs:
                 query_with_path = query.replace(
                     file_name, f"read_csv_auto('{temp_file_path}')"
                 )
-            elif file_type in ["xls", "xlsx"]:
+            elif file_type == "xlsx":
                 sheet_name = file_info.get("layer_name", "Sheet1")
                 query_with_path = query.replace(
                     file_name, f"st_read('{temp_file_path}', layer='{sheet_name}')"
