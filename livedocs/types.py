@@ -132,7 +132,6 @@ class MsgPackDisplay(DisplayObject):
 
         data = {
             "application/vnd.msgpack": packed,
-            "application/json": self.data,
         }
 
         return data, self.metadata
