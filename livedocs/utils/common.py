@@ -29,7 +29,8 @@ _LIVEDOCS_COLORS = [
     "#7839ee",
 ]
 
-PROTECTED_VARS = {"run_context", "last_scheduled_run"}
+_LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
+
 
 def get_run_context() -> str:
     current_run_context = "edit_mode"
@@ -43,6 +44,7 @@ def get_run_context() -> str:
         case _:
             current_run_context = "unknown_run_context"
     return current_run_context
+
 
 def _capture_exceptions(func):
     @wraps(func)
@@ -223,6 +225,30 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
     return column_types
 
 
+def _setup_sentry():
+    """
+    Initializes Sentry for error tracking and performance monitoring.
+    """
+    try:
+        sentry_sdk.init(
+            dsn=os.getenv("VMLIB_SENTRY_DSN"),
+            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
+            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
+            environment=os.getenv("APP_ENV"),
+        )
+    except Exception as e:
+        raise f"Failed to initialize Sentry: {e}"
+
+
+def _setup_dirs():
+    """
+    Sets up the user files directory if it doesn't exist.
+    """
+    user_files_dir = os.getenv("LIVEDOCS_FILES_PATH")
+    if user_files_dir and not os.path.exists(user_files_dir):
+        os.makedirs(user_files_dir, exist_ok=True)
+
+
 __all__ = [
     "_LIVEDOCS_COLORS",
     "_fetch_credentials",
@@ -235,5 +261,7 @@ __all__ = [
     "_get_user_defined_opacity",
     "_capture_exceptions",
     "get_run_context",
-    "PROTECTED_VARS",
+    "_LIVEDOCS_PROTECTED_VARS",
+    "_setup_sentry",
+    "_setup_dirs",
 ]

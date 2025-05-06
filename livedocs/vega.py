@@ -22,6 +22,7 @@ from livedocs.utils.common import (
     _get_user_defined_color,
     _get_user_defined_opacity,
 )
+from livedocs.utils.debug import debug
 
 """
 Helper function, never used in production environments. 
@@ -75,9 +76,17 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
     """
     Prepares the DuckDB query for each datasource
     """
+
+    debug("_get_altair_datasource_query", datasource)
     match datasource["source_type"]:
         case ElementDatasourceType.file.value:
-            return f"SELECT * FROM {datasource['file_info']['file_name']}"
+            file_name = datasource["file_info"]["file_name"]
+
+            if datasource["file_info"]["file_type"] == "csv":
+                return f"SELECT * FROM read_csv_auto('{file_name}')"
+            elif datasource["file_info"]["file_type"] == "xlsx":
+                return f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
+            return f"SELECT * FROM '{file_name}'"
         case ElementDatasourceType.dataframe.value:
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
         case ElementDatasourceType.database_table.value:

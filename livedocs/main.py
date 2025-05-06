@@ -2,7 +2,6 @@ import base64
 import gzip
 import json
 import os
-import tempfile
 from typing import Dict, List
 
 import pandas as pd
@@ -34,14 +33,17 @@ from livedocs.types import (
 )
 from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
-    PROTECTED_VARS,
+    _LIVEDOCS_PROTECTED_VARS,
     _capture_exceptions,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
+    _setup_dirs,
+    _setup_sentry,
     get_run_context,
 )
+from livedocs.utils.debug import debug
 from livedocs.utils.postgres import (
     create_postgres_connection_url,
     process_postgres_schema,
@@ -51,21 +53,6 @@ from livedocs.utils.serialize import _json_serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
-
-
-def _setup_sentry():
-    """
-    Initializes Sentry for error tracking and performance monitoring.
-    """
-    try:
-        sentry_sdk.init(
-            dsn=os.getenv("VMLIB_SENTRY_DSN"),
-            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            environment=os.getenv("APP_ENV"),
-        )
-    except Exception as e:
-        raise f"Failed to initialize Sentry: {e}"
 
 
 class Livedocs:
@@ -79,25 +66,23 @@ class Livedocs:
 
     def __init__(self):
         """
-        Initializes the Livedocs instance, setting up necessary components and configurations.
+        Creates the Livedocs instance, setting up necessary components and configurations.
         """
         _setup_sentry()
-        self._duckdb = DuckDBSingleton()
-        self._file_dir = tempfile.mkdtemp()
+        _setup_dirs()
+
+        self._duckdb = DuckDBSingleton(
+            file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
+        )
         self._file_manifests: Dict[str, str] = {}
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
 
-    """
-    Called when the pod is initialized. Fetches the credentials and sets the 
-    is_initialized flag to True. The /v1/credentials endpoint is called to fetch the
-    DB connection credentials and secrets for the report.
-    """
-
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
         """
         Initializes the Livedocs instance with the given report ID and token.
+        Called when the pod is initialized.
 
         Args:
             report_id (str): The report ID.
@@ -156,7 +141,7 @@ class Livedocs:
         Args:
             key (str): The variable key.
         """
-        if key not in PROTECTED_VARS:
+        if key not in _LIVEDOCS_PROTECTED_VARS:
             self._built_in_vars.pop(key, None)
             _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
@@ -166,7 +151,9 @@ class Livedocs:
         Clears all built-in variables.
         """
         protected_values = {
-            k: v for k, v in self._built_in_vars.items() if k in PROTECTED_VARS
+            k: v
+            for k, v in self._built_in_vars.items()
+            if k in _LIVEDOCS_PROTECTED_VARS
         }
         self._built_in_vars = protected_values
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
@@ -218,6 +205,10 @@ class Livedocs:
         """
         with sentry_sdk.start_transaction(op="task", name="run query"):
             datasource: ElementDataSource = json.loads(str_datasource)
+            if not datasource:
+                raise ValueError(
+                    "No datasource selected. Please choose a datasource from the dropdown before running your query."
+                )
 
             # Plug in the Jinja variables
             final_query = self.add_jinja_vars(query, context)
@@ -502,9 +493,12 @@ class Livedocs:
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
-                    query = (
-                        f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
-                    )
+                    debug("_get_chart_schema", {"ds": datasource})
+                    file_name = datasource["file_info"]["file_name"]
+                    if datasource["file_info"]["file_type"] == "csv":
+                        query = f"SELECT * FROM read_csv_auto('{file_name}') LIMIT 10"
+                    elif datasource["file_info"]["file_type"] == "xlsx":
+                        query = f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}') LIMIT 10"
                     _, schema = self._query_file_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.dataframe:
@@ -760,25 +754,16 @@ class Livedocs:
             file_type = file_info["file_type"]
             file_name = file_info["file_name"]
 
-            temp_file_path = os.path.join(self._file_dir, f"{file_name}")
+            temp_file_path = os.path.join(
+                os.getenv("LIVEDOCS_FILES_PATH"), f"{file_name}"
+            )
+            debug("query", {"path": temp_file_path, "q": query, "ds": datasource})
 
             if not os.path.exists(temp_file_path):
                 signed_url = self._get_signed_url(file_id)
                 self._download_file(signed_url, temp_file_path)
 
-            if file_type == "csv":
-                query_with_path = query.replace(
-                    file_name, f"read_csv_auto('{temp_file_path}')"
-                )
-            elif file_type == "xlsx":
-                sheet_name = file_info.get("layer_name", "Sheet1")
-                query_with_path = query.replace(
-                    file_name, f"st_read('{temp_file_path}', layer='{sheet_name}')"
-                )
-            else:
-                raise ValueError(f"Unsupported file type: {file_type}")
-
-            result = self._duckdb.conn.sql(query_with_path).pl()
+            result = self._duckdb.conn.sql(query).pl()
             return result
 
         except KeyError as e:
