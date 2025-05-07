@@ -10,7 +10,7 @@ from IPython.core.display import DisplayObject
 from polars import DataFrame
 from pydantic import BaseModel, model_validator
 
-from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.serialize import serializer
 
 
 class GCSBucketType(str, Enum):
@@ -78,7 +78,7 @@ class QueryResult(LivedocsResultInterface):
 
     def serialize(self) -> str:
         json_str = json.dumps(
-            self.data.to_dicts(), default=_json_serializer, separators=(",", ":")
+            self.data.to_dicts(), default=serializer, separators=(",", ":")
         )
         compressed = gzip.compress(json_str.encode("utf-8"))
         b64_encoded = base64.b64encode(compressed).decode("ascii")
@@ -113,14 +113,14 @@ class MsgPackDisplay(DisplayObject):
     Custom display class for msgpack data in IPython
     """
 
-    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: Optional[Dict] = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}
 
     def _pack_data(self) -> bytes:
         """Pack the data using msgpack"""
-        return msgpack.packb(self.data, use_bin_type=True)
+        return msgpack.packb(self.data, default=serializer)
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """
@@ -142,7 +142,7 @@ class JsonDisplay(DisplayObject):
     Simple JSON display class for IPython - no msgpack, just JSON
     """
 
-    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: Optional[Dict] = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}

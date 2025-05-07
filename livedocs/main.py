@@ -49,7 +49,7 @@ from livedocs.utils.postgres import (
     process_postgres_schema,
     write_df_to_table,
 )
-from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
@@ -347,7 +347,7 @@ class Livedocs:
                     if isinstance(value, pl.DataFrame):
                         df = value.to_dicts()
                         ctx[dep_name] = json.dumps(
-                            df, default=_json_serializer, separators=(",", ":")
+                            df, default=serializer, separators=(",", ":")
                         )
                     else:
                         ctx[dep_name] = value
@@ -393,6 +393,7 @@ class Livedocs:
             # Vegafusion
             vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
             vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
+            debug("vega_spec_json_str", {"vega_spec_json_str": vega_spec_json_str})
             vega_span.finish()
 
             # Post-process the results
@@ -450,8 +451,6 @@ class Livedocs:
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
-
-            # Compress and encode response
             result = QueryResult(
                 data=df_slice,
                 metadata=QueryResultMetadata(
@@ -465,7 +464,6 @@ class Livedocs:
             )
             payload = LivedocsResult(result)
             post_span.finish()
-
             return payload
 
     @_capture_exceptions

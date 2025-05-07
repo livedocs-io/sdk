@@ -119,19 +119,17 @@ def convert_datetime_to_iso(df):
     return df
 
 
-"""
-Returns a Vega spec for a given Livedocs chart configuration and a dataframe
-retrieved using _get_altair_datasource_query method. In production, the vegafusion
-data transformer should be enabled, although that obscures the spec. 
-
-This method only delegates the spec generation to other more specific functions
-based on the chartType parameter of the Livedocs chart config. 
-"""
-
-
 def create_vega_spec(
     df: pl.DataFrame, spec: Spec, schema: dict, cache_info: CacheInfo = None
 ):
+    """
+    Returns a Vega spec for a given Livedocs chart configuration and a dataframe
+    retrieved using _get_altair_datasource_query method. In production, the vegafusion
+    data transformer should be enabled, although that obscures the spec.
+
+    This method only delegates the spec generation to other more specific functions
+    based on the chartType parameter of the Livedocs chart config.
+    """
     alt.data_transformers.enable("vegafusion")
 
     style_settings = spec.get("styleSettings", {})

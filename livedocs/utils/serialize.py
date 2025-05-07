@@ -4,10 +4,11 @@ import uuid
 from datetime import date, datetime, time
 
 
-def _json_serializer(obj):
+def serializer(obj):
     """
-    Serialize an object to JSON.
+    Serializes an object to a JSON-compatible format.
     """
+
     if obj is None:
         return None
     elif isinstance(obj, bool):
@@ -16,18 +17,16 @@ def _json_serializer(obj):
         return obj.isoformat()
     elif isinstance(obj, decimal.Decimal):
         return str(obj)
-    elif isinstance(obj, float):
-        return str(obj)
     elif isinstance(obj, uuid.UUID):
         return str(obj)
     elif isinstance(obj, bytes):
         return base64.b64encode(obj).decode("utf-8")
     elif isinstance(obj, dict):
-        return {k: _json_serializer(v) for k, v in obj.items()}
+        return {k: serializer(v) for k, v in obj.items()}
     elif isinstance(obj, list):
-        return [_json_serializer(item) for item in obj]
+        return [serializer(item) for item in obj]
     elif isinstance(obj, (set, tuple, frozenset)):
-        return [_json_serializer(item) for item in obj]
+        return [serializer(item) for item in obj]
     elif isinstance(obj, complex):
         return {"real": obj.real, "imag": obj.imag}
     else:
