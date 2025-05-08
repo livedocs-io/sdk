@@ -2,7 +2,7 @@ import base64
 import gzip
 import json
 import os
-from typing import Dict, List
+from typing import List, Optional
 
 import pandas as pd
 import polars as pl
@@ -22,6 +22,7 @@ from livedocs.types import (
     DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
+    FileManifest,
     GCSBucketType,
     JsonDisplay,
     LivedocsChartSpec,
@@ -35,6 +36,7 @@ from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquer
 from livedocs.utils.common import (
     _LIVEDOCS_PROTECTED_VARS,
     _capture_exceptions,
+    _download_file,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
@@ -74,7 +76,6 @@ class Livedocs:
         self._duckdb = DuckDBSingleton(
             file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
         )
-        self._file_manifests: Dict[str, str] = {}
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
@@ -752,14 +753,8 @@ class Livedocs:
             file_type = file_info["file_type"]
             file_name = file_info["file_name"]
 
-            temp_file_path = os.path.join(
-                os.getenv("LIVEDOCS_FILES_PATH"), f"{file_name}"
-            )
-            debug("query", {"path": temp_file_path, "q": query, "ds": datasource})
-
-            if not os.path.exists(temp_file_path):
-                signed_url = self._get_signed_url(file_id)
-                self._download_file(signed_url, temp_file_path)
+            file_path = self.download_file(file_id=file_id)
+            debug("query", {"q": query, "ds": datasource, "file_path": file_path})
 
             result = self._duckdb.conn.sql(query).pl()
             return result
@@ -971,39 +966,6 @@ class Livedocs:
         except Exception as e:
             raise RuntimeError(f"DBSave Error: {e}")
 
-    def _get_signed_url(self, file_id: str) -> str:
-        """
-        Fetches a signed URL from the /v1/manifest endpoint for a file and returns it.
-        It also stores the signed URL in a dictionary for future use.
-
-        Args:
-            file_id (str): The file ID.
-
-        Returns:
-            str: The signed URL.
-        """
-        if file_id in self._file_manifests:
-            return self._file_manifests[file_id]
-        else:
-            manifest = _fetch_file_manifest(
-                file_id, self._report_id, self._token, "read", GCSBucketType.USER_FILES
-            )
-            self._file_manifests[file_id] = manifest["signed_url"]
-            return manifest["signed_url"]
-
-    def _download_file(self, signed_url, file_path):
-        """
-        Downloads a file from the given signed URL and saves it to the specified file path.
-
-        Args:
-            signed_url (str): The signed URL to download the file from.
-            file_path (str): The path to save the downloaded file.
-        """
-        response = requests.get(signed_url)
-        response.raise_for_status()
-        with open(file_path, "wb") as f:
-            f.write(response.content)
-
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         """
         Gets the schema of any given Polars DataFrame.
@@ -1077,3 +1039,74 @@ class Livedocs:
         """
         result = process_single_value(config, context)
         return JsonDisplay(result)
+
+    @_capture_exceptions
+    def download_file(
+        self,
+        file_name: Optional[str] = None,
+        file_id: Optional[str] = None,
+        force_download: bool = False,
+        path: Optional[str] = os.getenv("LIVEDOCS_FILES_PATH"),
+    ) -> str:
+        """
+        Downloads a file to a local path based on either its name or ID.
+
+        Parameters:
+            file_name (Optional[str]): The name of the file to download. Must be provided exclusively if file_id is not specified.
+            file_id (Optional[str]): The unique identifier of the file to download. Must be provided exclusively if file_name is not specified.
+            force_download (bool): If True, forces the file to be redownloaded and overwritten if it exists locally.
+            path (Optional[str]): The directory path where the file will be stored.
+                                Defaults to the value of the environment variable 'LIVEDOCS_FILES_PATH'.
+
+        Returns:
+            str: The local file system path where the downloaded file is stored.
+
+        Raises:
+            RuntimeError: If the system is not initialized, or if an unexpected error occurs during the manifest retrieval or download process.
+            ValueError: If neither or both of 'file_name' and 'file_id' are provided, or if multiple files with the same name are found.
+            FileNotFoundError: If the file with the specified 'file_name' or 'file_id' does not exist on the remote server.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
+
+        if not (file_name or file_id) or (file_name and file_id):
+            raise ValueError("Exactly one of file_name or file_id must be provided.")
+
+        os.makedirs(path, exist_ok=True)
+
+        manifest_data = _fetch_file_manifest(
+            report_id=self._report_id,
+            token=self._token,
+            action="read",
+            bucket=GCSBucketType.USER_FILES,
+            file_id=file_id,
+            file_name=file_name,
+        )
+
+        authoritative_file_name = manifest_data.get("file_name")
+        local_file_path = os.path.join(path, authoritative_file_name)
+        file_exists = os.path.exists(local_file_path)
+
+        if not force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' (ID: {manifest_data.get('file_id')}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
+            )
+            return local_file_path
+
+        if force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' already exists locally at '{local_file_path}'. Overwriting."
+            )
+            os.remove(local_file_path)
+
+        signed_url = manifest_data.get("signed_url")
+        expected_size_bytes = manifest_data.get("size")
+
+        _download_file(
+            signed_url,
+            local_file_path,
+            file_description=authoritative_file_name,
+            expected_size_bytes=expected_size_bytes,
+        )
+
+        return local_file_path

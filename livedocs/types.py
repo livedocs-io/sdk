@@ -18,6 +18,11 @@ class GCSBucketType(str, Enum):
     CACHE_ARTIFACTS = "cache-artifacts"
 
 
+class FileManifestAction(str, Enum):
+    READ = "read"
+    WRITE = "write"
+
+
 class CacheStatus(str, Enum):
     HIT = "hit"
     MISS = "miss"
@@ -26,6 +31,17 @@ class CacheStatus(str, Enum):
 class CacheInfo(TypedDict):
     id: str
     status: CacheStatus
+
+
+class FileManifest(TypedDict):
+    file_id: str  # The unique ID of the file (resolved by the API)
+    file_name: str  # The display name of the file
+    signed_url: str  # The GCS signed URL for download/access
+    size: Optional[int]  # File size in bytes, can be None if unknown
+    type: Optional[str]  # e.g., 'csv', 'xlsx'
+    created_at: Optional[str]  # ISO string for creation timestamp
+    bucket: Optional[GCSBucketType]  # The bucket type (user-files or cache-artifacts)
+    action: FileManifestAction  # Action type (read/write)
 
 
 class QueryResultMetadata(TypedDict, total=False):
