@@ -134,7 +134,34 @@ def create_vega_spec(
 
     style_settings = spec.get("styleSettings", {})
 
-    if df.height > 10000:
+    if spec.get("chartType"):
+        if spec["chartType"] == "main":
+            (vega_spec, status) = main_chart(
+                df, spec["chartSettings"], schema, style_settings
+            )
+        if spec["chartType"] == "swapped_main":
+            (vega_spec, status) = swapped_main_chart(
+                df, spec["swappedChartSettings"], schema, style_settings
+            )
+        elif spec["chartType"] == "histogram":
+            (vega_spec, status) = histogram(
+                df, spec["histogramSettings"], schema, style_settings
+            )
+        elif spec["chartType"] == "pie":
+            (vega_spec, status) = pie(
+                df, spec["pieSettings"], schema, style_settings
+            )
+
+        validated_spec = VegaSpec(
+            **{
+                "spec": vega_spec,
+                "schema": schema,
+                "status": status,
+                "cache_info": cache_info,
+            }
+        )
+        return validated_spec.model_dump_json()
+    else:
         empty_chart = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "usermeta": {
@@ -144,58 +171,13 @@ def create_vega_spec(
         }
         validated_spec = VegaSpec(
             **{
-                "spec": json.dumps(empty_chart),
+                "spec": json.dumps(empty_chart, separators=(",", ":")),
                 "schema": schema,
-                "status": "OVERLOADED",
+                "status": "EMPTY",
                 "cache_info": cache_info,
             }
         )
         return validated_spec.model_dump_json()
-    else:
-        if spec.get("chartType"):
-            if spec["chartType"] == "main":
-                (vega_spec, status) = main_chart(
-                    df, spec["chartSettings"], schema, style_settings
-                )
-            if spec["chartType"] == "swapped_main":
-                (vega_spec, status) = swapped_main_chart(
-                    df, spec["swappedChartSettings"], schema, style_settings
-                )
-            elif spec["chartType"] == "histogram":
-                (vega_spec, status) = histogram(
-                    df, spec["histogramSettings"], schema, style_settings
-                )
-            elif spec["chartType"] == "pie":
-                (vega_spec, status) = pie(
-                    df, spec["pieSettings"], schema, style_settings
-                )
-
-            validated_spec = VegaSpec(
-                **{
-                    "spec": vega_spec,
-                    "schema": schema,
-                    "status": status,
-                    "cache_info": cache_info,
-                }
-            )
-            return validated_spec.model_dump_json()
-        else:
-            empty_chart = {
-                "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                "usermeta": {
-                    "styleSettings": style_settings,
-                    "chartType": "main",
-                },
-            }
-            validated_spec = VegaSpec(
-                **{
-                    "spec": json.dumps(empty_chart, separators=(",", ":")),
-                    "schema": schema,
-                    "status": "EMPTY",
-                    "cache_info": cache_info,
-                }
-            )
-            return validated_spec.model_dump_json()
 
 
 """
