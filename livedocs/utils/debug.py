@@ -6,7 +6,7 @@ from IPython.display import display
 def debug(label: str, data=None):
     """Sends data to the middleman for pretty-printing in its logs."""
     try:
-        content_str = json.dumps(data, indent=2, default=str)
+        content_str = json.dumps(data, indent=2, default=str, ensure_ascii=False)
         mime_type = "application/json"
     except Exception:
         content_str = str(data)

@@ -1710,9 +1710,3 @@ def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
                 return col, type_preference[col_type]
 
     raise ValueError("No suitable field found in the schema")
-
-
-__all__ = [
-    "_get_altair_datasource_query",
-    "create_vega_spec",
-]

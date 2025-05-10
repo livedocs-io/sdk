@@ -6,9 +6,7 @@ from typing import List, Optional
 
 import pandas as pd
 import polars as pl
-import requests
 import sentry_sdk
-from duckdb import CatalogException
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from jinja2 import Template
@@ -22,7 +20,6 @@ from livedocs.types import (
     DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
-    FileManifest,
     GCSBucketType,
     JsonDisplay,
     LivedocsChartSpec,
@@ -47,9 +44,9 @@ from livedocs.utils.common import (
 )
 from livedocs.utils.debug import debug
 from livedocs.utils.postgres import (
-    create_postgres_connection_url,
-    process_postgres_schema,
-    write_df_to_table,
+    _create_postgres_connection_url,
+    _process_postgres_schema,
+    _write_df_to_postgres,
 )
 from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
@@ -596,7 +593,7 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> tuple[pl.DataFrame, dict]:
         """
-        Queries a database and returns the result as a DataFrame with schema. Currently only supports Postgres.
+        Queries a database and returns the result as a DataFrame with schema.
 
         Args:
             query (str): The query string.
@@ -607,12 +604,8 @@ class Livedocs:
         """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
-                # Get the schema directly from the query
-                schema_query = f"DESCRIBE {query}"
-                _schema = self._query_postgres(schema_query, datasource)
-                schema = process_postgres_schema(_schema)
-
-                # Execute the original query
+                _schema = self._query_postgres(f"DESCRIBE {query}", datasource)
+                schema = _process_postgres_schema(_schema)
                 result = self._query_postgres(query, datasource)
                 return [result, schema]
             case DatabaseType.Bigquery:
@@ -634,16 +627,14 @@ class Livedocs:
             datasource (ElementDataSource): The datasource to execute the query on.
 
         Returns:
-            pl.DataFrame: The resulting DataFrame.
+            pl.DataFrame: The resulting Polars DataFrame.
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            # This won't throw an error if the credentials are not found
             credentials = self._credentials.get("databases", {}).get(db_connector_id)
 
             if not credentials:
                 self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
                 credentials = self._credentials["databases"][db_connector_id]
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
@@ -657,7 +648,7 @@ class Livedocs:
             if parsed_credentials.get("connect_using") == "url":
                 connection_string = parsed_credentials["connection_url"]
             else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
+                connection_string = _create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
 
@@ -671,10 +662,6 @@ class Livedocs:
 
         try:
             result = self._duckdb.conn.sql(query).pl()
-        except CatalogException as e:
-            raise RuntimeError(
-                "CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')"
-            )
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
 
@@ -857,7 +844,7 @@ class Livedocs:
             if parsed_credentials.get("connect_using") == "url":
                 connection_string = parsed_credentials["connection_url"]
             else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
+                connection_string = _create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
 
@@ -871,7 +858,7 @@ class Livedocs:
 
         try:
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            result = write_df_to_table(
+            result = _write_df_to_postgres(
                 df,
                 self._duckdb.conn,
                 qualified_table_name,

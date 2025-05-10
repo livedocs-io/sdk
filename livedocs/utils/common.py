@@ -7,7 +7,6 @@ import altair as alt
 import polars as pl
 import requests
 import sentry_sdk
-from duckdb import CatalogException
 from tqdm.auto import tqdm
 
 from livedocs.types import Credentials, FileManifest, FileManifestAction, GCSBucketType
@@ -52,8 +51,6 @@ def _capture_exceptions(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except CatalogException:
-            raise
         except Exception as e:
             sentry_sdk.capture_exception(e)
             raise  # Re-raise the exception after capturing it
@@ -99,17 +96,21 @@ def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
     return alt.value(1)
 
 
-CORE_URL = os.getenv("CORE_BASE_URL")
-if not CORE_URL:
-    raise ValueError("CORE_BASE_URL environment variable not set")
-
-
 @_capture_exceptions
 def _fetch_credentials(report_id: str, token: str) -> Credentials:
+    CORE_URL = os.getenv("CORE_BASE_URL")
+    if not CORE_URL:
+        raise ValueError("CORE_BASE_URL environment variable not set")
+
     response = requests.get(
         f"{CORE_URL}/v1/credentials/{report_id}",
         headers={"authorization": token},
     )
+
+    CORE_URL = os.getenv("CORE_BASE_URL")
+    if not CORE_URL:
+        raise ValueError("CORE_BASE_URL environment variable not set")
+
     if response.status_code == 200:
         return response.json()
     else:
@@ -127,6 +128,10 @@ def _fetch_file_manifest(
     file_id: Optional[str] = None,
     file_name: Optional[str] = None,
 ) -> FileManifest:
+    CORE_URL = os.getenv("CORE_BASE_URL")
+    if not CORE_URL:
+        raise ValueError("CORE_BASE_URL environment variable not set")
+
     if not file_id and not file_name:
         raise ValueError(
             "Either file_id or file_name must be provided to fetch manifest."
@@ -204,6 +209,10 @@ def _fetch_file_manifest(
 
 @_capture_exceptions
 def _persist_built_in_vars(report_id: str, token: str, vars: dict) -> dict:
+    CORE_URL = os.getenv("CORE_BASE_URL")
+    if not CORE_URL:
+        raise ValueError("CORE_BASE_URL environment variable not set")
+
     response = requests.post(
         f"{CORE_URL}/v1/vars/{report_id}",
         json=vars,
@@ -388,22 +397,3 @@ def _download_file(
         raise RuntimeError(
             f"An error occurred during download of {file_description}: {e}"
         ) from e
-
-
-__all__ = [
-    "_LIVEDOCS_COLORS",
-    "_fetch_credentials",
-    "_fetch_file_manifest",
-    "_persist_built_in_vars",
-    "_get_dataframe_schema",
-    "_get_color",
-    "_get_color_group_key",
-    "_get_user_defined_color",
-    "_get_user_defined_opacity",
-    "_capture_exceptions",
-    "get_run_context",
-    "_LIVEDOCS_PROTECTED_VARS",
-    "_setup_sentry",
-    "_setup_dirs",
-    "_download_file",
-]
