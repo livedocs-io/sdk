@@ -26,9 +26,6 @@ from livedocs.utils.common import (
     get_axis_format,
     iso_to_alt_datetime,
     create_line
-    # REF_STROKE_DASH,
-    # REF_BASELINE,
-    # REF_ALIGN
 )
 
 
@@ -1132,6 +1129,7 @@ def main_chart(
 
                 points = lines.mark_point().transform_filter(nearest)
 
+
                 rules = (
                     alt.Chart(df)
                     .mark_rule(color="gray")
@@ -1165,7 +1163,12 @@ def main_chart(
                     .add_params(nearest)
                 )
 
-                base_layer = alt.layer(lines, points, rules)
+
+                series_list = settings.get('yAxis', {}).get('primary', [])
+                if len(series_list)==1:
+                    base_layer = alt.layer(lines, points, rules)
+                else:
+                    base_layer=alt.layer(lines)
 
         elif mark_type == "point":
             brush = alt.selection_interval()
@@ -1290,6 +1293,59 @@ def main_chart(
         if labels_show==True:
             inner_layers.append(text)
         chart = alt.layer(*inner_layers)
+
+
+    ## For tooltips on charts with added series
+    series_list = settings.get('yAxis', {}).get('primary', [])
+    if len(series_list)>1:
+
+        nearest2 = alt.selection_point(
+        nearest=True,
+        on="pointerover",
+        empty=False,
+        encodings=["x"],
+        fields=[x_field]
+        if x_temporal_format is None
+        else [f"{x_temporal_format}({(x_field)})"],
+    )
+            
+        tooltip_list = []
+        for col in series_list:
+            if col['field']=='none':
+                tooltip=alt.Tooltip(alt.Undefined)
+            else:    
+                tooltip=alt.Tooltip(
+                    field=col['field'],
+                    type=col['type'],
+                    title=col['field']
+                    if col['aggregate'] == "none"
+                    else f"{col['aggregate']} of {col['field']}".title(),
+                    aggregate=col['aggregate']
+                    if col['aggregate']!='none'
+                    else alt.Undefined
+                )
+            tooltip_list.append(tooltip)
+
+        tooltip_list.insert(
+            0, 
+            alt.Tooltip(
+                field=x_field,
+                type=x_type,
+                title=x_field,
+                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined,
+                format=alt.Undefined
+        )
+        )
+
+        final_rule=alt.Chart(df).mark_rule().encode(
+            x=x_encoding,
+            tooltip=tooltip_list,
+            opacity=alt.condition(nearest2, alt.value(1), alt.value(0))
+        ).add_params(nearest2)
+
+        chart = alt.layer(*inner_layers, *x_lines, *y_lines, final_rule)
+
+    else:
         chart = alt.layer(*inner_layers, *x_lines, *y_lines)
         
 
@@ -1335,7 +1391,6 @@ def main_chart(
             "subplots": subplots,
         }
         )
-
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
 
@@ -1399,7 +1454,6 @@ def swapped_main_chart(
 
     y_field = settings["yAxis"]["field"]
     y_type = settings["yAxis"].get("type", map_datatype_to_scale_type(schema[y_field]))
-    # y_sort = settings["yAxis"].get("sort", "ascending")
     y_temporal_format = settings["yAxis"].get("temporalFormat")
     mark_type = settings["yAxis"].get("mark", "grouped_bar")
     y_aggregate = settings["yAxis"].get("aggregate", "none")
