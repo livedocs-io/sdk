@@ -23,7 +23,15 @@ from livedocs.utils.common import (
     _get_color_group_key,
     _get_user_defined_color,
     _get_user_defined_opacity,
+    get_axis_format,
+    iso_to_alt_datetime,
+    create_line
+    # REF_STROKE_DASH,
+    # REF_BASELINE,
+    # REF_ALIGN
 )
+
+
 
 """
 Helper function, never used in production environments. 
@@ -96,20 +104,7 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
             )
 
 
-"""
-Maps the Livedocs primitive type to it's respective Vega field type
-"""
 
-
-def map_datatype_to_scale_type(type: str) -> str:
-    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
-    return type_mapping.get(type, "nominal")
-
-
-def convert_datetime_to_iso(df):
-    for column in df.select_dtypes(include=["datetime64"]).columns:
-        df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
-    return df
 
 
 """
@@ -203,7 +198,7 @@ def pie(
     df: pl.DataFrame,
     settings: PieChartSpec,
     schema: dict,
-    style: StyleSettings, ###
+    style: StyleSettings,
     subplots: SubplotSettings,
 ) -> tuple[str, str]:
     usermeta = settings
@@ -543,7 +538,13 @@ def histogram(
         .resolve_scale(color="independent", y="shared")
     )
 
-    chart = alt.layer(outer_layer).properties(
+    chart=alt.layer(outer_layer)
+
+    x_lines=create_line(df, "x", style)
+    y_lines=create_line(df, "y", style)
+
+    # Create the layer and add to inner layers
+    chart = alt.layer(chart, *x_lines, *y_lines).properties(
         width="container",
         height="container",
         usermeta={
@@ -920,6 +921,8 @@ def main_chart(
                 else alt.Undefined
             )
 
+
+
         # Create the appropriate mark type
         if mark_type == "grouped_column":
             if color_by_field:
@@ -1279,13 +1282,15 @@ def main_chart(
                     )
                 )
 
-        
+        x_lines=create_line(df, "x", style_settings)
+        y_lines=create_line(df, "y", style_settings)
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
         if labels_show==True:
             inner_layers.append(text)
         chart = alt.layer(*inner_layers)
+        chart = alt.layer(*inner_layers, *x_lines, *y_lines)
         
 
     for t in transform:
@@ -1318,7 +1323,6 @@ def main_chart(
 
     # Facet if required
     if facet:
-        print(facet)
         chart=chart.facet(facet, 
                 columns=h_subplot_cols
                 if h_subplot_wrap
@@ -1638,6 +1642,11 @@ def swapped_main_chart(
 
     chart = alt.layer(base_layer)
 
+    x_lines=create_line(df, "x", style_settings)
+    y_lines=create_line(df, "y", style_settings)
+
+    chart = alt.layer(chart, *x_lines, *y_lines)
+
     for t in transform:
         if "calculate" in t:
             chart = chart.transform_calculate(**t)
@@ -1656,6 +1665,8 @@ def swapped_main_chart(
             "subplots": subplots,
         },
     )
+
+
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
@@ -1798,32 +1809,19 @@ def create_y_encoding(
             ),
         )
 
-
-def get_axis_format(timeunit: str) -> str:
-    format_map = {
-        "year": "%Y",
-        "yearquarter": "%Y Q%q",
-        "yearmonth": "%b %Y",
-        "yearweek": "%Y W%W",
-        "yearmonthdate": "%b %d, %Y",
-        "yearmonthdatehours": "%b %d, %Y %I:%M %p",
-        "yearmonthdatehoursminutes": "%b %d, %Y %I:%M",
-        "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
-    }
-    return format_map.get(timeunit, "")
+"""
+Maps the Livedocs primitive type to it's respective Vega field type
+"""
+def map_datatype_to_scale_type(type: str) -> str:
+    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
+    return type_mapping.get(type, "nominal")
 
 
-def iso_to_alt_datetime(iso_string):
-    """Convert ISO date string to alt.DateTime object"""
-    dt = dateutil.parser.parse(iso_string)
-    return alt.DateTime(
-        year=dt.year,
-        month=dt.month,
-        date=dt.day,
-        hours=dt.hour,
-        minutes=dt.minute,
-        seconds=dt.second
-    )
+def convert_datetime_to_iso(df):
+    for column in df.select_dtypes(include=["datetime64"]).columns:
+        df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return df
+
 
 """
 Picks a random field from a given schema to be used in a secondary axis
