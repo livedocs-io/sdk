@@ -4,7 +4,6 @@ import dateutil.parser
 
 import altair as alt
 import polars as pl
-
 from livedocs.types import (
     CacheInfo,
     ElementDataSource,
@@ -16,6 +15,8 @@ from livedocs.types import (
     StyleSettings,
     SubplotSettings,
     VegaSpec,
+    DatabaseType,
+    ElementDatasourceType,
 )
 from livedocs.utils.common import (
     _get_color,
@@ -68,30 +69,31 @@ def dataframe_info(df: pl.DataFrame):
     return "\n".join(info)
 
 
-"""
-Adds a UUIDV4 prefix to layer names
-"""
-
-
 def generate_unique_name(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-"""
-Prepares the DuckDB query for each datasource
-"""
-
-
 def _get_altair_datasource_query(datasource: ElementDataSource):
+    """
+    Prepares the DuckDB query for each datasource
+    """
     match datasource["source_type"]:
-        case "file":
+        case ElementDatasourceType.file.value:
             return f"SELECT * FROM {datasource['file_info']['file_name']}"
-        case "dataframe":
+        case ElementDatasourceType.dataframe.value:
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
-        case "database_table":
-            return f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}"
+        case ElementDatasourceType.database_table.value:
+            if (
+                datasource["database_info"]["database_type"]
+                == DatabaseType.Postgres.value
+            ):
+                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+            else:
+                return f"SELECT * FROM `{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}`"
         case _:
-            return "unknown datasource"
+            raise ValueError(
+                f"Unsupported datasource type: {datasource['source_type']}"
+            )
 
 
 """
@@ -221,9 +223,9 @@ def pie(
 
     # Use x-axis style for label angle
     x_axis_settings = style.get("xAxis", {})
-    labelAngle=x_axis_settings.get("labelAngle", 0)
+    labelAngle = x_axis_settings.get("labelAngle", 0)
 
-    labelFontSize=style.get("fontSize", 10)
+    labelFontSize = style.get("fontSize", 10)
 
     format_type = settings.get("format", "")
     show_as = settings.get("show_as", "value")
@@ -264,14 +266,14 @@ def pie(
         return (json.dumps(empty_spec), "EMPTY")
 
     # Create tooltip for chart
-    tooltip=create_tooltip(
-    axis1_field=color_by_field,
-    axis1_type="nominal",
-    temporal_format=alt.Undefined,
-    axis2_field=size_by_field,
-    axis2_type="quantitative",
-    aggregate=size_by_aggregate,
-    tooltip_show=tooltip_show
+    tooltip = create_tooltip(
+        axis1_field=color_by_field,
+        axis1_type="nominal",
+        temporal_format=alt.Undefined,
+        axis2_field=size_by_field,
+        axis2_type="quantitative",
+        aggregate=size_by_aggregate,
+        tooltip_show=tooltip_show,
     )
 
     # Determine the theta encoding based on the aggregation type
@@ -283,86 +285,75 @@ def pie(
             aggregate=size_by_aggregate,
             stack=True,
         )
-    base=alt.Chart(df)
+    base = alt.Chart(df)
 
     ## Create calculated column based on selected aggregation
     if show_as == "percentage":
         if size_by_aggregate == "count":
-            df = df.with_columns([
-                pl.lit(len(df)).alias("__totalCount")
-            ])
+            df = df.with_columns([pl.lit(len(df)).alias("__totalCount")])
             base = alt.Chart(df).transform_calculate(
-                calculate="1/datum.__totalCount",
-                as_="__percentOfTotal"
+                calculate="1/datum.__totalCount", as_="__percentOfTotal"
             )
         else:
-            base = alt.Chart(df).transform_joinaggregate(
-            joinaggregate=[
-                {"op":"sum", 
-                 "field": size_by_field,
-                 "as": "__totalCount"}]
-            ).transform_calculate(
-            calculate=f"datum['{size_by_field}']/datum.__totalCount",
-            as_="__percentOfTotal"
+            base = (
+                alt.Chart(df)
+                .transform_joinaggregate(
+                    joinaggregate=[
+                        {"op": "sum", "field": size_by_field, "as": "__totalCount"}
+                    ]
+                )
+                .transform_calculate(
+                    calculate=f"datum['{size_by_field}']/datum.__totalCount",
+                    as_="__percentOfTotal",
+                )
             )
 
     ## Aggregate variable to sum percentages instead of count
-    text_aggregate="none"
+    text_aggregate = "none"
 
-    if size_by_aggregate=="count" and show_as=="percentage":
-        text_aggregate="sum"
-    elif size_by_aggregate and size_by_aggregate!="none":
-        text_aggregate=size_by_aggregate
+    if size_by_aggregate == "count" and show_as == "percentage":
+        text_aggregate = "sum"
+    elif size_by_aggregate and size_by_aggregate != "none":
+        text_aggregate = size_by_aggregate
     else:
-        text_aggregate=alt.Undefined
+        text_aggregate = alt.Undefined
 
     # Generate the pie chart using Altair
-    chart = (
-        base
-        .mark_arc(cursor="pointer")
-        .encode(
-            theta=theta_encoding,
-            color=alt.Color(
-                legend=legend,
-                field=color_by_field,
-                type=map_datatype_to_scale_type(settings["color_by"]["type"]),
-                scale=alt.Scale(
-                    range=[
-                        "#4C78A8",
-                        "#F58518",
-                        "#E45756",
-                        "#72B7B2",
-                        "#54A24B",
-                        "#EECA3B",
-                        "#B279A2",
-                        "#FF9DA6",
-                        "#9D755D",
-                        "#BAB0AC",
-                    ]
-                ),
+    chart = base.mark_arc(cursor="pointer").encode(
+        theta=theta_encoding,
+        color=alt.Color(
+            legend=legend,
+            field=color_by_field,
+            type=map_datatype_to_scale_type(settings["color_by"]["type"]),
+            scale=alt.Scale(
+                range=[
+                    "#4C78A8",
+                    "#F58518",
+                    "#E45756",
+                    "#72B7B2",
+                    "#54A24B",
+                    "#EECA3B",
+                    "#B279A2",
+                    "#FF9DA6",
+                    "#9D755D",
+                    "#BAB0AC",
+                ]
             ),
-            tooltip=tooltip,
-            opacity=alt.value(1),
-        )
+        ),
+        tooltip=tooltip,
+        opacity=alt.value(1),
     )
 
-    text=(base
-        .mark_text(radius=150,
-                   angle=labelAngle,
-                   size=labelFontSize)
-        .encode(
-            text=alt.Text(
-                field=size_by_field
-                if show_as!="percentage"
-                else "__percentOfTotal",
-                format=format_type,
-                aggregate=text_aggregate,
-                type="quantitative"
-                ),
-            color=alt.value("black"),
-            detail=color_by_field,
-            theta=theta_encoding
-        )
+    text = base.mark_text(radius=150, angle=labelAngle, size=labelFontSize).encode(
+        text=alt.Text(
+            field=size_by_field if show_as != "percentage" else "__percentOfTotal",
+            format=format_type,
+            aggregate=text_aggregate,
+            type="quantitative",
+        ),
+        color=alt.value("black"),
+        detail=color_by_field,
+        theta=theta_encoding,
     )
 
     # Nest the chart within a layer
@@ -380,7 +371,6 @@ def pie(
             "subplots": subplots,
         },
     )
-
 
     # Convert the chart to Vega JSON spec
     vega_spec = final_chart.to_json(format="vega")
@@ -431,7 +421,7 @@ def histogram(
 
     tooltip_show = style.get("tooltip", True)
 
-    tooltip=create_tooltip(
+    tooltip = create_tooltip(
         axis1_field="__count" if format_type == "count" else "__PercentOfTotal",
         axis1_type="quantitative",
         temporal_format=None,
@@ -439,9 +429,11 @@ def histogram(
         axis2_type="nominal",
         aggregate="none",
         tooltip_show=tooltip_show,
-        axis1_title="Count of Records" if format_type == "count" else "Percentage of Records",
+        axis1_title="Count of Records"
+        if format_type == "count"
+        else "Percentage of Records",
         axis2_title=field,
-        axis1_format=alt.Undefined if format_type=="count" else ".1%"
+        axis1_format=alt.Undefined if format_type == "count" else ".1%",
     )
 
     base = (
@@ -519,7 +511,7 @@ def histogram(
                     if y_axis_settings.get("grid", "none") != "none"
                     else True,
                     format=y_axis_settings.get("format", alt.Undefined)
-                    if format_type=="count"
+                    if format_type == "count"
                     else "%",
                     gridDash=[4, 4]
                     if y_axis_settings.get("grid", "none") == "dashed"
@@ -566,57 +558,56 @@ def histogram(
     return (vega_spec, "SUCCESS")
 
 
-def create_tooltip(axis1_field, 
-                   axis1_type, 
-                   temporal_format,
-                   axis2_field, 
-                   axis2_type, 
-                   aggregate,
-                   color_by_field=None,
-                   color_by_type=None,
-                   color_by_aggregate=None,
-                   tooltip_show=True,
-                   axis1_title=None,
-                   axis2_title=None,
-                   axis1_format="none",
-                   axis2_format="none"):
-    
+def create_tooltip(
+    axis1_field,
+    axis1_type,
+    temporal_format,
+    axis2_field,
+    axis2_type,
+    aggregate,
+    color_by_field=None,
+    color_by_type=None,
+    color_by_aggregate=None,
+    tooltip_show=True,
+    axis1_title=None,
+    axis2_title=None,
+    axis1_format="none",
+    axis2_format="none",
+):
     if not tooltip_show:
         return alt.Undefined
 
-    tooltips=[
+    tooltips = [
         alt.Tooltip(
             field=axis1_field,
             type=axis1_type,
             title=axis1_title,
             timeUnit=temporal_format if temporal_format else alt.Undefined,
-            format=axis1_format if axis1_format!="none" else alt.Undefined,
-    ),
+            format=axis1_format if axis1_format != "none" else alt.Undefined,
+        ),
         alt.Tooltip(
             field=axis2_field,
             type=axis2_type,
             title=axis2_title
             if aggregate == "none"
             else f"{aggregate} of {axis2_field}".title(),
-            aggregate=aggregate
-            if aggregate != "none" 
-            else alt.Undefined,
-            format=axis2_format if axis2_format!="none" else ",.1f",
-        )
+            aggregate=aggregate if aggregate != "none" else alt.Undefined,
+            format=axis2_format if axis2_format != "none" else ",.1f",
+        ),
     ]
     if color_by_field:
         tooltips.append(
-            alt.Tooltip(field=color_by_field, 
-                        type=color_by_type,
-                        title=color_by_field,
-                        aggregate=color_by_aggregate
-                        if color_by_aggregate!="none"
-                        else alt.Undefined)
+            alt.Tooltip(
+                field=color_by_field,
+                type=color_by_type,
+                title=color_by_field,
+                aggregate=color_by_aggregate
+                if color_by_aggregate != "none"
+                else alt.Undefined,
+            )
         )
-    
-    return tooltips
 
-    
+    return tooltips
 
 
 """
@@ -626,6 +617,8 @@ Generates the Vega spec from a chart configuration for:
 - Column charts (grouped, stacked, and full stacked)
 - Scatter charts
 """
+
+
 def main_chart(
     df: pl.DataFrame,
     settings: LivedocsChartSpec,
@@ -688,7 +681,7 @@ def main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
-    if (x_type == "temporal" and x_temporal_format is None):
+    if x_type == "temporal" and x_temporal_format is None:
         x_temporal_format = "yearmonthdate"
 
     color_groups = {}
@@ -699,6 +692,7 @@ def main_chart(
         "sort": x_sort,
         "temporalFormat": x_temporal_format,
     }
+
 
     # Add transformation for temporal fields
     transform = []
@@ -741,10 +735,10 @@ def main_chart(
         x_encoding = create_x_encoding(
             x_field, x_type, x_sort, x_temporal_format, style_settings
         )
-        color_by_field=None
-        color_by_type=None
-        color_by_encoding=None
-        color_by_aggregate=None
+        color_by_field = None
+        color_by_type = None
+        color_by_encoding = None
+        color_by_aggregate = None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"].get("field", "none")
@@ -831,7 +825,7 @@ def main_chart(
             or usermeta["yAxis"]["primary"][index]["name"] == ""
         ):
             usermeta["yAxis"]["primary"][index]["name"] = (
-                f"{y_series.get('mark', "grouped_column")} layer {index + 1}"
+                f"{y_series.get('mark', 'grouped_column')} layer {index + 1}"
             )
 
         # Create selectors
@@ -848,7 +842,7 @@ def main_chart(
         }
 
         # Create the tooltip
-        tooltip=create_tooltip(
+        tooltip = create_tooltip(
             axis1_field=x_field,
             axis1_type=x_type,
             axis2_field=y_field,
@@ -860,10 +854,43 @@ def main_chart(
             color_by_aggregate=color_by_aggregate,
             tooltip_show=tooltip_show,
             axis1_title=x_field,
-            axis2_title=y_field
+            axis2_title=y_field,
         )
 
-        print(subplots)
+        # MarkDataLabelsSettings
+
+        # legend_show = style_settings.get("legend", {}).get("show", True)
+
+        labels_show=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("show", True)
+
+        # Add text encoding for data labels
+        text=None
+
+        # if y_aggregate!='none' and not mark_type.startswith("full"):
+        text_encoding = alt.Text(
+                field=y_field,
+                aggregate=y_aggregate
+                if y_aggregate!='none'
+                else 'sum',
+                format=',.1f'
+                )
+
+        text = alt.Chart(df).mark_text(
+            align="left" 
+            if x_temporal_format 
+            else "center"
+            ).encode(
+            x=x_encoding,
+            y=y_encoding,
+            text=text_encoding,
+            yOffset=alt.value(-5),
+            xOffset=color_by_field
+            if mark_type=="grouped_column" and color_by_field
+            else alt.Undefined, 
+            detail=color_by_field
+            if mark_type=="line" and color_by_field
+            else alt.Undefined
+            )
 
         # Subplots
         h_subplot_settings=subplots.get("horizontal", {})
@@ -887,9 +914,6 @@ def main_chart(
         if h_subplot_field!="none":
             facet=alt.Facet(
                 field=h_subplot_field,
-                # columns=h_subplot_cols
-                # if h_subplot_wrap
-                # else alt.Undefined,
                 sort=h_subplot_sort,
                 bin=alt.Bin(maxbins=h_subplot_bin_count)
                 if h_subplot_bin_bool
@@ -905,10 +929,7 @@ def main_chart(
                     .encode(
                         x=x_encoding,
                         y=y_encoding,
-                        xOffset=alt.XOffset(
-                            field=color_by_field,
-                            sort=color_by_sort
-                        ),
+                        xOffset=alt.XOffset(field=color_by_field, sort=color_by_sort),
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
@@ -933,7 +954,7 @@ def main_chart(
                         fillOpacity=alt.condition(
                             select, opacity_encoding, alt.value(0.3)
                         ),
-                        strokeWidth=conditional_stroke,                      
+                        strokeWidth=conditional_stroke,
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
@@ -959,7 +980,7 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -978,7 +999,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1000,7 +1021,7 @@ def main_chart(
                         ),
                         strokeWidth=conditional_stroke,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1022,7 +1043,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1160,7 +1181,7 @@ def main_chart(
                             select, opacity_encoding, alt.value(0.3)
                         ),
                         strokeWidth=conditional_stroke,
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1180,7 +1201,7 @@ def main_chart(
                         color=alt.condition(
                             brush, color_by_encoding, alt.value("lightgray")
                         ),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                     .add_params(select, highlight, brush)
                 )
@@ -1199,7 +1220,7 @@ def main_chart(
                         color=color_by_encoding,
                         opacity=opacity_encoding,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                 )
 
@@ -1216,7 +1237,7 @@ def main_chart(
                         y=y_encoding,
                         color=color_by_encoding,
                         opacity=opacity_encoding,
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                 )
 
@@ -1234,7 +1255,7 @@ def main_chart(
                         color=color_by_encoding,
                         opacity=opacity_encoding,
                         order=alt.Order(color_by_field, sort=color_by_sort),
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                 )
 
@@ -1254,7 +1275,7 @@ def main_chart(
                         y=y_encoding.stack("normalize"),
                         color=color_by_encoding,
                         opacity=opacity_encoding,
-                        tooltip=tooltip
+                        tooltip=tooltip,
                     )
                 )
 
@@ -1262,6 +1283,8 @@ def main_chart(
 
         # Create the layer and add to inner layers
         inner_layers.append(base_layer)
+        if labels_show==True:
+            inner_layers.append(text)
         chart = alt.layer(*inner_layers)
         
 
@@ -1364,7 +1387,7 @@ def swapped_main_chart(
     x_type = settings["xAxis"].get("type", map_datatype_to_scale_type(schema[x_field]))
     x_sort = settings["xAxis"].get("sort", "ascending")
     x_temporal_format = settings["xAxis"].get("temporalFormat")
-    if (x_type == "temporal" and x_temporal_format is None):
+    if x_type == "temporal" and x_temporal_format is None:
         x_temporal_format = "yearmonthdate"
 
     x_aggregate = settings["xAxis"].get("aggregate", "sum")
@@ -1389,10 +1412,10 @@ def swapped_main_chart(
     color_index = 0
     custom_key = f"{mark_type} layer 1"
 
-    color_by_field=None
-    color_by_type=None
-    color_by_encoding=None
-    color_by_aggregate=None
+    color_by_field = None
+    color_by_type = None
+    color_by_encoding = None
+    color_by_aggregate = None
 
     if x_color_by:
         color_by_field = x_color_by["field"]
@@ -1479,20 +1502,20 @@ def swapped_main_chart(
         ],
         "value": 0,
     }
-    
+
     # Create the tooltip
-    tooltip=create_tooltip(
-    axis1_field=y_field,
-    axis1_type=y_type,
-    axis2_field=x_field,
-    axis2_type=x_type,
-    aggregate=x_aggregate,
-    temporal_format=y_temporal_format,
-    color_by_field=color_by_field,
-    color_by_type=color_by_type,
-    color_by_aggregate=color_by_aggregate,
-    tooltip_show=tooltip_show
-)
+    tooltip = create_tooltip(
+        axis1_field=y_field,
+        axis1_type=y_type,
+        axis2_field=x_field,
+        axis2_type=x_type,
+        aggregate=x_aggregate,
+        temporal_format=y_temporal_format,
+        color_by_field=color_by_field,
+        color_by_type=color_by_type,
+        color_by_aggregate=color_by_aggregate,
+        tooltip_show=tooltip_show,
+    )
 
     if mark_type == "grouped_bar":
         if color_by_field:
@@ -1511,7 +1534,7 @@ def swapped_main_chart(
                     yOffset=alt.YOffset(field=color_by_field, sort=color_by_sort)
                     if color_by_encoding
                     else None,
-                    tooltip=tooltip
+                    tooltip=tooltip,
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1529,7 +1552,7 @@ def swapped_main_chart(
                     color=alt.condition(
                         brush, color_by_encoding, alt.value("lightgray")
                     ),
-                    tooltip=tooltip
+                    tooltip=tooltip,
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1549,7 +1572,7 @@ def swapped_main_chart(
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
                     order=alt.Order(color_by_field, sort=color_by_sort),
-                    tooltip=tooltip
+                    tooltip=tooltip,
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1567,7 +1590,7 @@ def swapped_main_chart(
                     color=alt.condition(
                         brush, color_by_encoding, alt.value("lightgray")
                     ),
-                    tooltip=tooltip
+                    tooltip=tooltip,
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1587,7 +1610,7 @@ def swapped_main_chart(
                     fillOpacity=alt.condition(select, opacity_encoding, alt.value(0.3)),
                     strokeWidth=conditional_stroke,
                     order=alt.Order(color_by_field, sort=color_by_sort),
-                    tooltip=tooltip
+                    tooltip=tooltip,
                 )
                 .add_params(select, highlight, brush)
             )
@@ -1608,7 +1631,7 @@ def swapped_main_chart(
                     color=alt.condition(
                         brush, color_by_encoding, alt.value("lightgray")
                     ),
-                    tooltip=tooltip
+                    tooltip=tooltip,
                 )
                 .add_params(select, highlight, brush)
             )
