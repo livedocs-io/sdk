@@ -913,14 +913,15 @@ def main_chart(
             baseline=labels_position
             ).encode(
             x=x_encoding,
-            y=y_encoding.stack('zero'),
+            y=y_encoding.stack('zero')
+            if labels_mode=="per_color"
+            else alt.value(100),
             text=text_encoding,
             yOffset=alt.value(0),
             xOffset=color_by_field
-            if mark_type=="grouped_column" and color_by_field
+            if mark_type=="grouped_column" and color_by_field and labels_mode=="per_color"
             else alt.Undefined, 
             detail=color_by_field
-            # if mark_type=="line" and color_by_field
             if color_by_field and labels_mode=="per_color"
             else alt.Undefined,
             color=alt.value(labels_color), 
