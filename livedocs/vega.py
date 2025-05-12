@@ -556,22 +556,22 @@ def histogram(
     return (vega_spec, "SUCCESS")
 
 
-def create_tooltip(
-    axis1_field,
-    axis1_type,
-    temporal_format,
-    axis2_field,
-    axis2_type,
-    aggregate,
-    color_by_field=None,
-    color_by_type=None,
-    color_by_aggregate=None,
-    tooltip_show=True,
-    axis1_title=None,
-    axis2_title=None,
-    axis1_format="none",
-    axis2_format="none",
-):
+def create_tooltip(axis1_field, 
+                   axis1_type, 
+                   temporal_format,
+                   axis2_field, 
+                   axis2_type, 
+                   aggregate,
+                   color_by_field=None,
+                   color_by_type=None,
+                   color_by_aggregate=None,
+                   tooltip_show=True,
+                   axis1_title=None,
+                   axis2_title=None,
+                   axis1_format="none",
+                   axis2_format="none"
+                   ):
+    
     if not tooltip_show:
         return alt.Undefined
 
@@ -733,10 +733,11 @@ def main_chart(
         x_encoding = create_x_encoding(
             x_field, x_type, x_sort, x_temporal_format, style_settings
         )
-        color_by_field = None
-        color_by_type = None
-        color_by_encoding = None
-        color_by_aggregate = None
+        color_by_field=None
+        color_by_type=None
+        color_by_encoding=None
+        color_by_aggregate=None
+        color_by_sort=None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"].get("field", "none")
@@ -857,39 +858,89 @@ def main_chart(
 
         # MarkDataLabelsSettings
 
-        # legend_show = style_settings.get("legend", {}).get("show", True)
+        label_settings=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {})
 
-        labels_show=style_settings.get("markSettings", {}).get("line layer 1", {}).get("dataLabels", {}).get("show", True)
+        labels_show=label_settings.get("show", False)
+        labels_color=label_settings.get("color", "black")
+        labels_angle=label_settings.get("angle", 0)
+        labels_fontsize=label_settings.get("fontSize", 10)
+        labels_position_input=label_settings.get("position", "outside-top")
+        labels_mode=label_settings.get("mode", "per_color") #  'per_color' or 'total'
+
+
+        # Labels position mapping
+        label_position_map = {"inside-top": "top",
+            "outside-top": "bottom",
+            "center": "middle"
+            }
+
+        labels_position=label_position_map.get(labels_position_input, "bottom")
+
+        # Black as default color
+        if labels_color=="auto":
+            labels_color="black"
+
+        # label_settings = mark_settings.get("")
+        print(style_settings)
+        print("Labels_show:", labels_show)
+
 
         # Add text encoding for data labels
         text=None
 
-        # if y_aggregate!='none' and not mark_type.startswith("full"):
         text_encoding = alt.Text(
-                field=y_field,
-                aggregate=y_aggregate
-                if y_aggregate!='none'
-                else 'sum',
-                format=',.1f'
-                )
-
+            field=y_field,
+            aggregate=y_aggregate
+            if y_aggregate!="none"
+            else alt.Undefined,
+            format=',.1f'
+            )
+        
         text = alt.Chart(df).mark_text(
             align="left" 
             if x_temporal_format 
-            else "center"
+            else "center",
+            baseline=labels_position
             ).encode(
             x=x_encoding,
-            y=y_encoding,
+            y=y_encoding.stack('zero')
+            if labels_mode=="per_color"
+            else alt.value(100),
             text=text_encoding,
-            yOffset=alt.value(-5),
+            yOffset=alt.value(0),
             xOffset=color_by_field
-            if mark_type=="grouped_column" and color_by_field
+            if mark_type=="grouped_column" and color_by_field and labels_mode=="per_color"
             else alt.Undefined, 
             detail=color_by_field
-            if mark_type=="line" and color_by_field
+            if color_by_field and labels_mode=="per_color"
+            else alt.Undefined,
+            color=alt.value(labels_color), 
+            angle=alt.value(labels_angle), 
+            size=alt.value(labels_fontsize),
+            order=alt.Order(sort=color_by_sort)
+            if color_by_sort
             else alt.Undefined
             )
 
+        # Place text in center of bar
+        if labels_position=="middle" and labels_mode=="per_color" and mark_type=="stacked_column":
+            text=text.encode(
+                y=y_encoding.bandPosition(0.5).stack("zero")
+            )
+        elif labels_position=="middle" and labels_mode=="total" and (mark_type=="stacked_column"
+                                                                    or mark_type=="grouped_column"):
+                text=text.encode(
+                    y=alt.Y(field="__label_position",
+                        type="quantitative",
+                        aggregate=y_aggregate
+                        if y_aggregate!="none"
+                        else alt.Undefined
+                    )
+                ).transform_calculate(
+                calculate=f"datum['{y_field}'] / 2",
+                as_="__label_position"
+            )
+                
         # Subplots
         h_subplot_settings=subplots.get("horizontal", {})
         h_subplot_field=h_subplot_settings.get("field", "none")
@@ -899,14 +950,12 @@ def main_chart(
         h_subplot_bin_bool=h_subplot_settings.get("bin", False)
         h_subplot_bin_count=h_subplot_settings.get("bin_count", 5)
 
-        
+
         v_subplot_settings=subplots.get("vertical", {})
         v_subplot_field=h_subplot_settings.get("field", "none")
         v_subplot_linkYAxis=h_subplot_settings.get("linkYAxis", True)
-
-
+                
         # Make facet plot
-
         facet=None
 
         if h_subplot_field!="none":
@@ -917,6 +966,7 @@ def main_chart(
                 if h_subplot_bin_bool
                 else alt.Undefined
             )
+
 
 
 
@@ -964,6 +1014,7 @@ def main_chart(
                 )
 
         elif mark_type == "stacked_column":
+            
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -1289,6 +1340,7 @@ def main_chart(
         y_lines=create_line(df, "y", style_settings)
 
         # Create the layer and add to inner layers
+        
         inner_layers.append(base_layer)
         if labels_show==True:
             inner_layers.append(text)
@@ -1470,10 +1522,11 @@ def swapped_main_chart(
     color_index = 0
     custom_key = f"{mark_type} layer 1"
 
-    color_by_field = None
-    color_by_type = None
-    color_by_encoding = None
-    color_by_aggregate = None
+    color_by_field=None
+    color_by_type=None
+    color_by_encoding=None
+    color_by_aggregate=None
+    color_by_sort=None
 
     if x_color_by:
         color_by_field = x_color_by["field"]
