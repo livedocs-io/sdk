@@ -4,12 +4,19 @@ from functools import lru_cache, wraps
 from typing import Dict, Optional
 
 import altair as alt
+import dateutil.parser
 import polars as pl
 import requests
 import sentry_sdk
 from tqdm.auto import tqdm
 
-from livedocs.types import Credentials, FileManifest, FileManifestAction, GCSBucketType
+from livedocs.types import (
+    Credentials,
+    FileManifest,
+    FileManifestAction,
+    GCSBucketType,
+    StyleSettings,
+)
 
 _LIVEDOCS_COLORS = [
     "#0094ff",
@@ -30,6 +37,24 @@ _LIVEDOCS_COLORS = [
 ]
 
 _LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
+
+
+REF_STROKE_DASH = {"solid": [0, 0], "dashed": [5, 5], "dotted": [2, 5]}
+
+REF_BASELINE = {
+    "outside": "bottom",
+    "top-left": "bottom",
+    "top-right": "bottom",
+    "bottom-left": "top",
+    "bottom-right": "top",
+}
+REF_ALIGN = {
+    "outside": "center",
+    "top-left": "right",
+    "top-right": "left",
+    "bottom-left": "right",
+    "bottom-right": "left",
+}
 
 
 def get_run_context() -> str:
@@ -159,7 +184,7 @@ def _fetch_file_manifest(
         )
 
         response.raise_for_status()
-        return response.json()
+        return FileManifest(**response.json())
     except requests.exceptions.HTTPError as e:
         if e.response is not None:
             status_code = e.response.status_code
@@ -298,6 +323,104 @@ def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
     return column_types
 
 
+def get_axis_format(timeunit: str) -> str:
+    format_map = {
+        "year": "%Y",
+        "yearquarter": "%Y Q%q",
+        "yearmonth": "%b %Y",
+        "yearweek": "%Y W%W",
+        "yearmonthdate": "%b %d, %Y",
+        "yearmonthdatehours": "%b %d, %Y %I:%M %p",
+        "yearmonthdatehoursminutes": "%b %d, %Y %I:%M",
+        "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
+    }
+    return format_map.get(timeunit, "")
+
+
+def iso_to_alt_datetime(iso_string):
+    """Convert ISO date string to alt.DateTime object"""
+    dt = dateutil.parser.parse(iso_string)
+    return alt.DateTime(
+        year=dt.year,
+        month=dt.month,
+        date=dt.day,
+        hours=dt.hour,
+        minutes=dt.minute,
+        seconds=dt.second,
+    )
+
+
+def num_converter(num):
+    try:
+        return float(num)
+    except ValueError:
+        pass
+
+    try:
+        return int(num)
+    except ValueError:
+        pass
+
+    try:
+        return iso_to_alt_datetime(num)
+    except ValueError:
+        pass
+
+    return num
+
+
+"""
+Generates an altair line plot and altair label plot to layer on base plot
+"""
+
+
+def create_line(
+    df: pl.DataFrame,
+    axis: str,  # "x" or "y"
+    style_settings: StyleSettings,
+):
+    if axis not in ["x", "y"]:
+        raise ValueError("Invalid value for 'axis'. Expected 'x' or 'y'.")
+
+    ref_list = style_settings.get(f"{axis}Axis", {}).get("referenceLines", [])
+    ref_chart_list = []
+
+    if len(ref_list) > 0:
+        for line in ref_list:
+            val = num_converter(line.get("value", ""))
+
+            if line["labelPosition"] == "none":
+                line["labelPosition"] = "outside"
+
+            ref_line = (
+                alt.Chart(df)
+                .mark_rule(
+                    color=line.get("color", "#93715A"),
+                    strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
+                    strokeWidth=line.get("lineWidth", 1),
+                )
+                .encode(**{axis: alt.datum(val)})
+            )
+
+            ref_chart_list.append(ref_line)
+
+            label = ref_line.mark_text(
+                baseline=REF_BASELINE[line.get("labelPosition", "outside")],
+                align=REF_ALIGN[line.get("labelPosition", "outside")],
+                size=12,
+                angle=line.get("labelAngle", 0),
+                dx=-5,
+                dy=5.5,
+            ).encode(
+                text=alt.value(line.get("label", "Reference Line")),
+                **({"y": alt.value(0)} if axis == "x" else {"x": alt.value(0)}),
+            )
+
+            ref_chart_list.append(label)
+
+    return ref_chart_list
+
+
 def _setup_sentry():
     """
     Initializes Sentry for error tracking and performance monitoring.
@@ -318,8 +441,10 @@ def _setup_dirs():
     Sets up the user files directory if it doesn't exist.
     """
     user_files_dir = os.getenv("LIVEDOCS_FILES_PATH")
-    if user_files_dir and not os.path.exists(user_files_dir):
-        os.makedirs(user_files_dir, exist_ok=True)
+    if not user_files_dir:
+        raise ValueError("LIVEDOCS_FILES_PATH environment variable not set")
+
+    os.makedirs(user_files_dir, exist_ok=True)
 
 
 def _get_chunk_size(file_size_bytes: Optional[int]) -> int:

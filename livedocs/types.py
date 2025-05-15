@@ -33,7 +33,7 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
-class FileManifest(TypedDict):
+class FileManifest(BaseModel):
     file_id: str  # The unique ID of the file (resolved by the API)
     file_name: str  # The display name of the file
     signed_url: str  # The GCS signed URL for download/access
@@ -323,6 +323,20 @@ class DBSaveConfig(TypedDict):
 # Vega Chart Spec
 
 
+class ReferenceLineSettings(TypedDict):
+    label: Optional[str]
+    value: Optional[str]
+    color: Optional[str]
+    labelPosition: Optional[
+        Literal[
+            "none", "outside", "top-left", "top-right", "bottom-left", "bottom-right"
+        ]
+    ]
+    labelAngle: Optional[int]
+    lineWidth: Optional[int]
+    lineStyle: Optional[Literal["solid", "dashed", "dotted"]]
+
+
 class AxisStyleSettings(TypedDict, total=False):
     title: Optional[str]
     format: Optional[str]
@@ -332,6 +346,7 @@ class AxisStyleSettings(TypedDict, total=False):
     grid: Optional[Literal["solid", "dashed", "none"]]
     labelAngle: Optional[int]
     scale: Optional[Literal["linear", "log", "pow", "sqrt"]]
+    referenceLines: Optional[List[ReferenceLineSettings]]
 
 
 class LegendSettings(TypedDict, total=False):
@@ -361,9 +376,19 @@ class MarkOpacitySettings(TypedDict):
     mode: Literal["all_fields", "by_field", "based_on_field"]
 
 
+class MarkDataLabelsSettings(TypedDict):
+    show: Optional[bool]
+    mode: Optional[Literal["per_color", "total"]]
+    position: Optional[Literal["inside-top", "center", "outside-top"]]
+    color: Optional[Literal["auto", "white", "black"]]
+    angle: Optional[int]
+    fontSize: Optional[int]
+
+
 class MarkSettings(TypedDict):
     color: Optional[MarkColorSettings]
     opacity: Optional[MarkOpacitySettings]
+    dataLabels: Optional[MarkDataLabelsSettings]
 
 
 class StyleSettings(TypedDict, total=False):
@@ -441,6 +466,28 @@ class HistogramSpec(TypedDict):
     binBy: HistogramBinBy
 
 
+class HorizontalSubplotSettings(TypedDict):
+    field: Optional[str]
+    sort: Optional[Literal["ascending", "descending"]]
+    wrap: Optional[bool]
+    columns: Optional[int]
+    bin: Optional[bool]
+    bin_count: Optional[int]
+
+
+class VerticalSubplotSettings(TypedDict):
+    field: Optional[str]
+    sort: Optional[Literal["ascending", "descending"]]
+    linkYAxis: Optional[bool]
+    bin: Optional[bool]
+    bin_count: Optional[int]
+
+
+class SubplotSettings(TypedDict):
+    horizontal: HorizontalSubplotSettings
+    vertical: VerticalSubplotSettings
+
+
 class Spec(TypedDict):
     chartType: Literal["main", "histogram", "swapped_main", "pie"]
     styleSettings: Optional[StyleSettings]
@@ -448,6 +495,8 @@ class Spec(TypedDict):
     swappedChartSettings: Optional[LivedocsSwappedChartSpec]
     histogramSettings: Optional[HistogramSpec]
     pieSettings: Optional[PieChartSpec]
+    colorGroups: Optional[Dict[str, Dict[str, str] | str]]
+    subplots: Optional[SubplotSettings]
 
 
 __all__ = [

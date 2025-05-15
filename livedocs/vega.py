@@ -1,85 +1,40 @@
 import json
-import uuid
 
 import altair as alt
 import polars as pl
+
 from livedocs.types import (
     CacheInfo,
+    DatabaseType,
     ElementDataSource,
+    ElementDatasourceType,
     HistogramSpec,
     LivedocsChartSpec,
     LivedocsSwappedChartSpec,
     PieChartSpec,
     Spec,
     StyleSettings,
+    SubplotSettings,
     VegaSpec,
-    DatabaseType,
-    ElementDatasourceType,
 )
 from livedocs.utils.common import (
     _get_color,
     _get_color_group_key,
     _get_user_defined_color,
     _get_user_defined_opacity,
+    create_line,
+    get_axis_format,
+    iso_to_alt_datetime,
 )
 
-"""
-Helper function, never used in production environments. 
-It removes the data key from the vega spec dict for clearer logging. 
-"""
 
-
-def clean_spec_for_logging(spec):
-    """Remove the 'data' part from the spec for cleaner logging."""
-    spec_dict = json.loads(spec)
-    if "data" in spec_dict:
-        spec_dict["data"] = {"values": "[data removed for logging]"}
-    if "datasets" in spec_dict:
-        spec_dict["datasets"] = {"values": "[data removed for logging]"}
-
-    return json.dumps(spec_dict, indent=2)
-
-
-"""
-Helper function, never used in a production environment. 
-It returns a string that contains information about a polars dataframe 
-in the absence of a Polars info() method like Pandas. 
-"""
-
-
-def dataframe_info(df: pl.DataFrame):
-    info = [
-        f"Polars DataFrame with {df.shape[0]} rows and {df.shape[1]} columns.",
-        "Columns:",
-    ]
-    for col in df.columns:
-        dtype = str(df[col].dtype)
-        non_null = df.shape[0] - df[col].null_count()
-
-        if isinstance(df[col].dtype, pl.datatypes.String):
-            empty_string_count = df[col].is_null().sum() + (df[col] == "").sum()
-            info.append(
-                f"  {col}: {dtype} ({non_null} non-null, {empty_string_count} empty/null)"
-            )
-        else:
-            info.append(f"  {col}: {dtype} ({non_null} non-null)")
-
-    return "\n".join(info)
-
-
-def generate_unique_name(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex}"
-
-
-def _get_altair_datasource_query(datasource: ElementDataSource):
+def get_altair_datasource_query(datasource: ElementDataSource):
     """
     Prepares the DuckDB query for each datasource
     """
-
     match datasource["source_type"]:
         case ElementDatasourceType.file.value:
             file_name = datasource["file_info"]["file_name"]
-
             if datasource["file_info"]["file_type"] == "csv":
                 return f"SELECT * FROM read_csv_auto('{file_name}')"
             elif datasource["file_info"]["file_type"] == "xlsx":
@@ -101,28 +56,12 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
             )
 
 
-"""
-Maps the Livedocs primitive type to it's respective Vega field type
-"""
-
-
-def map_datatype_to_scale_type(type: str) -> str:
-    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
-    return type_mapping.get(type, "nominal")
-
-
-def convert_datetime_to_iso(df):
-    for column in df.select_dtypes(include=["datetime64"]).columns:
-        df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
-    return df
-
-
 def create_vega_spec(
     df: pl.DataFrame, spec: Spec, schema: dict, cache_info: CacheInfo = None
 ):
     """
     Returns a Vega spec for a given Livedocs chart configuration and a dataframe
-    retrieved using _get_altair_datasource_query method. In production, the vegafusion
+    retrieved using get_altair_datasource_query method. In production, the vegafusion
     data transformer should be enabled, although that obscures the spec.
 
     This method only delegates the spec generation to other more specific functions
@@ -133,20 +72,23 @@ def create_vega_spec(
     style_settings = spec.get("styleSettings", {})
 
     if spec.get("chartType"):
+        subplots = spec.get("subplots", {})
         if spec["chartType"] == "main":
             (vega_spec, status) = main_chart(
-                df, spec["chartSettings"], schema, style_settings
+                df, spec["chartSettings"], schema, style_settings, subplots
             )
         if spec["chartType"] == "swapped_main":
             (vega_spec, status) = swapped_main_chart(
-                df, spec["swappedChartSettings"], schema, style_settings
+                df, spec["swappedChartSettings"], schema, style_settings, subplots
             )
         elif spec["chartType"] == "histogram":
             (vega_spec, status) = histogram(
-                df, spec["histogramSettings"], schema, style_settings
+                df, spec["histogramSettings"], schema, style_settings, subplots
             )
         elif spec["chartType"] == "pie":
-            (vega_spec, status) = pie(df, spec["pieSettings"], schema, style_settings)
+            (vega_spec, status) = pie(
+                df, spec["pieSettings"], schema, style_settings, subplots
+            )
 
         validated_spec = VegaSpec(
             **{
@@ -176,17 +118,16 @@ def create_vega_spec(
         return validated_spec.model_dump_json()
 
 
-"""
-Generates the Vega spec from a pie chart configuration. 
-"""
-
-
 def pie(
     df: pl.DataFrame,
     settings: PieChartSpec,
     schema: dict,
-    style: StyleSettings,  ###
+    style: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
+    """
+    Generates the Vega spec from a pie chart configuration.
+    """
     usermeta = settings
     if "color_by" in settings:
         color_by_field = settings["color_by"].get("field", "")
@@ -349,6 +290,7 @@ def pie(
             "chartType": "pie",
             "pieSettings": usermeta,
             "styleSettings": style,
+            "subplots": subplots,
         },
     )
 
@@ -357,17 +299,16 @@ def pie(
     return (vega_spec, "SUCCESS")
 
 
-"""
-Generates the Vega spec from a histogram chart configuration. 
-"""
-
-
 def histogram(
     df: pl.DataFrame,
     settings: HistogramSpec,
     schema: dict,
     style: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
+    """
+    Generates the Vega spec from a histogram chart configuration.
+    """
     if "field" not in settings:
         empty_chart = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
@@ -522,13 +463,20 @@ def histogram(
         .resolve_scale(color="independent", y="shared")
     )
 
-    chart = alt.layer(outer_layer).properties(
+    chart = alt.layer(outer_layer)
+
+    x_lines = create_line(df, "x", style)
+    y_lines = create_line(df, "y", style)
+
+    # Create the layer and add to inner layers
+    chart = alt.layer(chart, *x_lines, *y_lines).properties(
         width="container",
         height="container",
         usermeta={
             "chartType": "histogram",
             "histogramSettings": usermeta,
             "styleSettings": style,
+            "subplots": subplots,
         },
     )
 
@@ -588,21 +536,20 @@ def create_tooltip(
     return tooltips
 
 
-"""
-Generates the Vega spec from a chart configuration for:
-- Line charts
-- Area, stacked area charts
-- Column charts (grouped, stacked, and full stacked)
-- Scatter charts
-"""
-
-
 def main_chart(
     df: pl.DataFrame,
     settings: LivedocsChartSpec,
     schema: dict,
     style_settings: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
+    """
+    Generates the Vega spec from a chart configuration for:
+    - Line charts
+    - Area, stacked area charts
+    - Column charts (grouped, stacked, and full stacked)
+    - Scatter charts
+    """
     usermeta = settings
 
     legend_show = style_settings.get("legend", {}).get("show", True)
@@ -715,6 +662,7 @@ def main_chart(
         color_by_type = None
         color_by_encoding = None
         color_by_aggregate = None
+        color_by_sort = None
 
         if y_series.get("color_by") and y_series["color_by"].get("field") != "none":
             color_by_field = y_series["color_by"].get("field", "none")
@@ -832,6 +780,118 @@ def main_chart(
             axis1_title=x_field,
             axis2_title=y_field,
         )
+
+        # MarkDataLabelsSettings
+
+        label_settings = (
+            style_settings.get("markSettings", {})
+            .get("line layer 1", {})
+            .get("dataLabels", {})
+        )
+
+        labels_show = label_settings.get("show", False)
+        labels_color = label_settings.get("color", "black")
+        labels_angle = label_settings.get("angle", 0)
+        labels_fontsize = label_settings.get("fontSize", 10)
+        labels_position_input = label_settings.get("position", "outside-top")
+        labels_mode = label_settings.get("mode", "per_color")  #  'per_color' or 'total'
+
+        # Labels position mapping
+        label_position_map = {
+            "inside-top": "top",
+            "outside-top": "bottom",
+            "center": "middle",
+        }
+
+        labels_position = label_position_map.get(labels_position_input, "bottom")
+
+        # Black as default color
+        if labels_color == "auto":
+            labels_color = "black"
+
+        # Add text encoding for data labels
+        text = None
+
+        text_encoding = alt.Text(
+            field=y_field,
+            aggregate=y_aggregate if y_aggregate != "none" else alt.Undefined,
+            format=",.1f",
+        )
+
+        text = (
+            alt.Chart(df)
+            .mark_text(
+                align="left" if x_temporal_format else "center",
+                baseline=labels_position,
+            )
+            .encode(
+                x=x_encoding,
+                y=y_encoding.stack("zero")
+                if labels_mode == "per_color"
+                else alt.value(100),
+                text=text_encoding,
+                yOffset=alt.value(0),
+                xOffset=color_by_field
+                if mark_type == "grouped_column"
+                and color_by_field
+                and labels_mode == "per_color"
+                else alt.Undefined,
+                detail=color_by_field
+                if color_by_field and labels_mode == "per_color"
+                else alt.Undefined,
+                color=alt.value(labels_color),
+                angle=alt.value(labels_angle),
+                size=alt.value(labels_fontsize),
+                order=alt.Order(sort=color_by_sort) if color_by_sort else alt.Undefined,
+            )
+        )
+
+        # Place text in center of bar
+        if (
+            labels_position == "middle"
+            and labels_mode == "per_color"
+            and mark_type == "stacked_column"
+        ):
+            text = text.encode(y=y_encoding.bandPosition(0.5).stack("zero"))
+        elif (
+            labels_position == "middle"
+            and labels_mode == "total"
+            and (mark_type == "stacked_column" or mark_type == "grouped_column")
+        ):
+            text = text.encode(
+                y=alt.Y(
+                    field="__label_position",
+                    type="quantitative",
+                    aggregate=y_aggregate if y_aggregate != "none" else alt.Undefined,
+                )
+            ).transform_calculate(
+                calculate=f"datum['{y_field}'] / 2", as_="__label_position"
+            )
+
+        # Subplots
+        h_subplot_settings = subplots.get("horizontal", {})
+        h_subplot_field = h_subplot_settings.get("field", "none")
+        h_subplot_wrap = h_subplot_settings.get("wrap", False)
+        h_subplot_cols = h_subplot_settings.get("columns", 3)
+        h_subplot_sort = h_subplot_settings.get("sort", "ascending")
+        h_subplot_bin_bool = h_subplot_settings.get("bin", False)
+        h_subplot_bin_count = h_subplot_settings.get("bin_count", 5)
+
+        v_subplot_settings = subplots.get("vertical", {})
+        v_subplot_field = h_subplot_settings.get("field", "none")
+        v_subplot_linkYAxis = h_subplot_settings.get("linkYAxis", True)
+
+        # Make facet plot
+        facet = None
+
+        if h_subplot_field != "none":
+            facet = alt.Facet(
+                field=h_subplot_field,
+                sort=h_subplot_sort,
+                bin=alt.Bin(maxbins=h_subplot_bin_count)
+                if h_subplot_bin_bool
+                else alt.Undefined,
+            )
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1075,7 +1135,11 @@ def main_chart(
                     .add_params(nearest)
                 )
 
-                base_layer = alt.layer(lines, points, rules)
+                series_list = settings.get("yAxis", {}).get("primary", [])
+                if len(series_list) == 1:
+                    base_layer = alt.layer(lines, points, rules)
+                else:
+                    base_layer = alt.layer(lines)
 
         elif mark_type == "point":
             brush = alt.selection_interval()
@@ -1192,9 +1256,72 @@ def main_chart(
                     )
                 )
 
+        x_lines = create_line(df, "x", style_settings)
+        y_lines = create_line(df, "y", style_settings)
+
         # Create the layer and add to inner layers
+
         inner_layers.append(base_layer)
+        if labels_show is True:
+            inner_layers.append(text)
         chart = alt.layer(*inner_layers)
+
+    ## For tooltips on charts with added series
+    series_list = settings.get("yAxis", {}).get("primary", [])
+    if len(series_list) > 1:
+        nearest2 = alt.selection_point(
+            nearest=True,
+            on="pointerover",
+            empty=False,
+            encodings=["x"],
+            fields=[x_field]
+            if x_temporal_format is None
+            else [f"{x_temporal_format}({(x_field)})"],
+        )
+
+        tooltip_list = []
+        for col in series_list:
+            if col["field"] == "none":
+                tooltip = alt.Tooltip(alt.Undefined)
+            else:
+                tooltip = alt.Tooltip(
+                    field=col["field"],
+                    type=col["type"],
+                    title=col["field"]
+                    if col["aggregate"] == "none"
+                    else f"{col['aggregate']} of {col['field']}".title(),
+                    aggregate=col["aggregate"]
+                    if col["aggregate"] != "none"
+                    else alt.Undefined,
+                )
+            tooltip_list.append(tooltip)
+
+        tooltip_list.insert(
+            0,
+            alt.Tooltip(
+                field=x_field,
+                type=x_type,
+                title=x_field,
+                timeUnit=x_temporal_format if x_temporal_format else alt.Undefined,
+                format=alt.Undefined,
+            ),
+        )
+
+        final_rule = (
+            alt.Chart(df)
+            .mark_rule()
+            .encode(
+                x=x_encoding,
+                tooltip=tooltip_list,
+                opacity=alt.condition(nearest2, alt.value(1), alt.value(0)),
+            )
+            .add_params(nearest2)
+        )
+
+        chart = alt.layer(*inner_layers, *x_lines, *y_lines, final_rule)
+
+    else:
+        chart = alt.layer(*inner_layers, *x_lines, *y_lines)
 
     for t in transform:
         if "calculate" in t:
@@ -1205,26 +1332,39 @@ def main_chart(
     # Add scale resolution
     chart = chart.resolve_scale(color="independent", y="shared")
 
-    chart = chart.properties(
-        width="container",
-        height="container",
-        usermeta={
-            "chartType": "main",
-            "chartSettings": usermeta,
-            "styleSettings": style_settings,
-            "colorGroups": color_groups,
-        },
-    )
+    if facet:
+        chart = chart.properties(
+            width=200,
+            height=200,
+        )
+    else:
+        chart = chart.properties(
+            width="container",
+            height="container",
+            usermeta={
+                "chartType": "main",
+                "chartSettings": usermeta,
+                "styleSettings": style_settings,
+                "colorGroups": color_groups,
+                "subplots": subplots,
+            },
+        )
 
+    # Facet if required
+    if facet:
+        chart = chart.facet(
+            facet,
+            columns=h_subplot_cols if h_subplot_wrap else alt.Undefined,
+            usermeta={
+                "chartType": "main",
+                "chartSettings": usermeta,
+                "styleSettings": style_settings,
+                "colorGroups": color_groups,
+                "subplots": subplots,
+            },
+        )
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
-
-
-"""
-Generates the Vega spec from a chart configuration where the UI indicates
-that the Axes of the chart have been swapped. Eg: Horizontal bar chart, 
-grouped, stacked, and full stacked.  
-"""
 
 
 def swapped_main_chart(
@@ -1232,7 +1372,13 @@ def swapped_main_chart(
     settings: LivedocsSwappedChartSpec,
     schema: dict,
     style_settings: StyleSettings,
+    subplots: SubplotSettings,
 ) -> tuple[str, str]:
+    """
+    Generates the Vega spec from a chart configuration where the UI indicates
+    that the Axes of the chart have been swapped. Eg: Horizontal bar chart,
+    grouped, stacked, and full stacked.
+    """
     usermeta = settings
 
     legend_show = style_settings.get("legend", {}).get("show", True)
@@ -1278,7 +1424,6 @@ def swapped_main_chart(
 
     y_field = settings["yAxis"]["field"]
     y_type = settings["yAxis"].get("type", map_datatype_to_scale_type(schema[y_field]))
-    # y_sort = settings["yAxis"].get("sort", "ascending")
     y_temporal_format = settings["yAxis"].get("temporalFormat")
     mark_type = settings["yAxis"].get("mark", "grouped_bar")
     y_aggregate = settings["yAxis"].get("aggregate", "none")
@@ -1299,6 +1444,7 @@ def swapped_main_chart(
     color_by_type = None
     color_by_encoding = None
     color_by_aggregate = None
+    color_by_sort = None
 
     if x_color_by:
         color_by_field = x_color_by["field"]
@@ -1521,6 +1667,11 @@ def swapped_main_chart(
 
     chart = alt.layer(base_layer)
 
+    x_lines = create_line(df, "x", style_settings)
+    y_lines = create_line(df, "y", style_settings)
+
+    chart = alt.layer(chart, *x_lines, *y_lines)
+
     for t in transform:
         if "calculate" in t:
             chart = chart.transform_calculate(**t)
@@ -1536,6 +1687,7 @@ def swapped_main_chart(
             "chartType": "swapped_main",
             "swappedChartSettings": usermeta,
             "styleSettings": style_settings,
+            "subplots": subplots,
         },
     )
 
@@ -1572,6 +1724,15 @@ def create_x_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
+            ),
+            scale=alt.Scale(
+                domainMax=iso_to_alt_datetime(axis_settings["max"])
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=iso_to_alt_datetime(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", alt.Undefined),
             ),
         )
     else:
@@ -1630,6 +1791,15 @@ def create_y_encoding(
                 else alt.Undefined,
                 labelOverlap=True,
             ),
+            scale=alt.Scale(
+                domainMax=iso_to_alt_datetime(axis_settings["max"])
+                if "max" in axis_settings
+                else alt.Undefined,
+                domainMin=iso_to_alt_datetime(axis_settings["min"])
+                if "min" in axis_settings
+                else alt.Undefined,
+                type=axis_settings.get("scale", alt.Undefined),
+            ),
         )
     else:
         return alt.Y(
@@ -1663,26 +1833,18 @@ def create_y_encoding(
         )
 
 
-def get_axis_format(timeunit: str) -> str:
-    format_map = {
-        "year": "%Y",
-        "yearquarter": "%Y Q%q",
-        "yearmonth": "%b %Y",
-        "yearweek": "%Y W%W",
-        "yearmonthdate": "%b %d, %Y",
-        "yearmonthdatehours": "%b %d, %Y %I:%M %p",
-        "yearmonthdatehoursminutes": "%b %d, %Y %I:%M",
-        "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
-    }
-    return format_map.get(timeunit, "")
-
-
-"""
-Picks a random field from a given schema to be used in a secondary axis
-"""
+def map_datatype_to_scale_type(type: str) -> str:
+    """
+    Maps the Livedocs primitive type to it's respective Vega field type
+    """
+    type_mapping = {"STRING": "nominal", "NUMBER": "quantitative", "DATE": "temporal"}
+    return type_mapping.get(type, "nominal")
 
 
 def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
+    """
+    Picks a random field from a given schema to be used in a secondary axis
+    """
     type_preference = {
         "NUMBER": "quantitative",
         "STRING": "nominal",

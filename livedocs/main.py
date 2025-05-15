@@ -22,12 +22,12 @@ from livedocs.types import (
     ElementDatasourceType,
     GCSBucketType,
     JsonDisplay,
-    LivedocsChartSpec,
     LivedocsResult,
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
     Schema,
+    Spec,
 )
 from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
@@ -50,7 +50,7 @@ from livedocs.utils.postgres import (
 from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
-from livedocs.vega import _get_altair_datasource_query, create_vega_spec
+from livedocs.vega import create_vega_spec, get_altair_datasource_query
 
 
 class Livedocs:
@@ -374,13 +374,13 @@ class Livedocs:
             dict: The Vega specification as a base64 encoded string.
         """
         with sentry_sdk.start_transaction(op="task", name="run chart element"):
-            settings: LivedocsChartSpec = json.loads(settings_str)
+            settings: Spec = json.loads(settings_str)
             datasource: ElementDataSource = json.loads(datasource_str)
 
             # Run actual span
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             df, schema, cache_info = self._query_with_schema(
-                _get_altair_datasource_query(datasource),
+                get_altair_datasource_query(datasource),
                 datasource,
                 dataframe,
                 use_cache,
@@ -430,7 +430,7 @@ class Livedocs:
 
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             df, schema, cache_info = self._query_with_schema(
-                _get_altair_datasource_query(datasource),
+                get_altair_datasource_query(datasource),
                 datasource,
                 dataframe,
                 use_cache,
@@ -1053,6 +1053,9 @@ class Livedocs:
         if not (file_name or file_id) or (file_name and file_id):
             raise ValueError("Exactly one of file_name or file_id must be provided.")
 
+        if path is None:
+            raise ValueError("Please provide a valid path to save the file.")
+
         os.makedirs(path, exist_ok=True)
 
         manifest_data = _fetch_file_manifest(
@@ -1064,13 +1067,13 @@ class Livedocs:
             file_name=file_name,
         )
 
-        authoritative_file_name = manifest_data.get("file_name")
+        authoritative_file_name = manifest_data.file_name
         local_file_path = os.path.join(path, authoritative_file_name)
         file_exists = os.path.exists(local_file_path)
 
         if not force_download and file_exists:
             print(
-                f"File '{authoritative_file_name}' (ID: {manifest_data.get('file_id')}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
+                f"File '{authoritative_file_name}' (ID: {manifest_data.file_id}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
             )
             return local_file_path
 
@@ -1080,8 +1083,8 @@ class Livedocs:
             )
             os.remove(local_file_path)
 
-        signed_url = manifest_data.get("signed_url")
-        expected_size_bytes = manifest_data.get("size")
+        signed_url = manifest_data.signed_url
+        expected_size_bytes = manifest_data.size if manifest_data.size else None
 
         _download_file(
             signed_url,
