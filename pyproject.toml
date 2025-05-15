@@ -21,6 +21,8 @@ dependencies = [
     "msgpack>=1.1,<2",
     "sentry-sdk>=2.16,<3",
     "google-cloud-bigquery>=3.29.0,<4",
+    "ipython==9.1.0",
+    "tqdm>=4.67.1",
 ]
 requires-python = ">=3.12"
 classifiers = [

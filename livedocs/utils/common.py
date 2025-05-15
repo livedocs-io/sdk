@@ -184,7 +184,7 @@ def _fetch_file_manifest(
         )
 
         response.raise_for_status()
-        return response.json()
+        return FileManifest(**response.json())
     except requests.exceptions.HTTPError as e:
         if e.response is not None:
             status_code = e.response.status_code
@@ -441,8 +441,10 @@ def _setup_dirs():
     Sets up the user files directory if it doesn't exist.
     """
     user_files_dir = os.getenv("LIVEDOCS_FILES_PATH")
-    if user_files_dir and not os.path.exists(user_files_dir):
-        os.makedirs(user_files_dir, exist_ok=True)
+    if not user_files_dir:
+        raise ValueError("LIVEDOCS_FILES_PATH environment variable not set")
+
+    os.makedirs(user_files_dir, exist_ok=True)
 
 
 def _get_chunk_size(file_size_bytes: Optional[int]) -> int:

@@ -33,7 +33,7 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
-class FileManifest(TypedDict):
+class FileManifest(BaseModel):
     file_id: str  # The unique ID of the file (resolved by the API)
     file_name: str  # The display name of the file
     signed_url: str  # The GCS signed URL for download/access
@@ -322,14 +322,20 @@ class DBSaveConfig(TypedDict):
 
 # Vega Chart Spec
 
+
 class ReferenceLineSettings(TypedDict):
     label: Optional[str]
     value: Optional[str]
     color: Optional[str]
-    labelPosition: Optional[Literal["none", "outside", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    labelPosition: Optional[
+        Literal[
+            "none", "outside", "top-left", "top-right", "bottom-left", "bottom-right"
+        ]
+    ]
     labelAngle: Optional[int]
     lineWidth: Optional[int]
     lineStyle: Optional[Literal["solid", "dashed", "dotted"]]
+
 
 class AxisStyleSettings(TypedDict, total=False):
     title: Optional[str]
@@ -340,7 +346,8 @@ class AxisStyleSettings(TypedDict, total=False):
     grid: Optional[Literal["solid", "dashed", "none"]]
     labelAngle: Optional[int]
     scale: Optional[Literal["linear", "log", "pow", "sqrt"]]
-    referenceLines: Optional[List[ReferenceLineSettings]]   
+    referenceLines: Optional[List[ReferenceLineSettings]]
+
 
 class LegendSettings(TypedDict, total=False):
     show: Optional[bool]
@@ -376,6 +383,7 @@ class MarkDataLabelsSettings(TypedDict):
     color: Optional[Literal["auto", "white", "black"]]
     angle: Optional[int]
     fontSize: Optional[int]
+
 
 class MarkSettings(TypedDict):
     color: Optional[MarkColorSettings]
@@ -474,9 +482,11 @@ class VerticalSubplotSettings(TypedDict):
     bin: Optional[bool]
     bin_count: Optional[int]
 
+
 class SubplotSettings(TypedDict):
     horizontal: HorizontalSubplotSettings
-    vertical: VerticalSubplotSettings   
+    vertical: VerticalSubplotSettings
+
 
 class Spec(TypedDict):
     chartType: Literal["main", "histogram", "swapped_main", "pie"]

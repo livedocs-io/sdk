@@ -1,5 +1,4 @@
 import json
-import uuid
 
 import altair as alt
 import polars as pl
@@ -29,15 +28,13 @@ from livedocs.utils.common import (
 )
 
 
-def _get_altair_datasource_query(datasource: ElementDataSource):
+def get_altair_datasource_query(datasource: ElementDataSource):
     """
     Prepares the DuckDB query for each datasource
     """
-
     match datasource["source_type"]:
         case ElementDatasourceType.file.value:
             file_name = datasource["file_info"]["file_name"]
-
             if datasource["file_info"]["file_type"] == "csv":
                 return f"SELECT * FROM read_csv_auto('{file_name}')"
             elif datasource["file_info"]["file_type"] == "xlsx":
@@ -64,7 +61,7 @@ def create_vega_spec(
 ):
     """
     Returns a Vega spec for a given Livedocs chart configuration and a dataframe
-    retrieved using _get_altair_datasource_query method. In production, the vegafusion
+    retrieved using get_altair_datasource_query method. In production, the vegafusion
     data transformer should be enabled, although that obscures the spec.
 
     This method only delegates the spec generation to other more specific functions
@@ -811,10 +808,6 @@ def main_chart(
         # Black as default color
         if labels_color == "auto":
             labels_color = "black"
-
-        # label_settings = mark_settings.get("")
-        print(style_settings)
-        print("Labels_show:", labels_show)
 
         # Add text encoding for data labels
         text = None
@@ -1848,12 +1841,6 @@ def map_datatype_to_scale_type(type: str) -> str:
     return type_mapping.get(type, "nominal")
 
 
-def convert_datetime_to_iso(df):
-    for column in df.select_dtypes(include=["datetime64"]).columns:
-        df[column] = df[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
-    return df
-
-
 def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
     """
     Picks a random field from a given schema to be used in a secondary axis
@@ -1881,18 +1868,3 @@ def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
                 return col, type_preference[col_type]
 
     raise ValueError("No suitable field found in the schema")
-
-
-def clean_spec_for_logging(spec):
-    """
-    Helper function, never used in production environments.
-    It removes the data key from the vega spec dict for clearer logging.
-    """
-    """Remove the 'data' part from the spec for cleaner logging."""
-    spec_dict = json.loads(spec)
-    if "data" in spec_dict:
-        spec_dict["data"] = {"values": "[data removed for logging]"}
-    if "datasets" in spec_dict:
-        spec_dict["datasets"] = {"values": "[data removed for logging]"}
-
-    return json.dumps(spec_dict, indent=2)
