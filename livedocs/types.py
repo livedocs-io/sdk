@@ -1,19 +1,26 @@
-from abc import ABC, abstractmethod
 import base64
 import gzip
 import json
+from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
+import msgpack
+from IPython.core.display import DisplayObject
 from polars import DataFrame
 from pydantic import BaseModel, model_validator
 
-from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.serialize import serializer
 
 
 class GCSBucketType(str, Enum):
     USER_FILES = "user-files"
     CACHE_ARTIFACTS = "cache-artifacts"
+
+
+class FileManifestAction(str, Enum):
+    READ = "read"
+    WRITE = "write"
 
 
 class CacheStatus(str, Enum):
@@ -26,11 +33,24 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
-class QueryResultMetadata(TypedDict):
+class FileManifest(TypedDict):
+    file_id: str  # The unique ID of the file (resolved by the API)
+    file_name: str  # The display name of the file
+    signed_url: str  # The GCS signed URL for download/access
+    size: Optional[int]  # File size in bytes, can be None if unknown
+    type: Optional[str]  # e.g., 'csv', 'xlsx'
+    created_at: Optional[str]  # ISO string for creation timestamp
+    bucket: Optional[GCSBucketType]  # The bucket type (user-files or cache-artifacts)
+    action: FileManifestAction  # Action type (read/write)
+
+
+class QueryResultMetadata(TypedDict, total=False):
     limit: int
     offset: int
     total_rows: int
     cache_info: CacheInfo
+    applied_metadata: Optional[Dict[str, Any]]
+    calculation_results: Optional[Dict[str, Dict[str, Any]]]
 
 
 class LivedocsResultInterface(ABC):
@@ -74,7 +94,7 @@ class QueryResult(LivedocsResultInterface):
 
     def serialize(self) -> str:
         json_str = json.dumps(
-            self.data.to_dicts(), default=_json_serializer, separators=(",", ":")
+            self.data.to_dicts(), default=serializer, separators=(",", ":")
         )
         compressed = gzip.compress(json_str.encode("utf-8"))
         b64_encoded = base64.b64encode(compressed).decode("ascii")
@@ -102,6 +122,56 @@ class LivedocsResult:
         metadata = self.result.get_metadata()
 
         return data, metadata
+
+
+class MsgPackDisplay(DisplayObject):
+    """
+    Custom display class for msgpack data in IPython
+    """
+
+    def __init__(self, data, metadata: Optional[Dict] = None):
+        super().__init__(data, metadata=metadata)
+        self.data = data
+        self.metadata = metadata or {}
+
+    def _pack_data(self) -> bytes:
+        """Pack the data using msgpack"""
+        return msgpack.packb(self.data, default=serializer)
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """
+        Return the data as a mime bundle
+
+        This method is called by IPython to get all mime types for the object
+        """
+        packed = self._pack_data()
+
+        data = {
+            "application/vnd.msgpack": packed,
+        }
+
+        return data, self.metadata
+
+
+class JsonDisplay(DisplayObject):
+    """
+    Simple JSON display class for IPython - no msgpack, just JSON
+    """
+
+    def __init__(self, data, metadata: Optional[Dict] = None):
+        super().__init__(data, metadata=metadata)
+        self.data = data
+        self.metadata = metadata or {}
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """
+        Return the data as JSON only
+        """
+        data = {
+            "application/json": self.data,
+        }
+
+        return data, self.metadata
 
 
 class UserMeta(BaseModel):
@@ -245,7 +315,10 @@ class DBSaveConfig(TypedDict):
     table_name: str
     table_is_new: bool
     write_mode: Literal["append", "overwrite"]
-    run_settings: List[Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]]
+    run_settings: List[
+        Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]
+    ]
+
 
 # Vega Chart Spec
 
@@ -428,4 +501,5 @@ __all__ = [
     "LivedocsChartSpec",
     "Spec",
     "DBSaveConfig",
+    "JsonDisplay",
 ]

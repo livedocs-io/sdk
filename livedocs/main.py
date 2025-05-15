@@ -2,65 +2,55 @@ import base64
 import gzip
 import json
 import os
-import tempfile
-from typing import Dict, List
+from typing import List, Optional
 
 import pandas as pd
 import polars as pl
-import requests
 import sentry_sdk
-from duckdb import CatalogException
+from google.cloud import bigquery
+from google.oauth2 import service_account
 from jinja2 import Template
-from IPython.display import display
 
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
-    DBSaveConfig,
     DatabaseType,
+    DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
     GCSBucketType,
+    JsonDisplay,
     LivedocsResult,
+    MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
     Schema,
     Spec,
 )
+from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
+    _LIVEDOCS_PROTECTED_VARS,
     _capture_exceptions,
+    _download_file,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
-    PROTECTED_VARS,
+    _setup_dirs,
+    _setup_sentry,
     get_run_context,
 )
 from livedocs.utils.postgres import (
-    create_postgres_connection_url,
-    process_postgres_schema,
-    write_df_to_table,
+    _create_postgres_connection_url,
+    _process_postgres_schema,
+    _write_df_to_postgres,
 )
-from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.serialize import serializer
+from livedocs.utils.single_value_helpers import process_single_value
+from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
-from IPython.core.display import display
-
-
-def _setup_sentry():
-    """
-    Initializes Sentry for error tracking and performance monitoring.
-    """
-    try:
-        sentry_sdk.init(
-            dsn=os.getenv("VMLIB_SENTRY_DSN"),
-            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            environment=os.getenv("APP_ENV"),
-        )
-    except Exception as e:
-        raise f"Failed to initialize Sentry: {e}"
 
 
 class Livedocs:
@@ -74,25 +64,22 @@ class Livedocs:
 
     def __init__(self):
         """
-        Initializes the Livedocs instance, setting up necessary components and configurations.
+        Creates the Livedocs instance, setting up necessary components and configurations.
         """
         _setup_sentry()
-        self._duckdb = DuckDBSingleton()
-        self._file_dir = tempfile.mkdtemp()
-        self._file_manifests: Dict[str, str] = {}
+        _setup_dirs()
+
+        self._duckdb = DuckDBSingleton(
+            file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
+        )
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
 
-    """
-    Called when the pod is initialized. Fetches the credentials and sets the 
-    is_initialized flag to True. The /v1/credentials endpoint is called to fetch the
-    DB connection credentials and secrets for the report.
-    """
-
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
         """
         Initializes the Livedocs instance with the given report ID and token.
+        Called when the pod is initialized.
 
         Args:
             report_id (str): The report ID.
@@ -151,7 +138,7 @@ class Livedocs:
         Args:
             key (str): The variable key.
         """
-        if key not in PROTECTED_VARS:
+        if key not in _LIVEDOCS_PROTECTED_VARS:
             self._built_in_vars.pop(key, None)
             _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
@@ -161,7 +148,9 @@ class Livedocs:
         Clears all built-in variables.
         """
         protected_values = {
-            k: v for k, v in self._built_in_vars.items() if k in PROTECTED_VARS
+            k: v
+            for k, v in self._built_in_vars.items()
+            if k in _LIVEDOCS_PROTECTED_VARS
         }
         self._built_in_vars = protected_values
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
@@ -169,27 +158,19 @@ class Livedocs:
     @_capture_exceptions
     def secrets(self, key, default_value="") -> str:
         """
-        Accesses user-defined secrets.
-
-        Usage: livedocs.secrets('CLIENT_ID', 'some_value')
+        Access user-defined secrets with default value if not found.
 
         Args:
-            key (str): The secret key.
-            default_value (str, optional): The default value if the secret is not found. Defaults to "".
+            key: The key of the secret to access
+            default_value: Value to return if the secret is not found
 
         Returns:
-            str: The secret value.
+            The secret value or default value if not found
         """
-        if self._secrets.get(key):
-            return self._secrets.get(key)
-        else:
-            result = _fetch_credentials(self._report_id, self._token)
-            secrets = result.get("workspace_secrets", {})
-            secrets_dict = {
-                key: secret_info["value"] for key, secret_info in secrets.items()
-            }
-            self._secrets = secrets_dict
-            return self._secrets.get(key, default_value)
+        if not hasattr(self, "_secrets"):
+            return default_value
+
+        return self._secrets.get(key, default_value)
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -202,6 +183,7 @@ class Livedocs:
         limit=10,
         offset=0,
         use_cache=True,
+        table_metadata=None,
     ) -> tuple[pl.DataFrame, str]:
         """
         Executes a query on a given datasource and returns the result as a Polars DataFrame and JSON string.
@@ -214,12 +196,16 @@ class Livedocs:
             limit (int, optional): The number of rows to return. Defaults to 10.
             offset (int, optional): The offset for the rows to return. Defaults to 0.
             use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
-
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
         Returns:
             tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
         """
         with sentry_sdk.start_transaction(op="task", name="run query"):
             datasource: ElementDataSource = json.loads(str_datasource)
+            if not datasource:
+                raise ValueError(
+                    "No datasource selected. Please choose a datasource from the dropdown before running your query."
+                )
 
             # Plug in the Jinja variables
             final_query = self.add_jinja_vars(query, context)
@@ -231,6 +217,13 @@ class Livedocs:
                 final_query, datasource, dataframe, use_cache
             )
             query_span.finish()
+
+            # Apply table operations
+            applied_metadata = None
+            additional_metadata = {}
+            if table_metadata:
+                df, additional_metadata = apply_table_operations(df, table_metadata)
+                applied_metadata = table_metadata
 
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
@@ -244,26 +237,31 @@ class Livedocs:
                     offset=offset,
                     total_rows=len(df),
                     cache_info=cache_info,
+                    applied_metadata=applied_metadata,
+                    calculation_results=additional_metadata.get("calculation_results"),
                 ),
             )
             payload = LivedocsResult(result)
             post_span.finish()
 
             return (df, payload)
-   
+
     @_capture_exceptions
     @sentry_sdk.trace
-    def save_to_database(
-        self,
-        dataframe: pl.DataFrame,
-        str_save_config: str
-    ):
+    def save_to_database(self, dataframe: pl.DataFrame, str_save_config: str):
         with sentry_sdk.start_transaction(op="task", name="save to database"):
             save_config: DBSaveConfig = json.loads(str_save_config)
             if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
                     result = self._write_to_postgres(dataframe, save_config)
+                    return result
+                else:
+                    pass
+            elif DatabaseType(save_config["database_type"]) == DatabaseType.Bigquery:
+                current_run_context = get_run_context()
+                if current_run_context in save_config["run_settings"]:
+                    result = self._write_to_bigquery(dataframe, save_config)
                     return result
                 else:
                     pass
@@ -293,9 +291,7 @@ class Livedocs:
             "system": self.add_jinja_vars(system, context),
             "user": self.add_jinja_vars(user, context),
         }
-        return json.dumps(
-            enriched_prompt, default=_json_serializer, separators=(",", ":")
-        )
+        return MsgPackDisplay(enriched_prompt)
 
     def add_jinja_vars(self, text: str, context: dict) -> str:
         """
@@ -348,7 +344,7 @@ class Livedocs:
                     if isinstance(value, pl.DataFrame):
                         df = value.to_dicts()
                         ctx[dep_name] = json.dumps(
-                            df, default=_json_serializer, separators=(",", ":")
+                            df, default=serializer, separators=(",", ":")
                         )
                     else:
                         ctx[dep_name] = value
@@ -413,6 +409,7 @@ class Livedocs:
         limit=10,
         offset=0,
         use_cache=True,
+        table_metadata=None,
     ) -> pl.DataFrame:
         """
         Gets a Polars table for a given datasource.
@@ -420,6 +417,10 @@ class Livedocs:
         Args:
             str_datasource (ElementDataSource): The datasource as a JSON string.
             dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+            limit (int, optional): The number of rows to return. Defaults to 10.
+            offset (int, optional): The offset for the rows to return. Defaults to 0.
+            use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
 
         Returns:
             pl.DataFrame: The resulting Polars DataFrame.
@@ -436,11 +437,16 @@ class Livedocs:
             )
             query_span.finish()
 
+            # Apply table operations
+            applied_metadata = None
+            additional_metadata = {}
+            if table_metadata:
+                df, additional_metadata = apply_table_operations(df, table_metadata)
+                applied_metadata = table_metadata
+
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
-
-            # Compress and encode response
             result = QueryResult(
                 data=df_slice,
                 metadata=QueryResultMetadata(
@@ -448,11 +454,12 @@ class Livedocs:
                     offset=offset,
                     total_rows=len(df),
                     cache_info=cache_info,
+                    applied_metadata=applied_metadata,
+                    calculation_results=additional_metadata.get("calculation_results"),
                 ),
             )
             payload = LivedocsResult(result)
             post_span.finish()
-
             return payload
 
     @_capture_exceptions
@@ -480,9 +487,11 @@ class Livedocs:
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
-                    query = (
-                        f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
-                    )
+                    file_name = datasource["file_info"]["file_name"]
+                    if datasource["file_info"]["file_type"] == "csv":
+                        query = f"SELECT * FROM read_csv_auto('{file_name}') LIMIT 10"
+                    elif datasource["file_info"]["file_type"] == "xlsx":
+                        query = f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}') LIMIT 10"
                     _, schema = self._query_file_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.dataframe:
@@ -581,7 +590,7 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> tuple[pl.DataFrame, dict]:
         """
-        Queries a database and returns the result as a DataFrame with schema. Currently only supports Postgres.
+        Queries a database and returns the result as a DataFrame with schema.
 
         Args:
             query (str): The query string.
@@ -592,37 +601,70 @@ class Livedocs:
         """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
-                # Get the schema directly from the query
-                schema_query = f"DESCRIBE {query}"
-                _schema = self._query_database(schema_query, datasource)
-                schema = process_postgres_schema(_schema)
-
-                # Execute the original query
-                result = self._query_database(query, datasource)
+                _schema = self._query_postgres(f"DESCRIBE {query}", datasource)
+                schema = _process_postgres_schema(_schema)
+                result = self._query_postgres(query, datasource)
+                return [result, schema]
+            case DatabaseType.Bigquery:
+                result, raw_schema = self._query_bigquery(query, datasource)
+                schema = process_bigquery_schema(raw_schema)
                 return [result, schema]
             case _:
                 return "Unknown DatabaseType"
 
-    def _query_database(
+    def _query_postgres(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
         """
-        Queries a database. Currently only supports Postgres.
+        Queries a Postgres database. Attaches the database to DuckDB and executes the
+        query under the alias same as the database name.
 
         Args:
             query (str): The query string.
             datasource (ElementDataSource): The datasource to execute the query on.
 
         Returns:
-            pl.DataFrame: The resulting DataFrame.
+            pl.DataFrame: The resulting Polars DataFrame.
         """
-        match DatabaseType(datasource["database_info"]["database_type"]):
-            case DatabaseType.Postgres:
-                return self._query_postgres(query, datasource)
-            case _:
-                return "Unknown DatabaseType"
+        try:
+            db_connector_id = datasource["database_info"]["database_connector_id"]
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
 
-    def _query_postgres(
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            parsed_credentials = json.loads(credentials["connection_details"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            if parsed_credentials.get("connect_using") == "url":
+                connection_string = parsed_credentials["connection_url"]
+            else:
+                connection_string = _create_postgres_connection_url(parsed_credentials)
+        except KeyError as e:
+            raise ValueError(f"Missing required database connection detail: {e}")
+
+        # This is unique to the workspace, so no chance of conflict
+        alias = credentials["db_name"]
+
+        try:
+            self._duckdb.attach_postgres(connection_string, alias)
+        except Exception as e:
+            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
+
+        try:
+            result = self._duckdb.conn.sql(query).pl()
+        except Exception as e:
+            raise RuntimeError(f"Error executing query: {e}")
+
+        return result
+
+    def _query_bigquery(
         self, query: str, datasource: ElementDataSource
     ) -> pl.DataFrame:
         """
@@ -649,36 +691,34 @@ class Livedocs:
             raise ValueError(f"Missing required information: {e}")
 
         try:
-            parsed_credentials = json.loads(credentials["connection_details"])
+            # Needs to be parsed twice
+            outer_parsed = json.loads(credentials["connection_details"])
+            service_account_parsed = json.loads(outer_parsed["service_account_key"])
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
 
         try:
-            if parsed_credentials.get("connect_using") == "url":
-                connection_string = parsed_credentials["connection_url"]
-            else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
-
-        # This is unique to the workspace, so no chance of conflict
-        alias = credentials["db_name"]
-
-        try:
-            self._duckdb.attach_postgres(connection_string, alias)
-        except Exception as e:
-            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
-
-        try:
-            result = self._duckdb.conn.sql(query).pl()
-        except CatalogException as e:
-            raise RuntimeError(
-                "CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')"
+            # Setup: Create BigQuery client with the given credentials
+            credentials = service_account.Credentials.from_service_account_info(
+                service_account_parsed
             )
-        except Exception as e:
-            raise RuntimeError(f"Error executing query: {e}")
+            client = bigquery.Client(
+                credentials=credentials, project=outer_parsed["project_id"]
+            )
 
-        return result
+            # Execute query
+            query_job = client.query(query)
+
+            # Get schema before fetching results
+            schema = query_job.result().schema
+
+            # Convert query results to a DataFrame pointer
+            df_pointer = query_job.to_dataframe(create_bqstorage_client=True)
+            df_polars = pl.from_pandas(df_pointer)
+        except Exception as e:
+            raise RuntimeError(f"Error querying BigQuery: {e}")
+
+        return df_polars, schema
 
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         """
@@ -694,28 +734,10 @@ class Livedocs:
         try:
             file_info = datasource["file_info"]
             file_id = file_info["file_id"]
-            file_type = file_info["file_type"]
-            file_name = file_info["file_name"]
 
-            temp_file_path = os.path.join(self._file_dir, f"{file_name}")
+            self.download_file(file_id=file_id)
 
-            if not os.path.exists(temp_file_path):
-                signed_url = self._get_signed_url(file_id)
-                self._download_file(signed_url, temp_file_path)
-
-            if file_type == "csv":
-                query_with_path = query.replace(
-                    file_name, f"read_csv_auto('{temp_file_path}')"
-                )
-            elif file_type in ["xls", "xlsx"]:
-                sheet_name = file_info.get("layer_name", "Sheet1")
-                query_with_path = query.replace(
-                    file_name, f"st_read('{temp_file_path}', layer='{sheet_name}')"
-                )
-            else:
-                raise ValueError(f"Unsupported file type: {file_type}")
-
-            result = self._duckdb.conn.sql(query_with_path).pl()
+            result = self._duckdb.conn.sql(query).pl()
             return result
 
         except KeyError as e:
@@ -781,10 +803,8 @@ class Livedocs:
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
-    
-    def _write_to_postgres(
-        self, df: pl.DataFrame, save_config: DBSaveConfig
-    ):
+
+    def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
         Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
         write operation under the alias same as the database name.
@@ -818,7 +838,7 @@ class Livedocs:
             if parsed_credentials.get("connect_using") == "url":
                 connection_string = parsed_credentials["connection_url"]
             else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
+                connection_string = _create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
 
@@ -832,8 +852,14 @@ class Livedocs:
 
         try:
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            result = write_df_to_table(df, self._duckdb.conn, qualified_table_name, save_config["table_is_new"], save_config["write_mode"])
-            
+            result = _write_df_to_postgres(
+                df,
+                self._duckdb.conn,
+                qualified_table_name,
+                save_config["table_is_new"],
+                save_config["write_mode"],
+            )
+
             if result["error"]:
                 raise RuntimeError(f"Error writing to PostgreSQL: {result['error']}")
             else:
@@ -853,39 +879,73 @@ class Livedocs:
         except Exception as e:
             raise RuntimeError(f"DBSave Error: {e}")
 
-
-    def _get_signed_url(self, file_id: str) -> str:
+    def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
-        Fetches a signed URL from the /v1/manifest endpoint for a file and returns it.
-        It also stores the signed URL in a dictionary for future use.
+        Writes a DataFrame to a BigQuery database.
 
         Args:
-            file_id (str): The file ID.
+            df (pl.DataFrame): The DataFrame to write to the database.
+            save_config (DBSaveConfig): The save configuration.
 
         Returns:
-            str: The signed URL.
+            Error, Result and Metrics in a tuple
+            Tuple[Result (Dict), Metrics (Dict), Error (str)]
         """
-        if file_id in self._file_manifests:
-            return self._file_manifests[file_id]
-        else:
-            manifest = _fetch_file_manifest(
-                file_id, self._report_id, self._token, "read", GCSBucketType.USER_FILES
+        try:
+            db_connector_id = save_config["database_id"]
+            # This won't throw an error if the credentials are not found
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                # This will throw an error if the credentials are not found
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            # Needs to be parsed twice
+            outer_parsed = json.loads(credentials["connection_details"])
+            service_account_parsed = json.loads(outer_parsed["service_account_key"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            qualified_table_name = f"{outer_parsed['project_id']}.{save_config['schema_name']}.{save_config['table_name']}"
+
+            credentials = service_account.Credentials.from_service_account_info(
+                service_account_parsed
             )
-            self._file_manifests[file_id] = manifest["signed_url"]
-            return manifest["signed_url"]
+            client = bigquery.Client(
+                credentials=credentials, project=outer_parsed["project_id"]
+            )
 
-    def _download_file(self, signed_url, file_path):
-        """
-        Downloads a file from the given signed URL and saves it to the specified file path.
+            result = write_df_to_bigquery(
+                df,
+                client,
+                qualified_table_name,
+                save_config["table_is_new"],
+                save_config["write_mode"],
+            )
 
-        Args:
-            signed_url (str): The signed URL to download the file from.
-            file_path (str): The path to save the downloaded file.
-        """
-        response = requests.get(signed_url)
-        response.raise_for_status()
-        with open(file_path, "wb") as f:
-            f.write(response.content)
+            if result["error"]:
+                raise RuntimeError(f"Error writing to BigQuery: {result['error']}")
+            else:
+                # Compress and encode response
+                output = QueryResult(
+                    data=result["result"],
+                    metadata=QueryResultMetadata(
+                        limit=50,
+                        offset=0,
+                        total_rows=result["rows_written"],
+                        run_date=result["run_date"],
+                        cache_info=None,
+                    ),
+                )
+                payload = LivedocsResult(output)
+                return payload
+        except Exception as e:
+            raise RuntimeError(f"DBSave Error: {e}")
 
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         """
@@ -945,3 +1005,89 @@ class Livedocs:
             raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
 
         return json.dumps(schema, default=str, separators=(",", ":"))
+
+    @_capture_exceptions
+    def process_single_value(self, config: str, context: dict = None) -> dict:
+        """
+        Process a SingleValue element with formatting and comparison calculations
+
+        Args:
+            config (str): JSON string containing single value configuration
+            context (dict, optional): Context containing variables. Defaults to None.
+
+        Returns:
+            JsonDisplay: Formatted result with main value and comparison data
+        """
+        result = process_single_value(config, context)
+        return JsonDisplay(result)
+
+    @_capture_exceptions
+    def download_file(
+        self,
+        file_name: Optional[str] = None,
+        file_id: Optional[str] = None,
+        force_download: bool = False,
+        path: Optional[str] = os.getenv("LIVEDOCS_FILES_PATH"),
+    ) -> str:
+        """
+        Downloads a file to a local path based on either its name or ID.
+
+        Parameters:
+            file_name (Optional[str]): The name of the file to download. Must be provided exclusively if file_id is not specified.
+            file_id (Optional[str]): The unique identifier of the file to download. Must be provided exclusively if file_name is not specified.
+            force_download (bool): If True, forces the file to be redownloaded and overwritten if it exists locally.
+            path (Optional[str]): The directory path where the file will be stored.
+                                Defaults to the value of the environment variable 'LIVEDOCS_FILES_PATH'.
+
+        Returns:
+            str: The local file system path where the downloaded file is stored.
+
+        Raises:
+            RuntimeError: If the system is not initialized, or if an unexpected error occurs during the manifest retrieval or download process.
+            ValueError: If neither or both of 'file_name' and 'file_id' are provided, or if multiple files with the same name are found.
+            FileNotFoundError: If the file with the specified 'file_name' or 'file_id' does not exist on the remote server.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
+
+        if not (file_name or file_id) or (file_name and file_id):
+            raise ValueError("Exactly one of file_name or file_id must be provided.")
+
+        os.makedirs(path, exist_ok=True)
+
+        manifest_data = _fetch_file_manifest(
+            report_id=self._report_id,
+            token=self._token,
+            action="read",
+            bucket=GCSBucketType.USER_FILES,
+            file_id=file_id,
+            file_name=file_name,
+        )
+
+        authoritative_file_name = manifest_data.get("file_name")
+        local_file_path = os.path.join(path, authoritative_file_name)
+        file_exists = os.path.exists(local_file_path)
+
+        if not force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' (ID: {manifest_data.get('file_id')}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
+            )
+            return local_file_path
+
+        if force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' already exists locally at '{local_file_path}'. Overwriting."
+            )
+            os.remove(local_file_path)
+
+        signed_url = manifest_data.get("signed_url")
+        expected_size_bytes = manifest_data.get("size")
+
+        _download_file(
+            signed_url,
+            local_file_path,
+            file_description=authoritative_file_name,
+            expected_size_bytes=expected_size_bytes,
+        )
+
+        return local_file_path

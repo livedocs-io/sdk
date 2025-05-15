@@ -109,6 +109,22 @@ class QueryCache:
         """
         self.cache.clear()
 
+    def pop(self, key: str) -> bool:
+        """
+        Removes a cache entry by key if it exists.
+
+        Args:
+            key (str): The cache key to remove
+
+        Returns:
+            bool: True if the key was found and removed, False otherwise
+        """
+        with self.lock:
+            if key in self.cache:
+                del self.cache[key]
+                return True
+            return False
+
     def _write_to_parquet(self, key: str, df: pl.DataFrame):
         """
         Writes a DataFrame to GCS as Parquet file.
@@ -133,11 +149,11 @@ class QueryCache:
 
             # Get signed URL for upload
             upload_url = _fetch_file_manifest(
-                f"{key}.parquet",
                 self.report_id,
                 self.token,
                 "write",
                 GCSBucketType.CACHE_ARTIFACTS,
+                file_id=f"{key}.parquet",
             )["signed_url"]
 
             # Upload the Parquet file to GCS
