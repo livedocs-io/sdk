@@ -42,7 +42,6 @@ from livedocs.utils.common import (
     _setup_sentry,
     get_run_context,
 )
-from livedocs.utils.debug import debug
 from livedocs.utils.postgres import (
     _create_postgres_connection_url,
     _process_postgres_schema,
@@ -391,7 +390,6 @@ class Livedocs:
             # Vegafusion
             vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
             vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
-            debug("vega_spec_json_str", {"vega_spec_json_str": vega_spec_json_str})
             vega_span.finish()
 
             # Post-process the results
@@ -489,7 +487,6 @@ class Livedocs:
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
-                    debug("_get_chart_schema", {"ds": datasource})
                     file_name = datasource["file_info"]["file_name"]
                     if datasource["file_info"]["file_type"] == "csv":
                         query = f"SELECT * FROM read_csv_auto('{file_name}') LIMIT 10"
@@ -737,11 +734,8 @@ class Livedocs:
         try:
             file_info = datasource["file_info"]
             file_id = file_info["file_id"]
-            file_type = file_info["file_type"]
-            file_name = file_info["file_name"]
 
-            file_path = self.download_file(file_id=file_id)
-            debug("query", {"q": query, "ds": datasource, "file_path": file_path})
+            self.download_file(file_id=file_id)
 
             result = self._duckdb.conn.sql(query).pl()
             return result

@@ -22,7 +22,6 @@ from livedocs.utils.common import (
     _get_user_defined_color,
     _get_user_defined_opacity,
 )
-from livedocs.utils.debug import debug
 
 """
 Helper function, never used in production environments. 
@@ -77,7 +76,6 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
     Prepares the DuckDB query for each datasource
     """
 
-    debug("_get_altair_datasource_query", datasource)
     match datasource["source_type"]:
         case ElementDatasourceType.file.value:
             file_name = datasource["file_info"]["file_name"]
@@ -148,9 +146,7 @@ def create_vega_spec(
                 df, spec["histogramSettings"], schema, style_settings
             )
         elif spec["chartType"] == "pie":
-            (vega_spec, status) = pie(
-                df, spec["pieSettings"], schema, style_settings
-            )
+            (vega_spec, status) = pie(df, spec["pieSettings"], schema, style_settings)
 
         validated_spec = VegaSpec(
             **{

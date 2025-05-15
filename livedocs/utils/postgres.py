@@ -1,4 +1,3 @@
-import json
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -6,10 +5,6 @@ from typing import Dict
 
 import polars as pl
 from typing_extensions import Literal
-
-from livedocs.types import ElementDataSource
-from livedocs.utils.common import _fetch_credentials
-from livedocs.utils.debug import debug
 
 
 def _create_postgres_connection_url(details: Dict[str, str]) -> str:
