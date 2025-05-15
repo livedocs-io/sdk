@@ -75,9 +75,16 @@ def _get_altair_datasource_query(datasource: ElementDataSource):
     """
     Prepares the DuckDB query for each datasource
     """
+
     match datasource["source_type"]:
         case ElementDatasourceType.file.value:
-            return f"SELECT * FROM {datasource['file_info']['file_name']}"
+            file_name = datasource["file_info"]["file_name"]
+
+            if datasource["file_info"]["file_type"] == "csv":
+                return f"SELECT * FROM read_csv_auto('{file_name}')"
+            elif datasource["file_info"]["file_type"] == "xlsx":
+                return f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
+            return f"SELECT * FROM '{file_name}'"
         case ElementDatasourceType.dataframe.value:
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
         case ElementDatasourceType.database_table.value:
@@ -110,24 +117,47 @@ def convert_datetime_to_iso(df):
     return df
 
 
-"""
-Returns a Vega spec for a given Livedocs chart configuration and a dataframe
-retrieved using _get_altair_datasource_query method. In production, the vegafusion
-data transformer should be enabled, although that obscures the spec. 
-
-This method only delegates the spec generation to other more specific functions
-based on the chartType parameter of the Livedocs chart config. 
-"""
-
-
 def create_vega_spec(
     df: pl.DataFrame, spec: Spec, schema: dict, cache_info: CacheInfo = None
 ):
+    """
+    Returns a Vega spec for a given Livedocs chart configuration and a dataframe
+    retrieved using _get_altair_datasource_query method. In production, the vegafusion
+    data transformer should be enabled, although that obscures the spec.
+
+    This method only delegates the spec generation to other more specific functions
+    based on the chartType parameter of the Livedocs chart config.
+    """
     alt.data_transformers.enable("vegafusion")
 
     style_settings = spec.get("styleSettings", {})
 
-    if df.height > 10000:
+    if spec.get("chartType"):
+        if spec["chartType"] == "main":
+            (vega_spec, status) = main_chart(
+                df, spec["chartSettings"], schema, style_settings
+            )
+        if spec["chartType"] == "swapped_main":
+            (vega_spec, status) = swapped_main_chart(
+                df, spec["swappedChartSettings"], schema, style_settings
+            )
+        elif spec["chartType"] == "histogram":
+            (vega_spec, status) = histogram(
+                df, spec["histogramSettings"], schema, style_settings
+            )
+        elif spec["chartType"] == "pie":
+            (vega_spec, status) = pie(df, spec["pieSettings"], schema, style_settings)
+
+        validated_spec = VegaSpec(
+            **{
+                "spec": vega_spec,
+                "schema": schema,
+                "status": status,
+                "cache_info": cache_info,
+            }
+        )
+        return validated_spec.model_dump_json()
+    else:
         empty_chart = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "usermeta": {
@@ -137,58 +167,13 @@ def create_vega_spec(
         }
         validated_spec = VegaSpec(
             **{
-                "spec": json.dumps(empty_chart),
+                "spec": json.dumps(empty_chart, separators=(",", ":")),
                 "schema": schema,
-                "status": "OVERLOADED",
+                "status": "EMPTY",
                 "cache_info": cache_info,
             }
         )
         return validated_spec.model_dump_json()
-    else:
-        if spec.get("chartType"):
-            if spec["chartType"] == "main":
-                (vega_spec, status) = main_chart(
-                    df, spec["chartSettings"], schema, style_settings
-                )
-            if spec["chartType"] == "swapped_main":
-                (vega_spec, status) = swapped_main_chart(
-                    df, spec["swappedChartSettings"], schema, style_settings
-                )
-            elif spec["chartType"] == "histogram":
-                (vega_spec, status) = histogram(
-                    df, spec["histogramSettings"], schema, style_settings
-                )
-            elif spec["chartType"] == "pie":
-                (vega_spec, status) = pie(
-                    df, spec["pieSettings"], schema, style_settings
-                )
-
-            validated_spec = VegaSpec(
-                **{
-                    "spec": vega_spec,
-                    "schema": schema,
-                    "status": status,
-                    "cache_info": cache_info,
-                }
-            )
-            return validated_spec.model_dump_json()
-        else:
-            empty_chart = {
-                "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                "usermeta": {
-                    "styleSettings": style_settings,
-                    "chartType": "main",
-                },
-            }
-            validated_spec = VegaSpec(
-                **{
-                    "spec": json.dumps(empty_chart, separators=(",", ":")),
-                    "schema": schema,
-                    "status": "EMPTY",
-                    "cache_info": cache_info,
-                }
-            )
-            return validated_spec.model_dump_json()
 
 
 """
@@ -1721,9 +1706,3 @@ def get_first_field_by_preference(schema: dict) -> tuple[str, str]:
                 return col, type_preference[col_type]
 
     raise ValueError("No suitable field found in the schema")
-
-
-__all__ = [
-    "_get_altair_datasource_query",
-    "create_vega_spec",
-]

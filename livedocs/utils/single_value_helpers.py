@@ -1,6 +1,5 @@
 import json
-from typing import Dict, Any, Optional, Union
-from IPython.display import display
+from typing import Any, Dict, Optional, Union
 
 
 def format_single_value(
@@ -125,9 +124,6 @@ def process_comparison(
                 "label": "",
             }
 
-        x = f"diff={difference}, main_num={main_num} comp_num={comp_num}, comparison_value={comparison_value}, formatted_value={formatted_value}, compare_type={compare_type}, compare_format={compare_format}, fixed_decimals={fixed_decimals}"
-        display(x, display_id="comparison_debug")
-
         return {
             "value": comparison_value,
             "formatted_value": formatted_value,
@@ -160,7 +156,6 @@ def process_single_value(config: str, context: Optional[dict] = None) -> Dict[st
 
         # Parse the configuration
         single_value_config = json.loads(config)
-        display(single_value_config, display_id="single_value_config")
 
         # Initialize result structure
         result = {"formatted_value": "", "comparison": None, "error": None}
@@ -189,12 +184,14 @@ def process_single_value(config: str, context: Optional[dict] = None) -> Dict[st
             return result
 
         compare_var_name = single_value_config.get("compareVariable")
-        
+
         # Validation: Prevent using the same variable for both main value and comparison
         if compare_var_name == var_name:
-            result["error"] = "Cannot use the same variable for both value and comparison"
+            result["error"] = (
+                "Cannot use the same variable for both value and comparison"
+            )
             return result
-            
+
         if not compare_var_name or compare_var_name not in variable_context:
             result["error"] = f"Comparison variable '{compare_var_name}' not found"
             return result
@@ -203,7 +200,7 @@ def process_single_value(config: str, context: Optional[dict] = None) -> Dict[st
 
         # Get comparison type directly - no mapping needed
         compare_type = single_value_config.get("compareType", "compare_value")
-        
+
         # Get comparison format directly
         compare_format = single_value_config.get("comparisonFormat", "compare_value")
 

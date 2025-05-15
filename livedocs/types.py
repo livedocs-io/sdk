@@ -10,12 +10,17 @@ from IPython.core.display import DisplayObject
 from polars import DataFrame
 from pydantic import BaseModel, model_validator
 
-from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.serialize import serializer
 
 
 class GCSBucketType(str, Enum):
     USER_FILES = "user-files"
     CACHE_ARTIFACTS = "cache-artifacts"
+
+
+class FileManifestAction(str, Enum):
+    READ = "read"
+    WRITE = "write"
 
 
 class CacheStatus(str, Enum):
@@ -26,6 +31,17 @@ class CacheStatus(str, Enum):
 class CacheInfo(TypedDict):
     id: str
     status: CacheStatus
+
+
+class FileManifest(TypedDict):
+    file_id: str  # The unique ID of the file (resolved by the API)
+    file_name: str  # The display name of the file
+    signed_url: str  # The GCS signed URL for download/access
+    size: Optional[int]  # File size in bytes, can be None if unknown
+    type: Optional[str]  # e.g., 'csv', 'xlsx'
+    created_at: Optional[str]  # ISO string for creation timestamp
+    bucket: Optional[GCSBucketType]  # The bucket type (user-files or cache-artifacts)
+    action: FileManifestAction  # Action type (read/write)
 
 
 class QueryResultMetadata(TypedDict, total=False):
@@ -78,7 +94,7 @@ class QueryResult(LivedocsResultInterface):
 
     def serialize(self) -> str:
         json_str = json.dumps(
-            self.data.to_dicts(), default=_json_serializer, separators=(",", ":")
+            self.data.to_dicts(), default=serializer, separators=(",", ":")
         )
         compressed = gzip.compress(json_str.encode("utf-8"))
         b64_encoded = base64.b64encode(compressed).decode("ascii")
@@ -113,14 +129,14 @@ class MsgPackDisplay(DisplayObject):
     Custom display class for msgpack data in IPython
     """
 
-    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: Optional[Dict] = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}
 
     def _pack_data(self) -> bytes:
         """Pack the data using msgpack"""
-        return msgpack.packb(self.data, use_bin_type=True)
+        return msgpack.packb(self.data, default=serializer)
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """
@@ -142,7 +158,7 @@ class JsonDisplay(DisplayObject):
     Simple JSON display class for IPython - no msgpack, just JSON
     """
 
-    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: Optional[Dict] = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}

@@ -2,14 +2,11 @@ import base64
 import gzip
 import json
 import os
-import tempfile
-from typing import Dict, List
+from typing import List, Optional
 
 import pandas as pd
 import polars as pl
-import requests
 import sentry_sdk
-from duckdb import CatalogException
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from jinja2 import Template
@@ -34,38 +31,26 @@ from livedocs.types import (
 )
 from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
-    PROTECTED_VARS,
+    _LIVEDOCS_PROTECTED_VARS,
     _capture_exceptions,
+    _download_file,
     _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
+    _setup_dirs,
+    _setup_sentry,
     get_run_context,
 )
 from livedocs.utils.postgres import (
-    create_postgres_connection_url,
-    process_postgres_schema,
-    write_df_to_table,
+    _create_postgres_connection_url,
+    _process_postgres_schema,
+    _write_df_to_postgres,
 )
-from livedocs.utils.serialize import _json_serializer
+from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import _get_altair_datasource_query, create_vega_spec
-
-
-def _setup_sentry():
-    """
-    Initializes Sentry for error tracking and performance monitoring.
-    """
-    try:
-        sentry_sdk.init(
-            dsn=os.getenv("VMLIB_SENTRY_DSN"),
-            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            environment=os.getenv("APP_ENV"),
-        )
-    except Exception as e:
-        raise f"Failed to initialize Sentry: {e}"
 
 
 class Livedocs:
@@ -79,25 +64,22 @@ class Livedocs:
 
     def __init__(self):
         """
-        Initializes the Livedocs instance, setting up necessary components and configurations.
+        Creates the Livedocs instance, setting up necessary components and configurations.
         """
         _setup_sentry()
-        self._duckdb = DuckDBSingleton()
-        self._file_dir = tempfile.mkdtemp()
-        self._file_manifests: Dict[str, str] = {}
+        _setup_dirs()
+
+        self._duckdb = DuckDBSingleton(
+            file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
+        )
         self._secrets = {}
         self._built_in_vars = {}
         self.is_initialized = False
 
-    """
-    Called when the pod is initialized. Fetches the credentials and sets the 
-    is_initialized flag to True. The /v1/credentials endpoint is called to fetch the
-    DB connection credentials and secrets for the report.
-    """
-
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
         """
         Initializes the Livedocs instance with the given report ID and token.
+        Called when the pod is initialized.
 
         Args:
             report_id (str): The report ID.
@@ -156,7 +138,7 @@ class Livedocs:
         Args:
             key (str): The variable key.
         """
-        if key not in PROTECTED_VARS:
+        if key not in _LIVEDOCS_PROTECTED_VARS:
             self._built_in_vars.pop(key, None)
             _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
 
@@ -166,7 +148,9 @@ class Livedocs:
         Clears all built-in variables.
         """
         protected_values = {
-            k: v for k, v in self._built_in_vars.items() if k in PROTECTED_VARS
+            k: v
+            for k, v in self._built_in_vars.items()
+            if k in _LIVEDOCS_PROTECTED_VARS
         }
         self._built_in_vars = protected_values
         _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
@@ -218,6 +202,10 @@ class Livedocs:
         """
         with sentry_sdk.start_transaction(op="task", name="run query"):
             datasource: ElementDataSource = json.loads(str_datasource)
+            if not datasource:
+                raise ValueError(
+                    "No datasource selected. Please choose a datasource from the dropdown before running your query."
+                )
 
             # Plug in the Jinja variables
             final_query = self.add_jinja_vars(query, context)
@@ -356,7 +344,7 @@ class Livedocs:
                     if isinstance(value, pl.DataFrame):
                         df = value.to_dicts()
                         ctx[dep_name] = json.dumps(
-                            df, default=_json_serializer, separators=(",", ":")
+                            df, default=serializer, separators=(",", ":")
                         )
                     else:
                         ctx[dep_name] = value
@@ -459,8 +447,6 @@ class Livedocs:
             # Prepare paginated results
             post_span = sentry_sdk.start_span(name="post-processing")
             df_slice = df.slice(offset, limit)
-
-            # Compress and encode response
             result = QueryResult(
                 data=df_slice,
                 metadata=QueryResultMetadata(
@@ -474,7 +460,6 @@ class Livedocs:
             )
             payload = LivedocsResult(result)
             post_span.finish()
-
             return payload
 
     @_capture_exceptions
@@ -502,9 +487,11 @@ class Livedocs:
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
-                    query = (
-                        f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
-                    )
+                    file_name = datasource["file_info"]["file_name"]
+                    if datasource["file_info"]["file_type"] == "csv":
+                        query = f"SELECT * FROM read_csv_auto('{file_name}') LIMIT 10"
+                    elif datasource["file_info"]["file_type"] == "xlsx":
+                        query = f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}') LIMIT 10"
                     _, schema = self._query_file_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.dataframe:
@@ -603,7 +590,7 @@ class Livedocs:
         self, query: str, datasource: ElementDataSource
     ) -> tuple[pl.DataFrame, dict]:
         """
-        Queries a database and returns the result as a DataFrame with schema. Currently only supports Postgres.
+        Queries a database and returns the result as a DataFrame with schema.
 
         Args:
             query (str): The query string.
@@ -614,12 +601,8 @@ class Livedocs:
         """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
-                # Get the schema directly from the query
-                schema_query = f"DESCRIBE {query}"
-                _schema = self._query_postgres(schema_query, datasource)
-                schema = process_postgres_schema(_schema)
-
-                # Execute the original query
+                _schema = self._query_postgres(f"DESCRIBE {query}", datasource)
+                schema = _process_postgres_schema(_schema)
                 result = self._query_postgres(query, datasource)
                 return [result, schema]
             case DatabaseType.Bigquery:
@@ -641,16 +624,14 @@ class Livedocs:
             datasource (ElementDataSource): The datasource to execute the query on.
 
         Returns:
-            pl.DataFrame: The resulting DataFrame.
+            pl.DataFrame: The resulting Polars DataFrame.
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            # This won't throw an error if the credentials are not found
             credentials = self._credentials.get("databases", {}).get(db_connector_id)
 
             if not credentials:
                 self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
                 credentials = self._credentials["databases"][db_connector_id]
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
@@ -664,7 +645,7 @@ class Livedocs:
             if parsed_credentials.get("connect_using") == "url":
                 connection_string = parsed_credentials["connection_url"]
             else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
+                connection_string = _create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
 
@@ -678,10 +659,6 @@ class Livedocs:
 
         try:
             result = self._duckdb.conn.sql(query).pl()
-        except CatalogException as e:
-            raise RuntimeError(
-                "CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')"
-            )
         except Exception as e:
             raise RuntimeError(f"Error executing query: {e}")
 
@@ -757,28 +734,10 @@ class Livedocs:
         try:
             file_info = datasource["file_info"]
             file_id = file_info["file_id"]
-            file_type = file_info["file_type"]
-            file_name = file_info["file_name"]
 
-            temp_file_path = os.path.join(self._file_dir, f"{file_name}")
+            self.download_file(file_id=file_id)
 
-            if not os.path.exists(temp_file_path):
-                signed_url = self._get_signed_url(file_id)
-                self._download_file(signed_url, temp_file_path)
-
-            if file_type == "csv":
-                query_with_path = query.replace(
-                    file_name, f"read_csv_auto('{temp_file_path}')"
-                )
-            elif file_type == "xlsx":
-                sheet_name = file_info.get("layer_name", "Sheet1")
-                query_with_path = query.replace(
-                    file_name, f"st_read('{temp_file_path}', layer='{sheet_name}')"
-                )
-            else:
-                raise ValueError(f"Unsupported file type: {file_type}")
-
-            result = self._duckdb.conn.sql(query_with_path).pl()
+            result = self._duckdb.conn.sql(query).pl()
             return result
 
         except KeyError as e:
@@ -879,7 +838,7 @@ class Livedocs:
             if parsed_credentials.get("connect_using") == "url":
                 connection_string = parsed_credentials["connection_url"]
             else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
+                connection_string = _create_postgres_connection_url(parsed_credentials)
         except KeyError as e:
             raise ValueError(f"Missing required database connection detail: {e}")
 
@@ -893,7 +852,7 @@ class Livedocs:
 
         try:
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            result = write_df_to_table(
+            result = _write_df_to_postgres(
                 df,
                 self._duckdb.conn,
                 qualified_table_name,
@@ -988,39 +947,6 @@ class Livedocs:
         except Exception as e:
             raise RuntimeError(f"DBSave Error: {e}")
 
-    def _get_signed_url(self, file_id: str) -> str:
-        """
-        Fetches a signed URL from the /v1/manifest endpoint for a file and returns it.
-        It also stores the signed URL in a dictionary for future use.
-
-        Args:
-            file_id (str): The file ID.
-
-        Returns:
-            str: The signed URL.
-        """
-        if file_id in self._file_manifests:
-            return self._file_manifests[file_id]
-        else:
-            manifest = _fetch_file_manifest(
-                file_id, self._report_id, self._token, "read", GCSBucketType.USER_FILES
-            )
-            self._file_manifests[file_id] = manifest["signed_url"]
-            return manifest["signed_url"]
-
-    def _download_file(self, signed_url, file_path):
-        """
-        Downloads a file from the given signed URL and saves it to the specified file path.
-
-        Args:
-            signed_url (str): The signed URL to download the file from.
-            file_path (str): The path to save the downloaded file.
-        """
-        response = requests.get(signed_url)
-        response.raise_for_status()
-        with open(file_path, "wb") as f:
-            f.write(response.content)
-
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         """
         Gets the schema of any given Polars DataFrame.
@@ -1094,3 +1020,74 @@ class Livedocs:
         """
         result = process_single_value(config, context)
         return JsonDisplay(result)
+
+    @_capture_exceptions
+    def download_file(
+        self,
+        file_name: Optional[str] = None,
+        file_id: Optional[str] = None,
+        force_download: bool = False,
+        path: Optional[str] = os.getenv("LIVEDOCS_FILES_PATH"),
+    ) -> str:
+        """
+        Downloads a file to a local path based on either its name or ID.
+
+        Parameters:
+            file_name (Optional[str]): The name of the file to download. Must be provided exclusively if file_id is not specified.
+            file_id (Optional[str]): The unique identifier of the file to download. Must be provided exclusively if file_name is not specified.
+            force_download (bool): If True, forces the file to be redownloaded and overwritten if it exists locally.
+            path (Optional[str]): The directory path where the file will be stored.
+                                Defaults to the value of the environment variable 'LIVEDOCS_FILES_PATH'.
+
+        Returns:
+            str: The local file system path where the downloaded file is stored.
+
+        Raises:
+            RuntimeError: If the system is not initialized, or if an unexpected error occurs during the manifest retrieval or download process.
+            ValueError: If neither or both of 'file_name' and 'file_id' are provided, or if multiple files with the same name are found.
+            FileNotFoundError: If the file with the specified 'file_name' or 'file_id' does not exist on the remote server.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
+
+        if not (file_name or file_id) or (file_name and file_id):
+            raise ValueError("Exactly one of file_name or file_id must be provided.")
+
+        os.makedirs(path, exist_ok=True)
+
+        manifest_data = _fetch_file_manifest(
+            report_id=self._report_id,
+            token=self._token,
+            action="read",
+            bucket=GCSBucketType.USER_FILES,
+            file_id=file_id,
+            file_name=file_name,
+        )
+
+        authoritative_file_name = manifest_data.get("file_name")
+        local_file_path = os.path.join(path, authoritative_file_name)
+        file_exists = os.path.exists(local_file_path)
+
+        if not force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' (ID: {manifest_data.get('file_id')}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
+            )
+            return local_file_path
+
+        if force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' already exists locally at '{local_file_path}'. Overwriting."
+            )
+            os.remove(local_file_path)
+
+        signed_url = manifest_data.get("signed_url")
+        expected_size_bytes = manifest_data.get("size")
+
+        _download_file(
+            signed_url,
+            local_file_path,
+            file_description=authoritative_file_name,
+            expected_size_bytes=expected_size_bytes,
+        )
+
+        return local_file_path

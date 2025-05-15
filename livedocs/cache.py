@@ -149,11 +149,11 @@ class QueryCache:
 
             # Get signed URL for upload
             upload_url = _fetch_file_manifest(
-                f"{key}.parquet",
                 self.report_id,
                 self.token,
                 "write",
                 GCSBucketType.CACHE_ARTIFACTS,
+                file_id=f"{key}.parquet",
             )["signed_url"]
 
             # Upload the Parquet file to GCS
