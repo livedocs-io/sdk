@@ -10,7 +10,6 @@ import sentry_sdk
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from jinja2 import Template
-
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
@@ -51,7 +50,6 @@ from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import create_vega_spec, get_altair_datasource_query
-
 
 class Livedocs:
     """
@@ -483,7 +481,10 @@ class Livedocs:
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             match ElementDatasourceType(datasource["source_type"]):
                 case ElementDatasourceType.database_table:
-                    query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
+                    if DatabaseType(datasource["database_info"]["database_type"]) == DatabaseType.Bigquery:
+                        query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
+                    else:
+                        query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
                     _, schema = self._query_database_with_schema(query, datasource)
                     query_span.finish()
                 case ElementDatasourceType.file:
