@@ -878,20 +878,34 @@ def main_chart(
         h_subplot_bin_count = h_subplot_settings.get("bin_count", 5)
 
         v_subplot_settings = subplots.get("vertical", {})
-        v_subplot_field = h_subplot_settings.get("field", "none")
-        v_subplot_linkYAxis = h_subplot_settings.get("linkYAxis", True)
+        v_subplot_field = v_subplot_settings.get("field", "none")
+        v_subplot_linkYAxis = v_subplot_settings.get("linkYAxis", True)
+        v_subplot_bin_bool = v_subplot_settings.get("bin", False)
+        v_subplot_bin_count = v_subplot_settings.get("bin_count", 5)
 
         # Make facet plot
         facet = None
+        h_facet_encoding='none'
+        v_facet_encoding='none'
 
         if h_subplot_field != "none":
-            facet = alt.Facet(
+            h_facet_encoding = alt.Facet(
                 field=h_subplot_field,
                 sort=h_subplot_sort,
                 bin=alt.Bin(maxbins=h_subplot_bin_count)
                 if h_subplot_bin_bool
                 else alt.Undefined,
             )
+            facet=True
+
+        if v_subplot_field != "none":
+            v_facet_encoding = alt.Facet(
+                field=v_subplot_field,
+                bin=alt.Bin(maxbins=v_subplot_bin_count)
+                if v_subplot_bin_bool
+                else alt.Undefined,
+            )
+            facet=True
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1353,8 +1367,13 @@ def main_chart(
     # Facet if required
     if facet:
         chart = chart.facet(
-            facet,
+            column=h_facet_encoding
+            if h_facet_encoding!='none'
+            else alt.Undefined,
             columns=h_subplot_cols if h_subplot_wrap else alt.Undefined,
+            row=v_facet_encoding
+            if v_facet_encoding!='none'
+            else alt.Undefined,
             usermeta={
                 "chartType": "main",
                 "chartSettings": usermeta,
@@ -1363,6 +1382,8 @@ def main_chart(
                 "subplots": subplots,
             },
         )
+
+
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
 
