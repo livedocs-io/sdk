@@ -785,7 +785,7 @@ def main_chart(
 
         label_settings = (
             style_settings.get("markSettings", {})
-            .get("line layer 1", {})
+            .get("point layer 1", {})
             .get("dataLabels", {})
         )
 
@@ -851,13 +851,13 @@ def main_chart(
             labels_position == "middle"
             and labels_mode == "per_color"
             and mark_type == "stacked_column"
-        ):
+            ):
             text = text.encode(y=y_encoding.bandPosition(0.5).stack("zero"))
         elif (
             labels_position == "middle"
             and labels_mode == "total"
             and (mark_type == "stacked_column" or mark_type == "grouped_column")
-        ):
+            ):
             text = text.encode(
                 y=alt.Y(
                     field="__label_position",
@@ -1274,7 +1274,8 @@ def main_chart(
         y_lines = create_line(df, "y", style_settings)
 
         # Create the layer and add to inner layers
-
+        print(f'Show var: {labels_show}\n\nLabels options: {label_settings}\n\n')
+        print(f'Style settings: {style_settings}\n\n')
         inner_layers.append(base_layer)
         if labels_show is True:
             inner_layers.append(text)
