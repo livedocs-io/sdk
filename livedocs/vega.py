@@ -45,11 +45,11 @@ def get_altair_datasource_query(datasource: ElementDataSource):
         case ElementDatasourceType.database_table.value:
             if (
                 datasource["database_info"]["database_type"]
-                == DatabaseType.Postgres.value
+                == DatabaseType.Bigquery.value
             ):
-                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
-            else:
                 return f"SELECT * FROM `{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}`"
+            else:
+                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
         case _:
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"

@@ -3,8 +3,9 @@ import gzip
 import json
 import os
 from typing import List, Optional
-
+import snowflake.connector
 import pandas as pd
+from livedocs.utils.snowflake import process_snowflake_schema
 import polars as pl
 import sentry_sdk
 from google.cloud import bigquery
@@ -426,9 +427,27 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="run table element"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
+            query = get_altair_datasource_query(datasource)
+            if datasource["source_type"] == "database_table" and DatabaseType(datasource["database_info"]["database_type"]) == DatabaseType.Snowflake:
+                try:
+                    db_connector_id = datasource["database_info"]["database_connector_id"]
+                    credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+                    if not credentials:
+                        self._credentials = _fetch_credentials(self._report_id, self._token)
+                        credentials = self._credentials["databases"][db_connector_id]
+                except KeyError as e:
+                    raise ValueError(f"Missing required information: {e}")
+
+                try:
+                    parsed_credentials = json.loads(credentials["connection_details"])
+                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Error parsing connection details: {e}")
+
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             df, schema, cache_info = self._query_with_schema(
-                get_altair_datasource_query(datasource),
+                query,
                 datasource,
                 dataframe,
                 use_cache,
@@ -610,8 +629,68 @@ class Livedocs:
                 result, raw_schema = self._query_bigquery(query, datasource)
                 schema = process_bigquery_schema(raw_schema)
                 return [result, schema]
+            case DatabaseType.Snowflake:
+                result, raw_schema = self._query_snowflake(query, datasource)
+                schema = process_snowflake_schema(raw_schema)
+                return [result, schema]
             case _:
                 return "Unknown DatabaseType"
+            
+    def _query_snowflake(self, query: str, datasource: ElementDataSource) -> tuple[pl.DataFrame, dict]:
+        """
+        Queries a Snowflake database.
+        """
+        try:
+            db_connector_id = datasource["database_info"]["database_connector_id"]
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            parsed_credentials = json.loads(credentials["connection_details"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            if parsed_credentials.get("auth_type") == "username_password":
+                connection = snowflake.connector.connect(
+                    user=parsed_credentials["username"],
+                    password=parsed_credentials["password"],
+                    account=parsed_credentials["host"],
+                    database=parsed_credentials["database"],
+                    session_parameters={
+                        'QUERY_TAG': 'LivedocsQuery',
+                    }
+                )
+            else:
+                raise ValueError("Unsupported authentication type")
+            
+            cursor = connection.cursor()
+            cursor.execute(query)
+            result = cursor.fetchall()
+            
+            # Convert results to Polars DataFrame
+            if result:
+                # Get column names from cursor description
+                columns = [desc[0] for desc in cursor.description]
+                # Create DataFrame from results and column names
+                df = pl.DataFrame(result, schema=columns)
+            else:
+                # Handle empty result set
+                df = pl.DataFrame()
+                
+            return df, cursor.description
+        
+        except Exception as e:
+            raise RuntimeError(f"Error querying Snowflake: {e}")
+        finally:
+            if 'connection' in locals():
+                connection.close()
+
 
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
