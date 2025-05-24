@@ -18,8 +18,8 @@ import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "cea74395-5d3f-42cf-97bf-20e471b93834",
-    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJhZjA2YWYxMi0zY2Y5LTRkYzMtODNmOC1jNmU1M2MzNTI1ZjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsInJlcG9ydF9pZCI6ImNlYTc0Mzk1LTVkM2YtNDJjZi05N2JmLTIwZTQ3MWI5MzgzNCIsInJlcG9ydF9wZXJtaXNzaW9uX2xldmVsIjozLCJ3c19wZXJtaXNzaW9uX2xldmVsIjozLCJtZW1iZXJfaWQiOiIzZjU4YmY0Zi03MmMzLTRiZmQtOWEzOS05YjdkZTY0MWI3ZjMiLCJleHAiOjE3NDgwNzU1OTh9.Sd4HVjibXK9sESQtUSIbnu4maAzAI0_2JI_qXJ-_WKk"
+    "9be029af-a382-4093-a2b1-66d41f69d1f5",
+    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJhZjA2YWYxMi0zY2Y5LTRkYzMtODNmOC1jNmU1M2MzNTI1ZjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsInJlcG9ydF9pZCI6IjliZTAyOWFmLWEzODItNDA5My1hMmIxLTY2ZDQxZjY5ZDFmNSIsInJlcG9ydF9wZXJtaXNzaW9uX2xldmVsIjozLCJ3c19wZXJtaXNzaW9uX2xldmVsIjozLCJtZW1iZXJfaWQiOiIzZjU4YmY0Zi03MmMzLTRiZmQtOWEzOS05YjdkZTY0MWI3ZjMiLCJleHAiOjE3NDgwOTkwMzJ9.Wq7KRtA_bh3FZEO-3EZaP23LkadTm6aSL16EAxcYue4"
 )
 
 # User code (i.e, the test)
@@ -63,7 +63,33 @@ livedocs.initialize(
 
 # snowflake_result = livedocs.query("SELECT * FROM snowflake_learning_db.arslnb_load_sample_data_from_s3.menu LIMIT 1", json.dumps(snowflake_datasource), {})
 
+clickhouse_datasource = {
+    "source_type": "database",
+    "database_info": {
+        "database_connector_id": "d9abe9c2-7244-4cef-9b96-401a4241de5d",
+        "database_name": "ch",
+        "database_type": "clickhouse",
+    },
+}
 
+
+clickhouse_table_source = {
+    "source_type":"database_table",
+    "database_info": {
+        "database_type":"clickhouse",
+        "database_connector_id":"d9abe9c2-7244-4cef-9b96-401a4241de5d",
+        "database_name":"ch"
+      },
+    "database_table_info": {
+        "instance_id":"d9abe9c2-7244-4cef-9b96-401a4241de5d",
+        "schema_name":"default",
+        "table_name":"nyc_taxi"
+    }
+}
+
+# clickhouse_result = livedocs.query('SELECT * FROM "nyc_taxi" LIMIT 31 OFFSET 0;', json.dumps(clickhouse_datasource), {})
+
+clickhouse_table = livedocs._get_table_response(json.dumps(clickhouse_table_source), limit=10)
 # snowflake_table = livedocs._get_table_response(json.dumps(snowflake_table_source), limit=10)
 # print(snowflake_table)
 # print(pg_result)
@@ -204,7 +230,7 @@ save_config = {
   ]
 }
 
-livedocs._write_to_snowflake(df, save_config)
+# livedocs._write_to_snowflake(df, save_config)
 
 
 

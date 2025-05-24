@@ -4,7 +4,9 @@ import json
 import os
 from typing import List, Optional
 import snowflake.connector
+import clickhouse_connect
 import pandas as pd
+from livedocs.utils.clickhouse import process_clickhouse_schema
 from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
 import polars as pl
 from livedocs.utils.debug import debug
@@ -388,8 +390,26 @@ class Livedocs:
 
             # Run actual span
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            query = get_altair_datasource_query(datasource)
+            if datasource["source_type"] == "database_table" and DatabaseType(datasource["database_info"]["database_type"]) == DatabaseType.Snowflake:
+                try:
+                    db_connector_id = datasource["database_info"]["database_connector_id"]
+                    credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+                    if not credentials:
+                        self._credentials = _fetch_credentials(self._report_id, self._token)
+                        credentials = self._credentials["databases"][db_connector_id]
+                except KeyError as e:
+                    raise ValueError(f"Missing required information: {e}")
+
+                try:
+                    parsed_credentials = json.loads(credentials["connection_details"])
+                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Error parsing connection details: {e}")
+                
             df, schema, cache_info = self._query_with_schema(
-                get_altair_datasource_query(datasource),
+                query,
                 datasource,
                 dataframe,
                 use_cache,
@@ -643,6 +663,10 @@ class Livedocs:
                 result, raw_schema = self._query_snowflake(query, datasource)
                 schema = process_snowflake_schema(raw_schema)
                 return [result, schema]
+            case DatabaseType.Clickhouse:
+                result, raw_schema = self._query_clickhouse(query, datasource)
+                schema = process_clickhouse_schema(raw_schema)
+                return [result, schema]
             case _:
                 return "Unknown DatabaseType"
             
@@ -730,6 +754,52 @@ class Livedocs:
         finally:
             if 'connection' in locals():
                 connection.close()
+
+    def _query_clickhouse(self, query: str, datasource: ElementDataSource) -> tuple[pl.DataFrame, tuple]:
+        """
+        Queries a Clickhouse database.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
+        """
+        try:
+            db_connector_id = datasource["database_info"]["database_connector_id"]
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            parsed_credentials = json.loads(credentials["connection_details"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+        
+        try:
+            client = clickhouse_connect.get_client(
+                host=parsed_credentials["host"],
+                port=parsed_credentials["port"],
+                user=parsed_credentials["user_name"],
+                password=parsed_credentials["password"],
+                secure=True
+            )
+            result = client.query(query)
+            if result.result_set:
+                columns = result.column_names
+                df = pl.DataFrame(result.result_set, schema=columns)
+            else:
+                df = pl.DataFrame()
+                 
+            return df, tuple(zip(result.column_names, result.column_types))
+        
+        except Exception as e:
+            raise RuntimeError(f"Error querying Clickhouse: {e}")
 
 
     def _query_postgres(
