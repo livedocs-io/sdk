@@ -14,6 +14,8 @@ from google.oauth2 import service_account
 from jinja2 import Template
 from livedocs.cache import QueryCache
 from livedocs.manager.duckdb import DuckDBSingleton
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
@@ -674,6 +676,36 @@ class Livedocs:
                         'QUERY_TAG': 'LivedocsQuery',
                     }
                 )
+            elif parsed_credentials.get("auth_type") == "service_account_key":
+                pem_key_from_ui = parsed_credentials['service_account_key'].strip()
+            
+                # Load the private key
+                private_key = serialization.load_pem_private_key(
+                    pem_key_from_ui.encode('utf-8'),
+                    password=None,  # No password for unencrypted keys
+                    backend=default_backend()
+                )
+                
+                # Convert to DER format (bytes) - Snowflake Python needs DER, not PEM!
+                private_key_der = private_key.private_bytes(
+                    encoding=serialization.Encoding.DER,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                )
+                
+                # Clean up account format
+                account = (parsed_credentials['host']
+                        .replace('.snowflakecomputing.com', '')
+                        .replace('https://', '')
+                        .replace('http://', ''))
+                
+                # Create connection
+                connection = snowflake.connector.connect(
+                    account=account,
+                    user=parsed_credentials['service_account_username'],
+                    private_key=private_key_der,  # Note: Python uses DER bytes, not PEM string!
+                    database=parsed_credentials['database'],
+                )
             else:
                 raise ValueError("Unsupported authentication type")
             
@@ -1077,6 +1109,36 @@ class Livedocs:
                     session_parameters={
                         'QUERY_TAG': 'LivedocsQuery',
                     }
+                )
+            elif parsed_credentials.get("auth_type") == "service_account_key":
+                pem_key_from_ui = parsed_credentials['service_account_key'].strip()
+            
+                # Load the private key
+                private_key = serialization.load_pem_private_key(
+                    pem_key_from_ui.encode('utf-8'),
+                    password=None,  # No password for unencrypted keys
+                    backend=default_backend()
+                )
+                
+                # Convert to DER format (bytes) - Snowflake Python needs DER, not PEM!
+                private_key_der = private_key.private_bytes(
+                    encoding=serialization.Encoding.DER,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                )
+                
+                # Clean up account format
+                account = (parsed_credentials['host']
+                        .replace('.snowflakecomputing.com', '')
+                        .replace('https://', '')
+                        .replace('http://', ''))
+                
+                # Create connection
+                connection = snowflake.connector.connect(
+                    account=account,
+                    user=parsed_credentials['service_account_username'],
+                    private_key=private_key_der,  # Note: Python uses DER bytes, not PEM string!
+                    database=parsed_credentials['database'],
                 )
             else:
                 raise ValueError("Unsupported authentication type")
