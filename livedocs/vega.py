@@ -782,10 +782,11 @@ def main_chart(
         )
 
         # MarkDataLabelsSettings
+        layer_name = next((k for k in style_settings['markSettings'] if k.endswith('layer 1')), {})
 
         label_settings = (
             style_settings.get("markSettings", {})
-            .get("point layer 1", {})
+            .get(layer_name, {})
             .get("dataLabels", {})
         )
 
