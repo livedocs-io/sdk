@@ -6,39 +6,6 @@ import snowflake.connector
 from typing_extensions import Literal
 import pandas as pd
 
-def map_snowflake_type(snowflake_type: str) -> str:
-    """
-    Maps Snowflake types to Livedocs types: NUMBER, DATE, STRING.
-    """
-    snowflake_type = snowflake_type.upper()
-
-    # Mapping to NUMBER
-    if snowflake_type in (
-        "NUMBER",
-        "DECIMAL",
-        "NUMERIC",
-        "INT",
-        "INTEGER",
-        "BIGINT",
-        "SMALLINT",
-        "TINYINT",
-        "BYTEINT",
-        "FLOAT",
-        "FLOAT4",
-        "FLOAT8",
-        "DOUBLE",
-        "DOUBLE PRECISION",
-        "REAL",
-    ):
-        return "NUMBER"
-
-    # Mapping to DATE
-    elif snowflake_type in ("DATE", "DATETIME", "TIME", "TIMESTAMP", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ", "TIMESTAMP_TZ"):
-        return "DATE"
-
-    # Mapping to STRING (default case)
-    else:
-        return "STRING"
 
 
 def process_clickhouse_schema(schema: tuple) -> dict:
@@ -118,93 +85,21 @@ def process_clickhouse_schema(schema: tuple) -> dict:
 
     return processed_schema
 
-def map_polars_to_snowflake_type(pol_type: str) -> str:
-    """Convert Polars dtype string to Snowflake type string"""
-    type_str = str(pol_type).lower()
 
-    if "datetime" in type_str:
-        return "TIMESTAMP"
-    elif "date" in type_str:
-        return "DATE"
-    elif "int8" in type_str or "int16" in type_str:
-        return "NUMBER"
-    elif "int32" in type_str or "int64" in type_str:
-        return "NUMBER"
-    elif "float32" in type_str or "float64" in type_str:
-        return "FLOAT"
-    elif "bool" in type_str:
-        return "BOOLEAN"
-    elif "utf8" in type_str or "string" in type_str:
-        return "VARCHAR"
-    else:
-        return "VARCHAR"
-
-
-def map_snowflake_to_polars_type(sf_type: str) -> pl.DataType:
-    """Convert Snowflake type string to Polars dtype"""
-    type_mapping = {
-        "NUMBER": pl.Int64,
-        "DECIMAL": pl.Float64,
-        "NUMERIC": pl.Float64,
-        "INT": pl.Int64,
-        "INTEGER": pl.Int64,
-        "BIGINT": pl.Int64,
-        "SMALLINT": pl.Int64,
-        "TINYINT": pl.Int64,
-        "BYTEINT": pl.Int64,
-        "FLOAT": pl.Float64,
-        "FLOAT4": pl.Float64,
-        "FLOAT8": pl.Float64,
-        "DOUBLE": pl.Float64,
-        "DOUBLE PRECISION": pl.Float64,
-        "REAL": pl.Float64,
-        "BOOLEAN": pl.Boolean,
-        "VARCHAR": pl.Utf8,
-        "CHAR": pl.Utf8,
-        "STRING": pl.Utf8,
-        "TEXT": pl.Utf8,
-        "DATE": pl.Date,
-        "DATETIME": pl.Datetime,
-        "TIMESTAMP": pl.Datetime,
-        "TIMESTAMP_LTZ": pl.Datetime,
-        "TIMESTAMP_NTZ": pl.Datetime,
-        "TIMESTAMP_TZ": pl.Datetime,
-        "TIME": pl.Time,
-    }
-
-    return type_mapping.get(sf_type.upper(), pl.Utf8)
-
-
-def get_default_value(sf_type: str):
-    """Get default value for a Snowflake type"""
-    if sf_type.upper() in ("NUMBER", "DECIMAL", "NUMERIC", "INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "BYTEINT"):
-        return 0
-    elif sf_type.upper() in ("FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "DOUBLE PRECISION", "REAL"):
-        return 0.0
-    elif sf_type.upper() in ("BOOLEAN"):
-        return False
-    elif sf_type.upper() in ("TIMESTAMP", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ", "TIMESTAMP_TZ", "DATETIME"):
-        return datetime.now(timezone.utc)
-    elif sf_type.upper() == "DATE":
-        return datetime.now(timezone.utc).date()
-    else:
-        return ""
-
-
-def write_df_to_snowflake(
+def write_df_to_clickhouse(
     df: pl.DataFrame,
-    connection: snowflake.connector.SnowflakeConnection,
+    client,
     table_name: str,
     create_table: bool = False,
     write_mode: Literal["append", "overwrite"] = "append",
 ) -> dict:
     """
-    Write a Polars DataFrame to a Snowflake table with schema alignment.
+    Write a Polars DataFrame to a ClickHouse table with schema alignment.
 
     Args:
         df: Polars DataFrame to write
-        connection: Snowflake connection
-        table_name: Fully-qualified table name (database.schema.table)
+        client: ClickHouse client connection
+        table_name: Fully-qualified table name (database.table)
         create_table: If True, create the table if it doesn't exist
         write_mode: Either "append" or "overwrite"
 
@@ -226,57 +121,47 @@ def write_df_to_snowflake(
         if write_mode not in ["append", "overwrite"]:
             raise ValueError('write_mode must be either "append" or "overwrite"')
 
-        cursor = connection.cursor()
-        
+        # Split the fully qualified table name
+        db_table = table_name.split('.')
+        if len(db_table) == 2:
+            database, table = db_table
+        else:
+            table = table_name
+
         # Check if table exists and get schema
         try:
-            # Split the fully qualified table name
-            db_schema_table = table_name.split('.')
-            if len(db_schema_table) == 3:
-                database, schema, table = db_schema_table
-                # Use the database and schema
-                cursor.execute(f'USE DATABASE "{database}"')
-                cursor.execute(f'USE SCHEMA "{schema}"')
-                current_table = table
-            else:
-                current_table = table_name
-
             # Get table schema
-            cursor.execute(f'DESCRIBE TABLE "{current_table}"')
-            sf_schema = {col[0]: {"type": col[1], "nullable": col[3] == "Y"} for col in cursor.fetchall()}
+            schema = client.query(f'DESCRIBE TABLE {table}')
+            ch_schema = {col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} for col in schema}
 
         except Exception as e:
             if not create_table:
                 raise ValueError(f"Table {table_name} does not exist and create_table is False")
             
             # Create new table
-            if len(db_schema_table) == 3:
-                database, schema, table = db_schema_table
-                # Use the database and schema
-                cursor.execute(f'USE DATABASE "{database}"')
-                cursor.execute(f'USE SCHEMA "{schema}"')
-                current_table = table
+            if len(db_table) == 2:
+                database, table = db_table
+                client.query(f'USE {database}')
             else:
-                current_table = table_name
+                table = table_name
 
             # Create schema from DataFrame
             columns = []
             for col_name, dtype in zip(df.columns, df.dtypes):
-                sf_type = map_polars_to_snowflake_type(dtype)
-                columns.append(f'"{col_name}" {sf_type}')
+                ch_type = map_polars_to_clickhouse_type(dtype)
+                columns.append(f'{col_name} {ch_type}')
             
-            create_table_sql = f'CREATE TABLE "{current_table}" ({", ".join(columns)})'
-            cursor.execute(create_table_sql)
-            connection.commit()
+            create_table_sql = f'CREATE TABLE {table} ({", ".join(columns)}) ENGINE = MergeTree() ORDER BY tuple()'
+            client.query(create_table_sql)
 
             # Get the schema of the newly created table
-            cursor.execute(f'DESCRIBE TABLE "{current_table}"')
-            sf_schema = {col[0]: {"type": col[1], "nullable": col[3] == "Y"} for col in cursor.fetchall()}
+            schema = client.query(f'DESCRIBE TABLE {table}')
+            ch_schema = {col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} for col in schema}
 
         # Check for missing non-nullable columns
         missing_required = [
             col
-            for col, info in sf_schema.items()
+            for col, info in ch_schema.items()
             if not info["nullable"] and col not in df.columns
         ]
 
@@ -286,7 +171,7 @@ def write_df_to_snowflake(
             )
 
         # Check if there are any matching columns between DataFrame and table
-        matching_columns = [col for col in df.columns if col in sf_schema]
+        matching_columns = [col for col in df.columns if col in ch_schema]
         if not matching_columns:
             output["rows_written"] = 0
             return output
@@ -298,28 +183,26 @@ def write_df_to_snowflake(
 
         # Prepare expressions for schema alignment
         expressions = []
-        for col_name, info in sf_schema.items():
-            sf_type = info["type"]
+        for col_name, info in ch_schema.items():
+            ch_type = info["type"]
             nullable = info["nullable"]
-            target_type = map_snowflake_to_polars_type(sf_type)
+            target_type = map_clickhouse_to_polars_type(ch_type)
 
             if col_name in df.columns:
                 expr = pl.col(col_name)
 
                 # Handle type casting and datetime formatting
-                if "TIMESTAMP" in sf_type.upper():
-                    expr = expr.cast(pl.Datetime).dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-                elif "DATE" in sf_type.upper():
+                if "DateTime" in ch_type:
+                    expr = expr.cast(pl.Datetime).dt.strftime('%Y-%m-%d %H:%M:%S')
+                elif "Date" in ch_type:
                     expr = expr.cast(pl.Date).dt.strftime('%Y-%m-%d')
                 else:
                     expr = expr.cast(target_type)
 
                 # Handle null values
                 if not nullable:
-                    default_val = get_default_value(sf_type)
+                    default_val = get_default_value(ch_type)
                     expr = expr.fill_null(default_val)
-                # For nullable columns, we want to keep nulls as nulls
-                # No need to explicitly fill with None as that's the default behavior
 
                 expressions.append(expr.alias(col_name))
             else:
@@ -327,7 +210,7 @@ def write_df_to_snowflake(
                 if nullable:
                     expressions.append(pl.lit(None).cast(target_type).alias(col_name))
                 else:
-                    default_val = get_default_value(sf_type)
+                    default_val = get_default_value(ch_type)
                     expressions.append(
                         pl.lit(default_val).cast(target_type).alias(col_name)
                     )
@@ -335,19 +218,15 @@ def write_df_to_snowflake(
         # Align DataFrame schema
         aligned_df = df.select(expressions)
 
-        # Convert to pandas for Snowflake upload
+        # Convert to pandas for ClickHouse upload
         pd_df = aligned_df.to_pandas()
         
         # Prepare the write operation
         if write_mode == "overwrite":
-            cursor.execute(f'TRUNCATE TABLE "{current_table}"')
+            client.query(f'TRUNCATE TABLE {table}')
 
-        # Write data to Snowflake
-        quoted_columns = [f'"{col}"' for col in aligned_df.columns]
-        placeholders = ["%s"] * len(aligned_df.columns)
-        insert_sql = f'INSERT INTO "{current_table}" ({", ".join(quoted_columns)}) VALUES ({", ".join(placeholders)})'
-        cursor.executemany(insert_sql, pd_df.values.tolist())
-        connection.commit()
+        # Write data to ClickHouse
+        client.insert_dataframe(f'INSERT INTO {table} VALUES', pd_df)
 
         # Prepare output
         try:
@@ -357,7 +236,7 @@ def write_df_to_snowflake(
             )
 
             # Create types row
-            types_row = {col_name: info["type"] for col_name, info in sf_schema.items()}
+            types_row = {col_name: info["type"] for col_name, info in ch_schema.items()}
             types_df = pl.DataFrame([types_row])
 
             # Concatenate types with data
@@ -379,3 +258,67 @@ def write_df_to_snowflake(
     except Exception as e:
         output["error"] = {"message": str(e), "stacktrace": traceback.format_exc()}
         return output
+
+def map_polars_to_clickhouse_type(pol_type: str) -> str:
+    """Convert Polars dtype string to ClickHouse type string"""
+    type_str = str(pol_type).lower()
+
+    if "datetime" in type_str:
+        return "DateTime"
+    elif "date" in type_str:
+        return "Date"
+    elif "int8" in type_str or "int16" in type_str:
+        return "Int16"
+    elif "int32" in type_str:
+        return "Int32"
+    elif "int64" in type_str:
+        return "Int64"
+    elif "float32" in type_str:
+        return "Float32"
+    elif "float64" in type_str:
+        return "Float64"
+    elif "bool" in type_str:
+        return "UInt8"
+    elif "utf8" in type_str or "string" in type_str:
+        return "String"
+    else:
+        return "String"
+
+def map_clickhouse_to_polars_type(ch_type: str) -> pl.DataType:
+    """Convert ClickHouse type string to Polars dtype"""
+    type_mapping = {
+        "Int8": pl.Int8,
+        "Int16": pl.Int16,
+        "Int32": pl.Int32,
+        "Int64": pl.Int64,
+        "UInt8": pl.UInt8,
+        "UInt16": pl.UInt16,
+        "UInt32": pl.UInt32,
+        "UInt64": pl.UInt64,
+        "Float32": pl.Float32,
+        "Float64": pl.Float64,
+        "String": pl.Utf8,
+        "Date": pl.Date,
+        "DateTime": pl.Datetime,
+        "DateTime64": pl.Datetime,
+    }
+
+    # Handle Nullable types
+    if ch_type.startswith("Nullable("):
+        base_type = ch_type[9:-1]  # Remove "Nullable(" and ")"
+        return type_mapping.get(base_type, pl.Utf8)
+
+    return type_mapping.get(ch_type, pl.Utf8)
+
+def get_default_value(ch_type: str):
+    """Get default value for a ClickHouse type"""
+    if "Int" in ch_type:
+        return 0
+    elif "Float" in ch_type:
+        return 0.0
+    elif "DateTime" in ch_type:
+        return datetime.now(timezone.utc)
+    elif "Date" in ch_type:
+        return datetime.now(timezone.utc).date()
+    else:
+        return ""

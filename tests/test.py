@@ -89,7 +89,7 @@ clickhouse_table_source = {
 
 # clickhouse_result = livedocs.query('SELECT * FROM "nyc_taxi" LIMIT 31 OFFSET 0;', json.dumps(clickhouse_datasource), {})
 
-clickhouse_table = livedocs._get_table_response(json.dumps(clickhouse_table_source), limit=10)
+# clickhouse_table = livedocs._get_table_response(json.dumps(clickhouse_table_source), limit=10)
 # snowflake_table = livedocs._get_table_response(json.dumps(snowflake_table_source), limit=10)
 # print(snowflake_table)
 # print(pg_result)
@@ -215,12 +215,12 @@ df = pl.DataFrame({
 save_config = {
   "dataframe_name": "df",
   "dataframe_element_id": "IRRELEVANT",
-  "database_name": "snowflake",
-  "database_id": "270dbaaa-f550-4e6d-85dd-332366ce7b98",
-  "database_type": "snowflake",
-  "schema_name": "ARSLNB_LOAD_SAMPLE_DATA_FROM_S3",
-  "table_name": "MENUecx",
-  "table_is_new": False,
+  "database_name": "ch",
+  "database_id": "d9abe9c2-7244-4cef-9b96-401a4241de5d",
+  "database_type": "clickhouse",
+  "schema_name": "default",
+  "table_name": "test_table",
+  "table_is_new": True,
   "write_mode": "append",
   "run_settings": [
     "edit_mode",
@@ -230,7 +230,7 @@ save_config = {
   ]
 }
 
-# livedocs._write_to_snowflake(df, save_config)
+livedocs._write_to_clickhouse(df, save_config)
 
 
 

@@ -6,7 +6,7 @@ from typing import List, Optional
 import snowflake.connector
 import clickhouse_connect
 import pandas as pd
-from livedocs.utils.clickhouse import process_clickhouse_schema
+from livedocs.utils.clickhouse import process_clickhouse_schema, write_df_to_clickhouse
 from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
 import polars as pl
 from livedocs.utils.debug import debug
@@ -273,6 +273,13 @@ class Livedocs:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
                     result = self._write_to_snowflake(dataframe, save_config)
+                    return result
+                else:
+                    pass
+            elif DatabaseType(save_config["database_type"]) == DatabaseType.Clickhouse:
+                current_run_context = get_run_context()
+                if current_run_context in save_config["run_settings"]:
+                    result = self._write_to_clickhouse(dataframe, save_config)
                     return result
                 else:
                     pass
@@ -1216,6 +1223,73 @@ class Livedocs:
             result = write_df_to_snowflake(
                 df,
                 connection,
+                qualified_table_name,
+                save_config["table_is_new"],
+                save_config["write_mode"],
+            )
+
+            if result["error"]:
+                raise RuntimeError(f"Error writing to Snowflake: {result['error']}")
+            else:
+                # Compress and encode response
+                output = QueryResult(
+                    data=result["result"],
+                    metadata=QueryResultMetadata(
+                        limit=50,
+                        offset=0,
+                        total_rows=result["rows_written"],
+                        run_date=result["run_date"],
+                        cache_info=None,
+                    ),
+                )
+                payload = LivedocsResult(output)
+                return payload
+        except Exception as e:
+            raise RuntimeError(f"DBSave Error: {e}")
+
+    def _write_to_clickhouse(self, df: pl.DataFrame, save_config: DBSaveConfig):
+        """
+        Writes a DataFrame to a Clickhouse database.
+
+        Args:
+            df (pl.DataFrame): The DataFrame to write to the database.
+            save_config (DBSaveConfig): The save configuration.
+
+        Returns:
+            Error, Result and Metrics in a tuple
+            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+        """
+        try:
+            db_connector_id = save_config["database_id"]
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            # Needs to be parsed twice
+            parsed_credentials = json.loads(credentials["connection_details"])
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            qualified_table_name = f"{save_config['schema_name']}.{save_config['table_name']}"
+            client = clickhouse_connect.get_client(
+                host=parsed_credentials["host"],
+                port=parsed_credentials["port"],
+                user=parsed_credentials["user_name"],
+                password=parsed_credentials["password"],
+                secure=True
+            )
+          
+            print(qualified_table_name)
+            result = write_df_to_clickhouse(
+                df,
+                client,
                 qualified_table_name,
                 save_config["table_is_new"],
                 save_config["write_mode"],
