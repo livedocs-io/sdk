@@ -5,8 +5,9 @@ import os
 from typing import List, Optional
 import snowflake.connector
 import pandas as pd
-from livedocs.utils.snowflake import process_snowflake_schema
+from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
 import polars as pl
+from livedocs.utils.debug import debug
 import sentry_sdk
 from google.cloud import bigquery
 from google.oauth2 import service_account
@@ -261,6 +262,13 @@ class Livedocs:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
                     result = self._write_to_bigquery(dataframe, save_config)
+                    return result
+                else:
+                    pass
+            elif DatabaseType(save_config["database_type"]) == DatabaseType.Snowflake:
+                current_run_context = get_run_context()
+                if current_run_context in save_config["run_settings"]:
+                    result = self._write_to_snowflake(dataframe, save_config)
                     return result
                 else:
                     pass
@@ -1010,6 +1018,79 @@ class Livedocs:
 
             if result["error"]:
                 raise RuntimeError(f"Error writing to BigQuery: {result['error']}")
+            else:
+                # Compress and encode response
+                output = QueryResult(
+                    data=result["result"],
+                    metadata=QueryResultMetadata(
+                        limit=50,
+                        offset=0,
+                        total_rows=result["rows_written"],
+                        run_date=result["run_date"],
+                        cache_info=None,
+                    ),
+                )
+                payload = LivedocsResult(output)
+                return payload
+        except Exception as e:
+            raise RuntimeError(f"DBSave Error: {e}")
+
+    def _write_to_snowflake(self, df: pl.DataFrame, save_config: DBSaveConfig):
+        """
+        Writes a DataFrame to a Snowflake database.
+
+        Args:
+            df (pl.DataFrame): The DataFrame to write to the database.
+            save_config (DBSaveConfig): The save configuration.
+
+        Returns:
+            Error, Result and Metrics in a tuple
+            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+        """
+        try:
+            db_connector_id = save_config["database_id"]
+            # This won't throw an error if the credentials are not found
+            credentials = self._credentials.get("databases", {}).get(db_connector_id)
+
+            if not credentials:
+                self._credentials = _fetch_credentials(self._report_id, self._token)
+                # This will throw an error if the credentials are not found
+                credentials = self._credentials["databases"][db_connector_id]
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        try:
+            # Needs to be parsed twice
+            parsed_credentials = json.loads(credentials["connection_details"])
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+
+        try:
+            qualified_table_name = f"{parsed_credentials['database']}.{save_config['schema_name']}.{save_config['table_name']}"
+            if parsed_credentials.get("auth_type") == "username_password":
+                connection = snowflake.connector.connect(
+                    user=parsed_credentials["username"],
+                    password=parsed_credentials["password"],
+                    account=parsed_credentials["host"],
+                    database=parsed_credentials["database"],
+                    session_parameters={
+                        'QUERY_TAG': 'LivedocsQuery',
+                    }
+                )
+            else:
+                raise ValueError("Unsupported authentication type")
+
+            result = write_df_to_snowflake(
+                df,
+                connection,
+                qualified_table_name,
+                save_config["table_is_new"],
+                save_config["write_mode"],
+            )
+
+            if result["error"]:
+                raise RuntimeError(f"Error writing to Snowflake: {result['error']}")
             else:
                 # Compress and encode response
                 output = QueryResult(

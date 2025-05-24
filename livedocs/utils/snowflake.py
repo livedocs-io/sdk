@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import polars as pl
 import snowflake.connector
 from typing_extensions import Literal
-
+import pandas as pd
 
 def map_snowflake_type(snowflake_type: str) -> str:
     """
@@ -191,34 +191,52 @@ def write_df_to_snowflake(
 
         cursor = connection.cursor()
         
-        # Check if table exists
+        # Check if table exists and get schema
         try:
-            cursor.execute(f"DESCRIBE TABLE {table_name}")
-            table_exists = True
-            schema = cursor.fetchall()
-        except Exception:
-            table_exists = False
-            schema = []
-
-        if not table_exists:
-            if create_table:
-                # Create schema from DataFrame
-                columns = []
-                for col_name, dtype in zip(df.columns, df.dtypes):
-                    sf_type = map_polars_to_snowflake_type(dtype)
-                    columns.append(f"{col_name} {sf_type}")
-
-                create_table_sql = f"CREATE TABLE {table_name} ({', '.join(columns)})"
-                cursor.execute(create_table_sql)
-                connection.commit()
+            # Split the fully qualified table name
+            db_schema_table = table_name.split('.')
+            if len(db_schema_table) == 3:
+                database, schema, table = db_schema_table
+                # Use the database and schema
+                cursor.execute(f'USE DATABASE "{database}"')
+                cursor.execute(f'USE SCHEMA "{schema}"')
+                current_table = table
             else:
-                raise ValueError(f"Table {table_name} does not exist and create_table=False")
+                current_table = table_name
 
-        # Get table schema
-        cursor.execute(f"DESCRIBE TABLE {table_name}")
-        sf_schema = {col[0]: {"type": col[1], "nullable": col[3] == "Y"} for col in cursor.fetchall()}
+            # Get table schema
+            cursor.execute(f'DESCRIBE TABLE "{current_table}"')
+            sf_schema = {col[0]: {"type": col[1], "nullable": col[3] == "Y"} for col in cursor.fetchall()}
 
-        # Check for missing required columns
+        except Exception as e:
+            if not create_table:
+                raise ValueError(f"Table {table_name} does not exist and create_table is False")
+            
+            # Create new table
+            if len(db_schema_table) == 3:
+                database, schema, table = db_schema_table
+                # Use the database and schema
+                cursor.execute(f'USE DATABASE "{database}"')
+                cursor.execute(f'USE SCHEMA "{schema}"')
+                current_table = table
+            else:
+                current_table = table_name
+
+            # Create schema from DataFrame
+            columns = []
+            for col_name, dtype in zip(df.columns, df.dtypes):
+                sf_type = map_polars_to_snowflake_type(dtype)
+                columns.append(f'"{col_name}" {sf_type}')
+            
+            create_table_sql = f'CREATE TABLE "{current_table}" ({", ".join(columns)})'
+            cursor.execute(create_table_sql)
+            connection.commit()
+
+            # Get the schema of the newly created table
+            cursor.execute(f'DESCRIBE TABLE "{current_table}"')
+            sf_schema = {col[0]: {"type": col[1], "nullable": col[3] == "Y"} for col in cursor.fetchall()}
+
+        # Check for missing non-nullable columns
         missing_required = [
             col
             for col, info in sf_schema.items()
@@ -226,7 +244,20 @@ def write_df_to_snowflake(
         ]
 
         if missing_required:
-            raise ValueError(f"Missing required columns: {missing_required}")
+            raise ValueError(
+                f"DataFrame is missing required (non-nullable) columns from the table: {missing_required}"
+            )
+
+        # Check if there are any matching columns between DataFrame and table
+        matching_columns = [col for col in df.columns if col in sf_schema]
+        if not matching_columns:
+            output["rows_written"] = 0
+            return output
+
+        # Check if DataFrame is empty
+        if len(df) == 0:
+            output["rows_written"] = 0
+            return output
 
         # Prepare expressions for schema alignment
         expressions = []
@@ -238,15 +269,20 @@ def write_df_to_snowflake(
             if col_name in df.columns:
                 expr = pl.col(col_name)
 
+                # Handle type casting and datetime formatting
                 if "TIMESTAMP" in sf_type.upper():
-                    expr = expr.cast(pl.Datetime).dt.cast_time_unit("us")
+                    expr = expr.cast(pl.Datetime).dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+                elif "DATE" in sf_type.upper():
+                    expr = expr.cast(pl.Date).dt.strftime('%Y-%m-%d')
                 else:
                     expr = expr.cast(target_type)
 
-                # Handle null values for non-nullable columns
+                # Handle null values
                 if not nullable:
                     default_val = get_default_value(sf_type)
                     expr = expr.fill_null(default_val)
+                # For nullable columns, we want to keep nulls as nulls
+                # No need to explicitly fill with None as that's the default behavior
 
                 expressions.append(expr.alias(col_name))
             else:
@@ -264,16 +300,16 @@ def write_df_to_snowflake(
 
         # Convert to pandas for Snowflake upload
         pd_df = aligned_df.to_pandas()
-
+        
         # Prepare the write operation
         if write_mode == "overwrite":
-            cursor.execute(f"TRUNCATE TABLE {table_name}")
+            cursor.execute(f'TRUNCATE TABLE "{current_table}"')
 
         # Write data to Snowflake
-        cursor.executemany(
-            f"INSERT INTO {table_name} ({', '.join(aligned_df.columns)}) VALUES ({', '.join(['%s'] * len(aligned_df.columns))})",
-            pd_df.values.tolist()
-        )
+        quoted_columns = [f'"{col}"' for col in aligned_df.columns]
+        placeholders = ["%s"] * len(aligned_df.columns)
+        insert_sql = f'INSERT INTO "{current_table}" ({", ".join(quoted_columns)}) VALUES ({", ".join(placeholders)})'
+        cursor.executemany(insert_sql, pd_df.values.tolist())
         connection.commit()
 
         # Prepare output

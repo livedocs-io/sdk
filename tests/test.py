@@ -19,8 +19,9 @@ import json
 livedocs = Livedocs()
 livedocs.initialize(
     "cea74395-5d3f-42cf-97bf-20e471b93834",
-    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJhZjA2YWYxMi0zY2Y5LTRkYzMtODNmOC1jNmU1M2MzNTI1ZjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsInJlcG9ydF9pZCI6ImNlYTc0Mzk1LTVkM2YtNDJjZi05N2JmLTIwZTQ3MWI5MzgzNCIsInJlcG9ydF9wZXJtaXNzaW9uX2xldmVsIjozLCJ3c19wZXJtaXNzaW9uX2xldmVsIjozLCJtZW1iZXJfaWQiOiIzZjU4YmY0Zi03MmMzLTRiZmQtOWEzOS05YjdkZTY0MWI3ZjMiLCJleHAiOjE3NDgwMDE2NTl9.rhDenfupBzIubUepaMtydto7_Ulfcooq0uXEYr1FZQw"
+    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJhZjA2YWYxMi0zY2Y5LTRkYzMtODNmOC1jNmU1M2MzNTI1ZjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsInJlcG9ydF9pZCI6ImNlYTc0Mzk1LTVkM2YtNDJjZi05N2JmLTIwZTQ3MWI5MzgzNCIsInJlcG9ydF9wZXJtaXNzaW9uX2xldmVsIjozLCJ3c19wZXJtaXNzaW9uX2xldmVsIjozLCJtZW1iZXJfaWQiOiIzZjU4YmY0Zi03MmMzLTRiZmQtOWEzOS05YjdkZTY0MWI3ZjMiLCJleHAiOjE3NDgwNzU1OTh9.Sd4HVjibXK9sESQtUSIbnu4maAzAI0_2JI_qXJ-_WKk"
 )
+
 # User code (i.e, the test)
 
 # Postgres datasource
@@ -35,36 +36,36 @@ livedocs.initialize(
 # }
 
 
-snowflake_datasource = {
-    "source_type": "database_table",
-    "database_info": {
-        "database_connector_id": "426339e1-4bd5-42f8-9fb2-b68fbeb466b0",
-        "database_name": "snowflake",
-        "database_type": "snowflake",
-    },
-}
+# snowflake_datasource = {
+#     "source_type": "database_table",
+#     "database_info": {
+#         "database_connector_id": "426339e1-4bd5-42f8-9fb2-b68fbeb466b0",
+#         "database_name": "snowflake",
+#         "database_type": "snowflake",
+#     },
+# }
 
-snowflake_table_source = {
-    "source_type": "database_table",
-    "database_info": {
-        "database_type": "snowflake",
-        "database_connector_id": "426339e1-4bd5-42f8-9fb2-b68fbeb466b0",
-        "database_name": "snowflake"
-    },
-    "database_table_info": {
-        "instance_id": "426339e1-4bd5-42f8-9fb2-b68fbeb466b0",
-        "schema_name": "ARSLNB_LOAD_SAMPLE_DATA_FROM_S3",
-        "table_name": "MENU"
-    }
-}
+# snowflake_table_source = {
+#     "source_type": "database_table",
+#     "database_info": {
+#         "database_type": "snowflake",
+#         "database_connector_id": "426339e1-4bd5-42f8-9fb2-b68fbeb466b0",
+#         "database_name": "snowflake"
+#     },
+#     "database_table_info": {
+#         "instance_id": "426339e1-4bd5-42f8-9fb2-b68fbeb466b0",
+#         "schema_name": "ARSLNB_LOAD_SAMPLE_DATA_FROM_S3",
+#         "table_name": "MENU"
+#     }
+# }
 
 # pg_result = livedocs.query("select * from Appstore.public.users limit 10", json.dumps(pg_datasource), {})
 
 # snowflake_result = livedocs.query("SELECT * FROM snowflake_learning_db.arslnb_load_sample_data_from_s3.menu LIMIT 1", json.dumps(snowflake_datasource), {})
 
 
-snowflake_table = livedocs._get_table_response(json.dumps(snowflake_table_source), limit=10)
-print(snowflake_table)
+# snowflake_table = livedocs._get_table_response(json.dumps(snowflake_table_source), limit=10)
+# print(snowflake_table)
 # print(pg_result)
 
 # File datasources
@@ -160,23 +161,52 @@ print(snowflake_table)
 #     }
 # )
 
-# save_config = {
-#   "dataframe_name": "df",
-#   "dataframe_element_id": "IRRELEVANT",
-#   "database_name": "appstoreb",
-#   "database_id": "d97d43ef-66c4-477c-9b27-a1211002aea9",
-#   "database_type": "postgres",
-#   "schema_name": "public",
-#   "table_name": "invites",
-#   "table_is_new": False,
-#   "write_mode": "overwrite",
-#   "run_settings": [
-#     "edit_mode",
-#     "view_mode",
-#     "scheduled_runs",
-#     "webhook_runs"
-#   ]
-# }
+import polars as pl
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+
+# Generate dummy data
+n_rows = 2
+int_col = np.arange(1, n_rows + 1)  # Integers 1 through 20
+float_col = np.linspace(0, 1, n_rows)  # 20 floats from 0 to 1
+str_col = [f"row_{i}" for i in range(n_rows)]  # Strings: row_0, row_1, ...
+start_date = datetime.strptime("2024-01-01", "%Y-%m-%d")
+date_col = [start_date + timedelta(days=i) for i in range(n_rows)]  # 20 consecutive days
+bool_col = [(i % 2 == 0) for i in range(n_rows)]  # Alternating True/False
+
+# Build Polars DataFrame
+df = pl.DataFrame({
+    "integer": int_col,
+    "float": float_col,
+    "string": str_col,
+    "date": date_col,
+    "boolean": bool_col
+})
+
+# {"database_id": String("270dbaaa-f550-4e6d-85dd-332366ce7b98"), "database_name": String("snowflake"), "database_type": String("snowflake"), "dataframe_element_id": String("57942af6-9673-48a9-8ac4-f6c04fd44e04"), "dataframe_name": String("df"), "run_settings": Array [String("edit_mode")], "schema_name": String("ARSLNB_LOAD_SAMPLE_DATA_FROM_S3"), "table_is_new": Bool(true), "table_name": String("MENUx"), "write_mode": String("append")}
+
+save_config = {
+  "dataframe_name": "df",
+  "dataframe_element_id": "IRRELEVANT",
+  "database_name": "snowflake",
+  "database_id": "270dbaaa-f550-4e6d-85dd-332366ce7b98",
+  "database_type": "snowflake",
+  "schema_name": "ARSLNB_LOAD_SAMPLE_DATA_FROM_S3",
+  "table_name": "MENUecx",
+  "table_is_new": False,
+  "write_mode": "append",
+  "run_settings": [
+    "edit_mode",
+    "view_mode",
+    "scheduled_runs",
+    "webhook_runs"
+  ]
+}
+
+livedocs._write_to_snowflake(df, save_config)
+
+
 
 # _new_save_config = {
 #   "dataframe_name": "df",
