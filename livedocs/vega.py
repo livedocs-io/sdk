@@ -820,6 +820,17 @@ def main_chart(
             format=",.1f",
         )
 
+        y_label_encoding = y_encoding
+        if mark_type=="full_stacked_column":
+            y_label_encoding=y_encoding.stack("normalize")
+        elif (labels_mode == "per_color" and mark_type.endswith("column")):
+            y_label_encoding = y_encoding.stack("zero")
+        elif not mark_type=="grouped_column":
+            y_label_encoding=alt.value(100)
+
+
+
+
         text = (
             alt.Chart(df)
             .mark_text(
@@ -828,11 +839,7 @@ def main_chart(
             )
             .encode(
                 x=x_encoding,
-                y=y_encoding.stack("zero")
-                if (labels_mode == "per_color" and mark_type.endswith("column"))
-                else y_encoding
-                if not mark_type=="grouped_column"
-                else alt.value(100),
+                y=y_label_encoding,
                 text=text_encoding,
                 yOffset=alt.value(0),
                 xOffset=color_by_field
