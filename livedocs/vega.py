@@ -782,13 +782,14 @@ def main_chart(
         )
 
         # MarkDataLabelsSettings
-        layer_name = next((k for k in style_settings['markSettings'] if k.endswith('layer 1')), {})
-
-        label_settings = (
-            style_settings.get("markSettings", {})
-            .get(layer_name, {})
-            .get("dataLabels", {})
-        )
+        layer_name = next((k for k in style_settings.get('markSettings', {}) if k.endswith('layer 1')), {})
+        label_settings = {}
+        if layer_name:
+            label_settings = (
+                style_settings.get("markSettings", {})
+                .get(layer_name, {})
+                .get("dataLabels", {})
+            )
 
         labels_show = label_settings.get("show", False)
         labels_color = label_settings.get("color", "black")
@@ -828,17 +829,19 @@ def main_chart(
             .encode(
                 x=x_encoding,
                 y=y_encoding.stack("zero")
-                if labels_mode == "per_color"
+                if (labels_mode == "per_color" and mark_type.endswith("column"))
+                else y_encoding
+                if not mark_type=="grouped_column"
                 else alt.value(100),
                 text=text_encoding,
                 yOffset=alt.value(0),
                 xOffset=color_by_field
-                if mark_type == "grouped_column"
+                if (mark_type == "grouped_column"
                 and color_by_field
-                and labels_mode == "per_color"
+                and labels_mode == "per_color")
                 else alt.Undefined,
                 detail=color_by_field
-                if color_by_field and labels_mode == "per_color"
+                if (color_by_field and labels_mode == "per_color")
                 else alt.Undefined,
                 color=alt.value(labels_color),
                 angle=alt.value(labels_angle),
@@ -1275,8 +1278,6 @@ def main_chart(
         y_lines = create_line(df, "y", style_settings)
 
         # Create the layer and add to inner layers
-        print(f'Show var: {labels_show}\n\nLabels options: {label_settings}\n\n')
-        print(f'Style settings: {style_settings}\n\n')
         inner_layers.append(base_layer)
         if labels_show is True:
             inner_layers.append(text)
