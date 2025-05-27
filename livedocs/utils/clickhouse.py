@@ -2,7 +2,6 @@ import traceback
 from datetime import datetime, timezone
 
 import polars as pl
-import snowflake.connector
 from typing_extensions import Literal
 import pandas as pd
 
@@ -123,61 +122,56 @@ def write_df_to_clickhouse(
 
         # Split the fully qualified table name
         db_table = table_name.split('.')
-        if len(db_table) == 2:
-            database, table = db_table
-        else:
-            table = table_name
+        database, table = (db_table[0], db_table[1]) if len(db_table) == 2 else (None, table_name)
 
         # Check if table exists and get schema
         try:
-            # Get table schema
             schema = client.query(f'DESCRIBE TABLE {table}')
-            ch_schema = {col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} for col in schema}
-
+            ch_schema = {
+                col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} 
+                for col in schema.result_set
+            }
         except Exception as e:
             if not create_table:
                 raise ValueError(f"Table {table_name} does not exist and create_table is False")
             
             # Create new table
-            if len(db_table) == 2:
-                database, table = db_table
+            if database:
                 client.query(f'USE {database}')
-            else:
-                table = table_name
 
             # Create schema from DataFrame
-            columns = []
-            for col_name, dtype in zip(df.columns, df.dtypes):
-                ch_type = map_polars_to_clickhouse_type(dtype)
-                columns.append(f'{col_name} {ch_type}')
+            columns = [
+                f'{col_name} {map_polars_to_clickhouse_type(dtype)}'
+                for col_name, dtype in zip(df.columns, df.dtypes)
+            ]
             
-            create_table_sql = f'CREATE TABLE {table} ({", ".join(columns)}) ENGINE = MergeTree() ORDER BY tuple()'
+            # Create table with MergeTree engine
+            order_by_columns = ", ".join(df.columns)
+            create_table_sql = f'''CREATE TABLE {table} (
+                {", ".join(columns)}
+            ) ENGINE = MergeTree()
+            ORDER BY ({order_by_columns})'''
             client.query(create_table_sql)
 
             # Get the schema of the newly created table
             schema = client.query(f'DESCRIBE TABLE {table}')
-            ch_schema = {col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} for col in schema}
+            ch_schema = {
+                col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} 
+                for col in schema.result_set
+            }
 
-        # Check for missing non-nullable columns
+        # Validate schema and data
         missing_required = [
-            col
-            for col, info in ch_schema.items()
+            col for col, info in ch_schema.items()
             if not info["nullable"] and col not in df.columns
         ]
-
         if missing_required:
             raise ValueError(
                 f"DataFrame is missing required (non-nullable) columns from the table: {missing_required}"
             )
 
-        # Check if there are any matching columns between DataFrame and table
         matching_columns = [col for col in df.columns if col in ch_schema]
-        if not matching_columns:
-            output["rows_written"] = 0
-            return output
-
-        # Check if DataFrame is empty
-        if len(df) == 0:
+        if not matching_columns or len(df) == 0:
             output["rows_written"] = 0
             return output
 
@@ -190,23 +184,19 @@ def write_df_to_clickhouse(
 
             if col_name in df.columns:
                 expr = pl.col(col_name)
-
-                # Handle type casting and datetime formatting
                 if "DateTime" in ch_type:
-                    expr = expr.cast(pl.Datetime).dt.strftime('%Y-%m-%d %H:%M:%S')
+                    expr = expr.cast(pl.Datetime).dt.replace_time_zone("UTC")
                 elif "Date" in ch_type:
-                    expr = expr.cast(pl.Date).dt.strftime('%Y-%m-%d')
+                    expr = expr.cast(pl.Date).dt.replace_time_zone("UTC")
                 else:
                     expr = expr.cast(target_type)
 
-                # Handle null values
                 if not nullable:
                     default_val = get_default_value(ch_type)
                     expr = expr.fill_null(default_val)
 
                 expressions.append(expr.alias(col_name))
             else:
-                # Add missing columns with default values
                 if nullable:
                     expressions.append(pl.lit(None).cast(target_type).alias(col_name))
                 else:
@@ -215,39 +205,30 @@ def write_df_to_clickhouse(
                         pl.lit(default_val).cast(target_type).alias(col_name)
                     )
 
-        # Align DataFrame schema
+        # Align DataFrame schema and convert to pandas
         aligned_df = df.select(expressions)
-
-        # Convert to pandas for ClickHouse upload
         pd_df = aligned_df.to_pandas()
         
-        # Prepare the write operation
+        # Handle overwrite mode
         if write_mode == "overwrite":
             client.query(f'TRUNCATE TABLE {table}')
 
-        # Write data to ClickHouse
-        client.insert_dataframe(f'INSERT INTO {table} VALUES', pd_df)
+        # Insert data with deduplication token
+        dedup_token = str(int(datetime.now(timezone.utc).timestamp() * 1000))
+        client.insert(table, pd_df, settings={'insert_deduplication_token': dedup_token})
 
         # Prepare output
         try:
-            # Convert aligned DataFrame to strings for consistent output
             result_df = aligned_df.head(19).select(
                 [pl.col(col).cast(pl.Utf8) for col in aligned_df.columns]
             )
-
-            # Create types row
             types_row = {col_name: info["type"] for col_name, info in ch_schema.items()}
             types_df = pl.DataFrame([types_row])
-
-            # Concatenate types with data
             output["result"] = pl.concat([types_df, result_df])
-
             output["rows_written"] = len(df)
-
             return output
 
         except Exception as e:
-            # If there's an error in preparing the output but after successful upload
             output["error"] = {
                 "message": f"Data written successfully but error in preparing output: {str(e)}",
                 "stacktrace": traceback.format_exc(),

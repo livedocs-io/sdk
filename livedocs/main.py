@@ -1286,7 +1286,6 @@ class Livedocs:
                 secure=True
             )
           
-            print(qualified_table_name)
             result = write_df_to_clickhouse(
                 df,
                 client,
@@ -1296,7 +1295,7 @@ class Livedocs:
             )
 
             if result["error"]:
-                raise RuntimeError(f"Error writing to Snowflake: {result['error']}")
+                raise RuntimeError(f"Error writing to Clickhouse: {result['error']}")
             else:
                 # Compress and encode response
                 output = QueryResult(

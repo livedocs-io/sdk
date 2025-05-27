@@ -18,8 +18,8 @@ import json
 
 livedocs = Livedocs()
 livedocs.initialize(
-    "9be029af-a382-4093-a2b1-66d41f69d1f5",
-    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJhZjA2YWYxMi0zY2Y5LTRkYzMtODNmOC1jNmU1M2MzNTI1ZjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsInJlcG9ydF9pZCI6IjliZTAyOWFmLWEzODItNDA5My1hMmIxLTY2ZDQxZjY5ZDFmNSIsInJlcG9ydF9wZXJtaXNzaW9uX2xldmVsIjozLCJ3c19wZXJtaXNzaW9uX2xldmVsIjozLCJtZW1iZXJfaWQiOiIzZjU4YmY0Zi03MmMzLTRiZmQtOWEzOS05YjdkZTY0MWI3ZjMiLCJleHAiOjE3NDgwOTkwMzJ9.Wq7KRtA_bh3FZEO-3EZaP23LkadTm6aSL16EAxcYue4"
+    "2c082a42-8bb7-464b-8680-55d9556d42dd",
+    "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiZ29vZ2xlLW9hdXRoMnwxMDg5MDMzNDg1NzY5MDU4MTc5MTciLCJ3b3Jrc3BhY2VfaWQiOiJhZjA2YWYxMi0zY2Y5LTRkYzMtODNmOC1jNmU1M2MzNTI1ZjAiLCJ1c2VyX2ltZyI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xXSlVQa3M1bkoxdWg5cG1ia1pSNndSQlp6VnFCaDRzUDluMUhMZkhMcnQ0ZEJjekk9czk2LWMiLCJ1c2VyX25hbWUiOiJBcnNhbGFuIEJhc2hpciIsInJlcG9ydF9pZCI6IjJjMDgyYTQyLThiYjctNDY0Yi04NjgwLTU1ZDk1NTZkNDJkZCIsInJlcG9ydF9wZXJtaXNzaW9uX2xldmVsIjozLCJ3c19wZXJtaXNzaW9uX2xldmVsIjozLCJtZW1iZXJfaWQiOiIzZjU4YmY0Zi03MmMzLTRiZmQtOWEzOS05YjdkZTY0MWI3ZjMiLCJleHAiOjE3NDgzNTg5MTR9.F051roMHmBUIf96DeIs8vtBsAn-exqMTu5ZQVijty6I",
 )
 
 # User code (i.e, the test)
@@ -219,7 +219,7 @@ save_config = {
   "database_id": "d9abe9c2-7244-4cef-9b96-401a4241de5d",
   "database_type": "clickhouse",
   "schema_name": "default",
-  "table_name": "test_table",
+  "table_name": "test_table_three",
   "table_is_new": True,
   "write_mode": "append",
   "run_settings": [
