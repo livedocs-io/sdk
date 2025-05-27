@@ -6,13 +6,15 @@ from typing import Dict
 import polars as pl
 from typing_extensions import Literal
 
+from livedocs.utils.debug import debug
+
 
 def _create_postgres_connection_url(details: Dict[str, str]) -> str:
-    user = details["user_name"]
+    user = details.get("user_name", "")
     password = details.get("password", "")
-    host = details["host"]
+    host = details.get("host", "")
     port = details.get("port", 5432)
-    database = details["database"]
+    database = details.get("database", "")
 
     if password:
         return f"postgresql://{user}:{password}@{host}:{port}/{database}"

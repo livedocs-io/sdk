@@ -33,23 +33,21 @@ def get_altair_datasource_query(datasource: ElementDataSource):
     Prepares the DuckDB query for each datasource
     """
     match datasource["source_type"]:
-        case ElementDatasourceType.file.value:
-            file_name = datasource["file_info"]["file_name"]
-            if datasource["file_info"]["file_type"] == "csv":
-                return f"SELECT * FROM read_csv_auto('{file_name}')"
-            elif datasource["file_info"]["file_type"] == "xlsx":
-                return f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
-            return f"SELECT * FROM '{file_name}'"
         case ElementDatasourceType.dataframe.value:
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
         case ElementDatasourceType.database_table.value:
             if (
                 datasource["database_info"]["database_type"]
-                == DatabaseType.Postgres.value
+                == DatabaseType.Bigquery.value
             ):
-                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+                return f"SELECT * FROM `{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 500000;`"
+            elif (
+                datasource["database_info"]["database_type"]
+                == DatabaseType.Clickhouse.value
+            ):
+                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
             else:
-                return f"SELECT * FROM `{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}`"
+                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
         case _:
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"
