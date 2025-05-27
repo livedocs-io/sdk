@@ -782,12 +782,14 @@ def main_chart(
         )
 
         # MarkDataLabelsSettings
-
-        label_settings = (
-            style_settings.get("markSettings", {})
-            .get("line layer 1", {})
-            .get("dataLabels", {})
-        )
+        layer_name = next((k for k in style_settings.get('markSettings', {}) if k.endswith('layer 1')), {})
+        label_settings = {}
+        if layer_name:
+            label_settings = (
+                style_settings.get("markSettings", {})
+                .get(layer_name, {})
+                .get("dataLabels", {})
+            )
 
         labels_show = label_settings.get("show", False)
         labels_color = label_settings.get("color", "black")
@@ -818,6 +820,17 @@ def main_chart(
             format=",.1f",
         )
 
+        y_label_encoding = y_encoding
+        if mark_type=="full_stacked_column":
+            y_label_encoding=y_encoding.stack("normalize")
+        elif (labels_mode == "per_color" and mark_type.endswith("column")):
+            y_label_encoding = y_encoding.stack("zero")
+        elif mark_type=="line" and labels_mode=="per_color":
+            y_label_encoding=y_encoding
+        # else:
+        elif mark_type=="grouped_column" or mark_type=="line" or (mark_type=="point" and labels_mode=="total"):
+            y_label_encoding=alt.value(100)
+
         text = (
             alt.Chart(df)
             .mark_text(
@@ -826,18 +839,16 @@ def main_chart(
             )
             .encode(
                 x=x_encoding,
-                y=y_encoding.stack("zero")
-                if labels_mode == "per_color"
-                else alt.value(100),
+                y=y_label_encoding,
                 text=text_encoding,
                 yOffset=alt.value(0),
                 xOffset=color_by_field
-                if mark_type == "grouped_column"
+                if (mark_type == "grouped_column"
                 and color_by_field
-                and labels_mode == "per_color"
+                and labels_mode == "per_color")
                 else alt.Undefined,
                 detail=color_by_field
-                if color_by_field and labels_mode == "per_color"
+                if (color_by_field and labels_mode == "per_color")
                 else alt.Undefined,
                 color=alt.value(labels_color),
                 angle=alt.value(labels_angle),
@@ -851,13 +862,13 @@ def main_chart(
             labels_position == "middle"
             and labels_mode == "per_color"
             and mark_type == "stacked_column"
-        ):
+            ):
             text = text.encode(y=y_encoding.bandPosition(0.5).stack("zero"))
         elif (
             labels_position == "middle"
             and labels_mode == "total"
             and (mark_type == "stacked_column" or mark_type == "grouped_column")
-        ):
+            ):
             text = text.encode(
                 y=alt.Y(
                     field="__label_position",
@@ -1274,7 +1285,6 @@ def main_chart(
         y_lines = create_line(df, "y", style_settings)
 
         # Create the layer and add to inner layers
-
         inner_layers.append(base_layer)
         if labels_show is True:
             inner_layers.append(text)
