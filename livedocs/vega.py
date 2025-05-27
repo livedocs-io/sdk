@@ -825,11 +825,11 @@ def main_chart(
             y_label_encoding=y_encoding.stack("normalize")
         elif (labels_mode == "per_color" and mark_type.endswith("column")):
             y_label_encoding = y_encoding.stack("zero")
-        elif not mark_type=="grouped_column":
+        elif mark_type=="line" and labels_mode=="per_color":
+            y_label_encoding=y_encoding
+        # else:
+        elif mark_type=="grouped_column" or mark_type=="line" or (mark_type=="point" and labels_mode=="total"):
             y_label_encoding=alt.value(100)
-
-
-
 
         text = (
             alt.Chart(df)
