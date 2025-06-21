@@ -780,7 +780,14 @@ def main_chart(
         )
 
         # MarkDataLabelsSettings
-        layer_name = next((k for k in style_settings.get('markSettings', {}) if k.endswith('layer 1')), {})
+        layer_name = next(
+            (
+                k
+                for k in style_settings.get("markSettings", {})
+                if k.endswith("layer 1")
+            ),
+            {},
+        )
         label_settings = {}
         if layer_name:
             label_settings = (
@@ -819,15 +826,19 @@ def main_chart(
         )
 
         y_label_encoding = y_encoding
-        if mark_type=="full_stacked_column":
-            y_label_encoding=y_encoding.stack("normalize")
-        elif (labels_mode == "per_color" and mark_type.endswith("column")):
+        if mark_type == "full_stacked_column":
+            y_label_encoding = y_encoding.stack("normalize")
+        elif labels_mode == "per_color" and mark_type.endswith("column"):
             y_label_encoding = y_encoding.stack("zero")
-        elif mark_type=="line" and labels_mode=="per_color":
-            y_label_encoding=y_encoding
+        elif mark_type == "line" and labels_mode == "per_color":
+            y_label_encoding = y_encoding
         # else:
-        elif mark_type=="grouped_column" or mark_type=="line" or (mark_type=="point" and labels_mode=="total"):
-            y_label_encoding=alt.value(100)
+        elif (
+            mark_type == "grouped_column"
+            or mark_type == "line"
+            or (mark_type == "point" and labels_mode == "total")
+        ):
+            y_label_encoding = alt.value(100)
 
         text = (
             alt.Chart(df)
@@ -841,9 +852,11 @@ def main_chart(
                 text=text_encoding,
                 yOffset=alt.value(0),
                 xOffset=color_by_field
-                if (mark_type == "grouped_column"
-                and color_by_field
-                and labels_mode == "per_color")
+                if (
+                    mark_type == "grouped_column"
+                    and color_by_field
+                    and labels_mode == "per_color"
+                )
                 else alt.Undefined,
                 detail=color_by_field
                 if (color_by_field and labels_mode == "per_color")
@@ -860,13 +873,13 @@ def main_chart(
             labels_position == "middle"
             and labels_mode == "per_color"
             and mark_type == "stacked_column"
-            ):
+        ):
             text = text.encode(y=y_encoding.bandPosition(0.5).stack("zero"))
         elif (
             labels_position == "middle"
             and labels_mode == "total"
             and (mark_type == "stacked_column" or mark_type == "grouped_column")
-            ):
+        ):
             text = text.encode(
                 y=alt.Y(
                     field="__label_position",
@@ -894,8 +907,8 @@ def main_chart(
 
         # Make facet plot
         facet = None
-        h_facet_encoding='none'
-        v_facet_encoding='none'
+        h_facet_encoding = "none"
+        v_facet_encoding = "none"
 
         if h_subplot_field != "none":
             h_facet_encoding = alt.Facet(
@@ -905,7 +918,7 @@ def main_chart(
                 if h_subplot_bin_bool
                 else alt.Undefined,
             )
-            facet=True
+            facet = True
 
         if v_subplot_field != "none":
             v_facet_encoding = alt.Facet(
@@ -914,7 +927,7 @@ def main_chart(
                 if v_subplot_bin_bool
                 else alt.Undefined,
             )
-            facet=True
+            facet = True
 
         # Create the appropriate mark type
         if mark_type == "grouped_column":
@@ -1375,13 +1388,9 @@ def main_chart(
     # Facet if required
     if facet:
         chart = chart.facet(
-            column=h_facet_encoding
-            if h_facet_encoding!='none'
-            else alt.Undefined,
+            column=h_facet_encoding if h_facet_encoding != "none" else alt.Undefined,
             columns=h_subplot_cols if h_subplot_wrap else alt.Undefined,
-            row=v_facet_encoding
-            if v_facet_encoding!='none'
-            else alt.Undefined,
+            row=v_facet_encoding if v_facet_encoding != "none" else alt.Undefined,
             usermeta={
                 "chartType": "main",
                 "chartSettings": usermeta,
@@ -1390,7 +1399,6 @@ def main_chart(
                 "subplots": subplots,
             },
         )
-
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
