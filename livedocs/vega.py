@@ -40,7 +40,7 @@ def get_altair_datasource_query(datasource: ElementDataSource):
                 datasource["database_info"]["database_type"]
                 == DatabaseType.Bigquery.value
             ):
-                return f"SELECT * FROM `{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 500000;`"
+                return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 500000;"
             elif (
                 datasource["database_info"]["database_type"]
                 == DatabaseType.Clickhouse.value

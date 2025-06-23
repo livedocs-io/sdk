@@ -423,7 +423,7 @@ class Livedocs:
 
                 try:
                     parsed_credentials = json.loads(credentials["connection_details"])
-                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
                 except json.JSONDecodeError as e:
                     raise ValueError(f"Error parsing connection details: {e}")
 
@@ -584,6 +584,11 @@ class Livedocs:
                     if (
                         DatabaseType(datasource["database_info"]["database_type"])
                         == DatabaseType.Bigquery
+                    ):
+                        query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
+                    elif (
+                        DatabaseType(datasource["database_info"]["database_type"])
+                        == DatabaseType.Clickhouse
                     ):
                         query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
                     else:

@@ -6,7 +6,6 @@ from typing_extensions import Literal
 import pandas as pd
 
 
-
 def process_clickhouse_schema(schema: tuple) -> dict:
     """
     Processes Clickhouse schema and returns a mapping of column names
@@ -17,70 +16,106 @@ def process_clickhouse_schema(schema: tuple) -> dict:
     """
 
     # Get schema information
-    processed_schema = []
+    processed_schema = {}
 
     for col_name, col_type in schema:
         type_name = type(col_type).__name__
-        
+
         # Handle numeric types
-        if any(t in type_name for t in [
-            'Int', 'UInt', 'Float', 'Decimal', 'FixedString',  # Basic numeric types
-            'Int8', 'Int16', 'Int32', 'Int64', 'Int128', 'Int256',  # Signed integers
-            'UInt8', 'UInt16', 'UInt32', 'UInt64', 'UInt128', 'UInt256',  # Unsigned integers
-            'Float32', 'Float64',  # Floating point
-            'Decimal32', 'Decimal64', 'Decimal128', 'Decimal256',  # Decimal types
-            'Money', 'Money64'  # Money types
-        ]):
+        if any(
+            t in type_name
+            for t in [
+                "Int",
+                "UInt",
+                "Float",
+                "Decimal",
+                "FixedString",  # Basic numeric types
+                "Int8",
+                "Int16",
+                "Int32",
+                "Int64",
+                "Int128",
+                "Int256",  # Signed integers
+                "UInt8",
+                "UInt16",
+                "UInt32",
+                "UInt64",
+                "UInt128",
+                "UInt256",  # Unsigned integers
+                "Float32",
+                "Float64",  # Floating point
+                "Decimal32",
+                "Decimal64",
+                "Decimal128",
+                "Decimal256",  # Decimal types
+                "Money",
+                "Money64",  # Money types
+            ]
+        ):
             col_type = "NUMBER"
-            
+
         # Handle datetime types
-        elif any(t in type_name for t in [
-            'DateTime', 'DateTime32', 'DateTime64',  # DateTime types
-            'Date', 'Date32',  # Date types
-            'Time', 'Time32', 'Time64',  # Time types
-            'Timestamp', 'Timestamp32', 'Timestamp64'  # Timestamp types
-        ]):
+        elif any(
+            t in type_name
+            for t in [
+                "DateTime",
+                "DateTime32",
+                "DateTime64",  # DateTime types
+                "Date",
+                "Date32",  # Date types
+                "Time",
+                "Time32",
+                "Time64",  # Time types
+                "Timestamp",
+                "Timestamp32",
+                "Timestamp64",  # Timestamp types
+            ]
+        ):
             col_type = "DATE"
-            
+
         # Handle string types
-        elif any(t in type_name for t in [
-            'String', 'FixedString',  # String types
-            'Enum', 'Enum8', 'Enum16',  # Enum types
-            'UUID', 'IPv4', 'IPv6',  # Special string types
-            'LowCardinality',  # Low cardinality types
-            'Nullable'  # Nullable types
-        ]):
+        elif any(
+            t in type_name
+            for t in [
+                "String",
+                "FixedString",  # String types
+                "Enum",
+                "Enum8",
+                "Enum16",  # Enum types
+                "UUID",
+                "IPv4",
+                "IPv6",  # Special string types
+                "LowCardinality",  # Low cardinality types
+                "Nullable",  # Nullable types
+            ]
+        ):
             col_type = "STRING"
-            
+
         # Handle boolean types
-        elif 'Bool' in type_name:
+        elif "Bool" in type_name:
             col_type = "NUMBER"  # Map boolean to NUMBER as it's typically used for 0/1
-            
+
         # Handle array types
-        elif 'Array' in type_name:
+        elif "Array" in type_name:
             col_type = "STRING"  # Map arrays to STRING as they'll be serialized
-            
+
         # Handle map types
-        elif 'Map' in type_name:
+        elif "Map" in type_name:
             col_type = "STRING"  # Map types to STRING as they'll be serialized
-            
+
         # Handle tuple types
-        elif 'Tuple' in type_name:
+        elif "Tuple" in type_name:
             col_type = "STRING"  # Map tuples to STRING as they'll be serialized
-            
+
         # Handle nested types
-        elif 'Nested' in type_name:
+        elif "Nested" in type_name:
             col_type = "STRING"  # Map nested types to STRING as they'll be serialized
-            
+
         # Default to STRING for any other types
         else:
             col_type = "STRING"
-            
-        processed_schema.append({
-            "name": col_name,
-            "livedocs_type": col_type,
-            "children": []
-        })
+
+        processed_schema[col_name] = col_type
 
     return processed_schema
 
@@ -121,48 +156,53 @@ def write_df_to_clickhouse(
             raise ValueError('write_mode must be either "append" or "overwrite"')
 
         # Split the fully qualified table name
-        db_table = table_name.split('.')
-        database, table = (db_table[0], db_table[1]) if len(db_table) == 2 else (None, table_name)
+        db_table = table_name.split(".")
+        database, table = (
+            (db_table[0], db_table[1]) if len(db_table) == 2 else (None, table_name)
+        )
 
         # Check if table exists and get schema
         try:
-            schema = client.query(f'DESCRIBE TABLE {table}')
+            schema = client.query(f"DESCRIBE TABLE {table}")
             ch_schema = {
-                col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} 
+                col[0]: {"type": col[1], "nullable": "Nullable" in col[1]}
                 for col in schema.result_set
             }
         except Exception as e:
             if not create_table:
-                raise ValueError(f"Table {table_name} does not exist and create_table is False")
-            
+                raise ValueError(
+                    f"Table {table_name} does not exist and create_table is False"
+                )
+
             # Create new table
             if database:
-                client.query(f'USE {database}')
+                client.query(f"USE {database}")
 
             # Create schema from DataFrame
             columns = [
-                f'{col_name} {map_polars_to_clickhouse_type(dtype)}'
+                f"{col_name} {map_polars_to_clickhouse_type(dtype)}"
                 for col_name, dtype in zip(df.columns, df.dtypes)
             ]
-            
+
             # Create table with MergeTree engine
             order_by_columns = ", ".join(df.columns)
-            create_table_sql = f'''CREATE TABLE {table} (
+            create_table_sql = f"""CREATE TABLE {table} (
                 {", ".join(columns)}
             ) ENGINE = MergeTree()
-            ORDER BY ({order_by_columns})'''
+            ORDER BY ({order_by_columns})"""
             client.query(create_table_sql)
 
             # Get the schema of the newly created table
-            schema = client.query(f'DESCRIBE TABLE {table}')
+            schema = client.query(f"DESCRIBE TABLE {table}")
             ch_schema = {
-                col[0]: {"type": col[1], "nullable": "Nullable" in col[1]} 
+                col[0]: {"type": col[1], "nullable": "Nullable" in col[1]}
                 for col in schema.result_set
             }
 
         # Validate schema and data
         missing_required = [
-            col for col, info in ch_schema.items()
+            col
+            for col, info in ch_schema.items()
             if not info["nullable"] and col not in df.columns
         ]
         if missing_required:
@@ -208,14 +248,16 @@ def write_df_to_clickhouse(
         # Align DataFrame schema and convert to pandas
         aligned_df = df.select(expressions)
         pd_df = aligned_df.to_pandas()
-        
+
         # Handle overwrite mode
         if write_mode == "overwrite":
-            client.query(f'TRUNCATE TABLE {table}')
+            client.query(f"TRUNCATE TABLE {table}")
 
         # Insert data with deduplication token
         dedup_token = str(int(datetime.now(timezone.utc).timestamp() * 1000))
-        client.insert(table, pd_df, settings={'insert_deduplication_token': dedup_token})
+        client.insert(
+            table, pd_df, settings={"insert_deduplication_token": dedup_token}
+        )
 
         # Prepare output
         try:
@@ -239,6 +281,7 @@ def write_df_to_clickhouse(
     except Exception as e:
         output["error"] = {"message": str(e), "stacktrace": traceback.format_exc()}
         return output
+
 
 def map_polars_to_clickhouse_type(pol_type: str) -> str:
     """Convert Polars dtype string to ClickHouse type string"""
@@ -265,6 +308,7 @@ def map_polars_to_clickhouse_type(pol_type: str) -> str:
     else:
         return "String"
 
+
 def map_clickhouse_to_polars_type(ch_type: str) -> pl.DataType:
     """Convert ClickHouse type string to Polars dtype"""
     type_mapping = {
@@ -290,6 +334,7 @@ def map_clickhouse_to_polars_type(ch_type: str) -> pl.DataType:
         return type_mapping.get(base_type, pl.Utf8)
 
     return type_mapping.get(ch_type, pl.Utf8)
+
 
 def get_default_value(ch_type: str):
     """Get default value for a ClickHouse type"""
