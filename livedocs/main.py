@@ -33,6 +33,7 @@ from livedocs.types import (
     QueryResultMetadata,
     Schema,
     Spec,
+    VegaSpec,
 )
 from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
 from livedocs.utils.common import (
@@ -56,6 +57,7 @@ from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import create_vega_spec, get_altair_datasource_query
+
 
 class Livedocs:
     """
@@ -398,23 +400,33 @@ class Livedocs:
             # Run actual span
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             query = get_altair_datasource_query(datasource)
-            if datasource["source_type"] == "database_table" and DatabaseType(datasource["database_info"]["database_type"]) == DatabaseType.Snowflake:
+            if (
+                datasource["source_type"] == "database_table"
+                and DatabaseType(datasource["database_info"]["database_type"])
+                == DatabaseType.Snowflake
+            ):
                 try:
-                    db_connector_id = datasource["database_info"]["database_connector_id"]
-                    credentials = self._credentials.get("databases", {}).get(db_connector_id)
+                    db_connector_id = datasource["database_info"][
+                        "database_connector_id"
+                    ]
+                    credentials = self._credentials.get("databases", {}).get(
+                        db_connector_id
+                    )
 
                     if not credentials:
-                        self._credentials = _fetch_credentials(self._report_id, self._token)
+                        self._credentials = _fetch_credentials(
+                            self._report_id, self._token
+                        )
                         credentials = self._credentials["databases"][db_connector_id]
                 except KeyError as e:
                     raise ValueError(f"Missing required information: {e}")
 
                 try:
                     parsed_credentials = json.loads(credentials["connection_details"])
-                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
                 except json.JSONDecodeError as e:
                     raise ValueError(f"Error parsing connection details: {e}")
-                
+
             df, schema, cache_info = self._query_with_schema(
                 query,
                 datasource,
@@ -423,9 +435,31 @@ class Livedocs:
             )
             query_span.finish()
 
+            # Find how many data points we have
+            total_data_points = len(df) * len(df.columns)
+
             # Vegafusion
             vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
-            vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
+            if total_data_points > 50000:
+                style_settings = settings.get("styleSettings", {})
+                empty_chart = {
+                    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+                    "usermeta": {
+                        "styleSettings": style_settings,
+                        "chartType": "main",
+                    },
+                }
+                validated_spec = VegaSpec(
+                    **{
+                        "spec": json.dumps(empty_chart, separators=(",", ":")),
+                        "schema": schema,
+                        "status": "OVERLOADED",
+                        "cache_info": cache_info,
+                    }
+                )
+                vega_spec_json_str = validated_spec.model_dump_json()
+            else:
+                vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
             vega_span.finish()
 
             # Post-process the results
@@ -465,13 +499,23 @@ class Livedocs:
             datasource: ElementDataSource = json.loads(str_datasource)
 
             query = get_altair_datasource_query(datasource)
-            if datasource["source_type"] == "database_table" and DatabaseType(datasource["database_info"]["database_type"]) == DatabaseType.Snowflake:
+            if (
+                datasource["source_type"] == "database_table"
+                and DatabaseType(datasource["database_info"]["database_type"])
+                == DatabaseType.Snowflake
+            ):
                 try:
-                    db_connector_id = datasource["database_info"]["database_connector_id"]
-                    credentials = self._credentials.get("databases", {}).get(db_connector_id)
+                    db_connector_id = datasource["database_info"][
+                        "database_connector_id"
+                    ]
+                    credentials = self._credentials.get("databases", {}).get(
+                        db_connector_id
+                    )
 
                     if not credentials:
-                        self._credentials = _fetch_credentials(self._report_id, self._token)
+                        self._credentials = _fetch_credentials(
+                            self._report_id, self._token
+                        )
                         credentials = self._credentials["databases"][db_connector_id]
                 except KeyError as e:
                     raise ValueError(f"Missing required information: {e}")
@@ -537,7 +581,15 @@ class Livedocs:
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             match ElementDatasourceType(datasource["source_type"]):
                 case ElementDatasourceType.database_table:
-                    if DatabaseType(datasource["database_info"]["database_type"]) == DatabaseType.Bigquery:
+                    if (
+                        DatabaseType(datasource["database_info"]["database_type"])
+                        == DatabaseType.Bigquery
+                    ):
+                        query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
+                    elif (
+                        DatabaseType(datasource["database_info"]["database_type"])
+                        == DatabaseType.Clickhouse
+                    ):
                         query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
                     else:
                         query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
@@ -676,8 +728,10 @@ class Livedocs:
                 return [result, schema]
             case _:
                 return "Unknown DatabaseType"
-            
-    def _query_snowflake(self, query: str, datasource: ElementDataSource) -> tuple[pl.DataFrame, dict]:
+
+    def _query_snowflake(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
         """
         Queries a Snowflake database.
         """
@@ -704,46 +758,48 @@ class Livedocs:
                     account=parsed_credentials["host"],
                     database=parsed_credentials["database"],
                     session_parameters={
-                        'QUERY_TAG': 'LivedocsQuery',
-                    }
+                        "QUERY_TAG": "LivedocsQuery",
+                    },
                 )
             elif parsed_credentials.get("auth_type") == "service_account_key":
-                pem_key_from_ui = parsed_credentials['service_account_key'].strip()
-            
+                pem_key_from_ui = parsed_credentials["service_account_key"].strip()
+
                 # Load the private key
                 private_key = serialization.load_pem_private_key(
-                    pem_key_from_ui.encode('utf-8'),
+                    pem_key_from_ui.encode("utf-8"),
                     password=None,  # No password for unencrypted keys
-                    backend=default_backend()
+                    backend=default_backend(),
                 )
-                
+
                 # Convert to DER format (bytes) - Snowflake Python needs DER, not PEM!
                 private_key_der = private_key.private_bytes(
                     encoding=serialization.Encoding.DER,
                     format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption()
+                    encryption_algorithm=serialization.NoEncryption(),
                 )
-                
+
                 # Clean up account format
-                account = (parsed_credentials['host']
-                        .replace('.snowflakecomputing.com', '')
-                        .replace('https://', '')
-                        .replace('http://', ''))
-                
+                account = (
+                    parsed_credentials["host"]
+                    .replace(".snowflakecomputing.com", "")
+                    .replace("https://", "")
+                    .replace("http://", "")
+                )
+
                 # Create connection
                 connection = snowflake.connector.connect(
                     account=account,
-                    user=parsed_credentials['service_account_username'],
+                    user=parsed_credentials["service_account_username"],
                     private_key=private_key_der,  # Note: Python uses DER bytes, not PEM string!
-                    database=parsed_credentials['database'],
+                    database=parsed_credentials["database"],
                 )
             else:
                 raise ValueError("Unsupported authentication type")
-            
+
             cursor = connection.cursor()
             cursor.execute(query)
             result = cursor.fetchall()
-            
+
             # Convert results to Polars DataFrame
             if result:
                 # Get column names from cursor description
@@ -753,16 +809,18 @@ class Livedocs:
             else:
                 # Handle empty result set
                 df = pl.DataFrame()
-                
+
             return df, cursor.description
-        
+
         except Exception as e:
             raise RuntimeError(f"Error querying Snowflake: {e}")
         finally:
-            if 'connection' in locals():
+            if "connection" in locals():
                 connection.close()
 
-    def _query_clickhouse(self, query: str, datasource: ElementDataSource) -> tuple[pl.DataFrame, tuple]:
+    def _query_clickhouse(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, tuple]:
         """
         Queries a Clickhouse database.
 
@@ -787,14 +845,14 @@ class Livedocs:
             parsed_credentials = json.loads(credentials["connection_details"])
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
-        
+
         try:
             client = clickhouse_connect.get_client(
                 host=parsed_credentials["host"],
                 port=parsed_credentials["port"],
                 user=parsed_credentials["user_name"],
                 password=parsed_credentials["password"],
-                secure=True
+                secure=True,
             )
             result = client.query(query)
             if result.result_set:
@@ -802,12 +860,11 @@ class Livedocs:
                 df = pl.DataFrame(result.result_set, schema=columns)
             else:
                 df = pl.DataFrame()
-                 
+
             return df, tuple(zip(result.column_names, result.column_types))
-        
+
         except Exception as e:
             raise RuntimeError(f"Error querying Clickhouse: {e}")
-
 
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
@@ -1171,7 +1228,7 @@ class Livedocs:
         try:
             # Needs to be parsed twice
             parsed_credentials = json.loads(credentials["connection_details"])
-            
+
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
 
@@ -1184,38 +1241,40 @@ class Livedocs:
                     account=parsed_credentials["host"],
                     database=parsed_credentials["database"],
                     session_parameters={
-                        'QUERY_TAG': 'LivedocsQuery',
-                    }
+                        "QUERY_TAG": "LivedocsQuery",
+                    },
                 )
             elif parsed_credentials.get("auth_type") == "service_account_key":
-                pem_key_from_ui = parsed_credentials['service_account_key'].strip()
-            
+                pem_key_from_ui = parsed_credentials["service_account_key"].strip()
+
                 # Load the private key
                 private_key = serialization.load_pem_private_key(
-                    pem_key_from_ui.encode('utf-8'),
+                    pem_key_from_ui.encode("utf-8"),
                     password=None,  # No password for unencrypted keys
-                    backend=default_backend()
+                    backend=default_backend(),
                 )
-                
+
                 # Convert to DER format (bytes) - Snowflake Python needs DER, not PEM!
                 private_key_der = private_key.private_bytes(
                     encoding=serialization.Encoding.DER,
                     format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption()
+                    encryption_algorithm=serialization.NoEncryption(),
                 )
-                
+
                 # Clean up account format
-                account = (parsed_credentials['host']
-                        .replace('.snowflakecomputing.com', '')
-                        .replace('https://', '')
-                        .replace('http://', ''))
-                
+                account = (
+                    parsed_credentials["host"]
+                    .replace(".snowflakecomputing.com", "")
+                    .replace("https://", "")
+                    .replace("http://", "")
+                )
+
                 # Create connection
                 connection = snowflake.connector.connect(
                     account=account,
-                    user=parsed_credentials['service_account_username'],
+                    user=parsed_credentials["service_account_username"],
                     private_key=private_key_der,  # Note: Python uses DER bytes, not PEM string!
-                    database=parsed_credentials['database'],
+                    database=parsed_credentials["database"],
                 )
             else:
                 raise ValueError("Unsupported authentication type")
@@ -1272,20 +1331,22 @@ class Livedocs:
         try:
             # Needs to be parsed twice
             parsed_credentials = json.loads(credentials["connection_details"])
-            
+
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
 
         try:
-            qualified_table_name = f"{save_config['schema_name']}.{save_config['table_name']}"
+            qualified_table_name = (
+                f"{save_config['schema_name']}.{save_config['table_name']}"
+            )
             client = clickhouse_connect.get_client(
                 host=parsed_credentials["host"],
                 port=parsed_credentials["port"],
                 user=parsed_credentials["user_name"],
                 password=parsed_credentials["password"],
-                secure=True
+                secure=True,
             )
-          
+
             result = write_df_to_clickhouse(
                 df,
                 client,
