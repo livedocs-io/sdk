@@ -18,7 +18,7 @@ from livedocs.types import (
     StyleSettings,
 )
 
-_LIVEDOCS_COLORS = [
+_LIVEDOCS_COLORS_old = [
     "#0094ff",
     "#079250",
     "#dc6903",
@@ -34,6 +34,17 @@ _LIVEDOCS_COLORS = [
     "#dd2690",
     "#4ca30e",
     "#7839ee",
+]
+
+_LIVEDOCS_COLORS=[
+'#713E5A',
+'#D57A66',
+'#6564A6',
+'#CBD20F',
+'#F1BB4F',
+'#22577A',
+'#63A375',
+'#E46B62'
 ]
 
 _LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
