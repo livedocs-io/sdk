@@ -18,23 +18,6 @@ from livedocs.types import (
     StyleSettings,
 )
 
-_LIVEDOCS_COLORS_old = [
-    "#0094ff",
-    "#079250",
-    "#dc6903",
-    "#d92d21",
-    "#6938ef",
-    "#e04f15",
-    "#ca8505",
-    "#ba24d5",
-    "#434ce7",
-    "#109384",
-    "#e31a54",
-    "#068ab2",
-    "#dd2690",
-    "#4ca30e",
-    "#7839ee",
-]
 
 _LIVEDOCS_COLORS=[
 '#713E5A',
