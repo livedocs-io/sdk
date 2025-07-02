@@ -48,6 +48,12 @@ def get_altair_datasource_query(datasource: ElementDataSource):
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
             else:
                 return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
+         ###
+        case "file":
+            # print(datasource)
+            return f"SELECT * FROM read_csv_auto('{datasource['file_info']['file_name']}')"    
+        ### 
+        
         case _:
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"
@@ -751,7 +757,7 @@ def main_chart(
             )
 
         # Create selectors
-        brush = alt.selection_interval(encodings=["x"])
+        brush = alt.selection_interval(encodings=["x"],name="brush")
         select = alt.selection_point(name="select", on="click")
         highlight = alt.selection_point(name="highlight", on="pointerover", empty=False)
 
@@ -1178,7 +1184,7 @@ def main_chart(
                     base_layer = alt.layer(lines)
 
         elif mark_type == "point":
-            brush = alt.selection_interval()
+            brush = alt.selection_interval(name="brush")
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -1557,7 +1563,7 @@ def swapped_main_chart(
     )
 
     # Create selectors
-    brush = alt.selection_interval(encodings=["y"])
+    brush = alt.selection_interval(encodings=["y"], name="brush")
     select = alt.selection_point(name="select", on="click")
     highlight = alt.selection_point(name="highlight", on="pointerover", empty=False)
 
