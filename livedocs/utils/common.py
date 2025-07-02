@@ -18,22 +18,16 @@ from livedocs.types import (
     StyleSettings,
 )
 
-_LIVEDOCS_COLORS = [
-    "#0094ff",
-    "#079250",
-    "#dc6903",
-    "#d92d21",
-    "#6938ef",
-    "#e04f15",
-    "#ca8505",
-    "#ba24d5",
-    "#434ce7",
-    "#109384",
-    "#e31a54",
-    "#068ab2",
-    "#dd2690",
-    "#4ca30e",
-    "#7839ee",
+
+_LIVEDOCS_COLORS=[
+'#713E5A',
+'#D57A66',
+'#6564A6',
+'#CBD20F',
+'#F1BB4F',
+'#22577A',
+'#63A375',
+'#E46B62'
 ]
 
 _LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
