@@ -22,6 +22,7 @@ from livedocs.utils.common import (
     _get_color_group_key,
     _get_user_defined_color,
     _get_user_defined_opacity,
+    _get_darkmode_color,
     create_line,
     get_axis_format,
     iso_to_alt_datetime,
@@ -555,6 +556,19 @@ def main_chart(
     - Scatter charts
     """
     usermeta = settings
+
+    # For dark mode
+    color_mode = style_settings.get("mode", "light")
+    bg_col = 'white'
+    grid_col = 'lightgray'
+    axis_col = 'black'
+    tick_col = 'black'
+
+    if color_mode=="dark":
+        bg_col = _get_darkmode_color('background')
+        grid_col = _get_darkmode_color('grid lines')
+        axis_col = _get_darkmode_color('axis labels')
+        tick_col = _get_darkmode_color('tick labels')
 
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
