@@ -557,19 +557,6 @@ def main_chart(
     """
     usermeta = settings
 
-    # For dark mode
-    color_mode = style_settings.get("mode", "light")
-    bg_col = 'white'
-    grid_col = 'lightgray'
-    axis_col = 'black'
-    tick_col = 'black'
-
-    if color_mode=="dark":
-        bg_col = _get_darkmode_color('background')
-        grid_col = _get_darkmode_color('grid lines')
-        axis_col = _get_darkmode_color('axis labels')
-        tick_col = _get_darkmode_color('tick labels')
-
     legend_show = style_settings.get("legend", {}).get("show", True)
     legend_position = style_settings.get("legend", {}).get("position", "right")
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
@@ -1763,6 +1750,19 @@ def create_x_encoding(
 ):
     axis_settings = style.get("xAxis", {})
 
+    # For dark mode
+    color_mode = style.get("mode", "light")
+    bg_col = 'white'
+    grid_col = 'lightgray'
+    axis_col = 'black'
+    tick_col = 'black'
+
+    if color_mode=="dark":
+        bg_col = _get_darkmode_color('background')
+        grid_col = _get_darkmode_color('grid lines')
+        axis_col = _get_darkmode_color('axis labels')
+        tick_col = _get_darkmode_color('tick labels')
+
     if type == "temporal" and temporal_format and temporal_format != "none":
         return alt.X(
             f"{x_aggregate}({field}):T" if x_aggregate != "none" else f"{field}:T",
@@ -1781,6 +1781,9 @@ def create_x_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
+                labelColor=axis_col,        # Dark mode
+                gridColor=grid_col,         # Dark mode
+                tickColor=tick_col          # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=iso_to_alt_datetime(axis_settings["max"])
@@ -1811,6 +1814,9 @@ def create_x_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
+                labelColor=axis_col,        # Dark mode
+                gridColor=grid_col,         # Dark mode
+                tickColor=tick_col          # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=int(axis_settings["max"])
@@ -1828,6 +1834,18 @@ def create_y_encoding(
     field: str, type: str, aggregate: str, temporal_format: str, style: StyleSettings
 ):
     axis_settings = style.get("yAxis", {})
+
+    color_mode = style.get("mode", "light")
+    bg_col = 'white'
+    grid_col = 'lightgray'
+    axis_col = 'black'
+    tick_col = 'black'
+
+    if color_mode=="dark":
+        bg_col = _get_darkmode_color('background')
+        grid_col = _get_darkmode_color('grid lines')
+        axis_col = _get_darkmode_color('axis labels')
+        tick_col = _get_darkmode_color('tick labels')
 
     if type == "temporal" and temporal_format and temporal_format != "none":
         return alt.Y(
@@ -1847,6 +1865,9 @@ def create_y_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
+                labelColor=axis_col,        # Dark mode
+                gridColor=grid_col,         # Dark mode
+                tickColor=tick_col          # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=iso_to_alt_datetime(axis_settings["max"])
@@ -1877,6 +1898,9 @@ def create_y_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
+                labelColor=axis_col,        # Dark mode
+                gridColor=grid_col,         # Dark mode
+                tickColor=tick_col          # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=int(axis_settings["max"])
