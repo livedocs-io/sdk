@@ -30,6 +30,13 @@ _LIVEDOCS_COLORS=[
 '#E46B62'
 ]
 
+_DARKMODE_COLORS={
+    'background': '#0C0A09',
+    'grid lines': '#292524',
+    'axis labels': '#93715A',
+    'tick labels': '#D3C3B6'
+}
+
 _LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
 
 
@@ -79,6 +86,9 @@ def _capture_exceptions(func):
 
 def _get_color(index: int) -> str:
     return _LIVEDOCS_COLORS[index % len(_LIVEDOCS_COLORS)]
+
+def _get_darkmode_color(feature: str) -> str:
+    return _DARKMODE_COLORS.get(feature, '')
 
 
 def _get_color_group_key(value):
