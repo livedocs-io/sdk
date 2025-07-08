@@ -148,6 +148,19 @@ def pie(
             "aggregate": size_by_aggregate,
         }
 
+        # For dark mode
+    color_mode = style.get("mode", "light")
+    bg_col = 'white'
+    grid_col = 'lightgray'
+    axis_col = 'black'
+    tick_col = 'black'
+
+    if color_mode=="dark":
+        bg_col = _get_darkmode_color('background')
+        grid_col = _get_darkmode_color('grid lines')
+        axis_col = _get_darkmode_color('axis labels')
+        tick_col = _get_darkmode_color('tick labels')
+
     # Use x-axis style for label angle
     x_axis_settings = style.get("xAxis", {})
     labelAngle = x_axis_settings.get("labelAngle", 0)
@@ -297,7 +310,7 @@ def pie(
             "styleSettings": style,
             "subplots": subplots,
         },
-    )
+    ).configure(background=bg_col)
 
     # Convert the chart to Vega JSON spec
     vega_spec = final_chart.to_json(format="vega")
@@ -378,6 +391,19 @@ def histogram(
             calculate="datum.__count / datum.__totalCount", as_="__PercentOfTotal"
         )
 
+    # For dark mode
+    color_mode = style.get("mode", "light")
+    bg_col = 'white'
+    grid_col = 'lightgray'
+    axis_col = 'black'
+    tick_col = 'black'
+
+    if color_mode=="dark":
+        bg_col = _get_darkmode_color('background')
+        grid_col = _get_darkmode_color('grid lines')
+        axis_col = _get_darkmode_color('axis labels')
+        tick_col = _get_darkmode_color('tick labels')
+
     base = (
         base.transform_calculate(
             calculate="'[' + toString(datum['__bin_field_name']) + ', ' + toString(datum['__bin_field_name_end']) + ')'",
@@ -406,6 +432,9 @@ def histogram(
                     if x_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
                     labelOverlap=True,
+                    labelColor=axis_col,        # Dark mode
+                    gridColor=grid_col,         # Dark mode
+                    tickColor=tick_col          # Dark mode
                 ),
                 scale=alt.Scale(
                     domainMax=int(x_axis_settings["max"])
@@ -442,6 +471,9 @@ def histogram(
                     if y_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
                     labelOverlap=True,
+                    labelColor=axis_col,        # Dark mode
+                    gridColor=grid_col,         # Dark mode
+                    tickColor=tick_col          # Dark mode
                 ),
                 scale=alt.Scale(
                     domainMax=int(y_axis_settings["max"])
@@ -483,7 +515,7 @@ def histogram(
             "styleSettings": style,
             "subplots": subplots,
         },
-    )
+    ).configure(background=bg_col)
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
@@ -561,6 +593,7 @@ def main_chart(
     legend_position = style_settings.get("legend", {}).get("position", "right")
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
     legend_font_size = style_settings.get("fontSize", 10)
+    legend_font_color = '#93715A' # dark mode
 
     tooltip_show = style_settings.get("tooltip", True)
 
@@ -703,6 +736,7 @@ def main_chart(
             if legend_show:
                 legend = alt.Legend(
                     labelFontSize=legend_font_size,
+                    labelColor=legend_font_color,
                     titleFontSize=legend_font_size,
                     title=legend_title
                     if legend_show and legend_title
@@ -809,6 +843,13 @@ def main_chart(
         labels_fontsize = label_settings.get("fontSize", 10)
         labels_position_input = label_settings.get("position", "outside-top")
         labels_mode = label_settings.get("mode", "per_color")  #  'per_color' or 'total'
+
+        # For dark mode
+        color_mode = style_settings.get("mode", "light")
+        bg_col = 'white'
+
+        if color_mode=="dark":
+            bg_col = _get_darkmode_color('background')
 
         # Labels position mapping
         label_position_map = {
@@ -1390,7 +1431,7 @@ def main_chart(
                 "colorGroups": color_groups,
                 "subplots": subplots,
             },
-        )
+        ).configure(background=bg_col)
 
     # Facet if required
     if facet:
