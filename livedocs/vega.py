@@ -266,18 +266,7 @@ def pie(
             field=color_by_field,
             type=map_datatype_to_scale_type(settings["color_by"]["type"]),
             scale=alt.Scale(
-                range=[
-                    "#4C78A8",
-                    "#F58518",
-                    "#E45756",
-                    "#72B7B2",
-                    "#54A24B",
-                    "#EECA3B",
-                    "#B279A2",
-                    "#FF9DA6",
-                    "#9D755D",
-                    "#BAB0AC",
-                ]
+                range=[_get_color(i) for i in range(8)] 
             ),
         ),
         tooltip=tooltip,
@@ -488,7 +477,7 @@ def histogram(
             y2=alt.datum(0),
             tooltip=tooltip,
             opacity=alt.value(1),
-            color=alt.value("#4C78A8"),
+            color=alt.value(_get_color(0)),
         )
     )
 
