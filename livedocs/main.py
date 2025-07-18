@@ -6,6 +6,7 @@ from typing import List, Optional
 import snowflake.connector
 import clickhouse_connect
 import pandas as pd
+from livedocs.utils.chart_helpers import apply_chart_filters
 from livedocs.utils.clickhouse import process_clickhouse_schema, write_df_to_clickhouse
 from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
 import polars as pl
@@ -380,7 +381,12 @@ class Livedocs:
     @_capture_exceptions
     @sentry_sdk.trace
     def _get_vega_spec(
-        self, settings_str: str, datasource_str: str, dataframe=None, use_cache=True
+        self,
+        settings_str: str,
+        datasource_str: str,
+        dataframe=None,
+        use_cache=True,
+        chart_metadata=None,
     ) -> dict:
         """
         Gets a Vega specification for a given datasource and settings.
@@ -400,6 +406,7 @@ class Livedocs:
             # Run actual span
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             query = get_altair_datasource_query(datasource)
+
             if (
                 datasource["source_type"] == "database_table"
                 and DatabaseType(datasource["database_info"]["database_type"])
@@ -434,6 +441,10 @@ class Livedocs:
                 use_cache,
             )
             query_span.finish()
+
+            filter_span = sentry_sdk.start_span(name="run apply_chart_filters")
+            df = apply_chart_filters(df, schema, settings, chart_metadata)
+            filter_span.finish()
 
             # Find how many data points we have
             total_data_points = len(df) * len(df.columns)

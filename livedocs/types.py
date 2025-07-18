@@ -398,6 +398,7 @@ class StyleSettings(TypedDict, total=False):
     markSettings: Optional[Dict[str, MarkSettings]]
     xAxis: Optional[AxisStyleSettings]
     yAxis: Optional[AxisStyleSettings]
+    mode: Optional[Literal["light", "dark"]]
 
 
 class ColorBy(TypedDict):
