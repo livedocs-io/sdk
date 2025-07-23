@@ -49,12 +49,14 @@ def get_altair_datasource_query(datasource: ElementDataSource):
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
             else:
                 return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
-         ###
+        ###
         case "file":
             # print(datasource)
-            return f"SELECT * FROM read_csv_auto('{datasource['file_info']['file_name']}')"    
-        ### 
-        
+            return (
+                f"SELECT * FROM read_csv_auto('{datasource['file_info']['file_name']}')"
+            )
+        ###
+
         case _:
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"
@@ -150,16 +152,16 @@ def pie(
 
         # For dark mode
     color_mode = style.get("mode", "light")
-    bg_col = 'white'
-    grid_col = 'lightgray'
-    axis_col = 'black'
-    tick_col = 'black'
+    bg_col = "white"
+    grid_col = "lightgray"
+    axis_col = "black"
+    tick_col = "black"
 
-    if color_mode=="dark":
-        bg_col = _get_darkmode_color('background')
-        grid_col = _get_darkmode_color('grid lines')
-        axis_col = _get_darkmode_color('axis labels')
-        tick_col = _get_darkmode_color('tick labels')
+    if color_mode == "dark":
+        bg_col = _get_darkmode_color("background")
+        grid_col = _get_darkmode_color("grid lines")
+        axis_col = _get_darkmode_color("axis labels")
+        tick_col = _get_darkmode_color("tick labels")
 
     # Use x-axis style for label angle
     x_axis_settings = style.get("xAxis", {})
@@ -265,9 +267,7 @@ def pie(
             legend=legend,
             field=color_by_field,
             type=map_datatype_to_scale_type(settings["color_by"]["type"]),
-            scale=alt.Scale(
-                range=[_get_color(i) for i in range(8)] 
-            ),
+            scale=alt.Scale(range=[_get_color(i) for i in range(8)]),
         ),
         tooltip=tooltip,
         opacity=alt.value(1),
@@ -290,16 +290,20 @@ def pie(
         description="outer data layer",
     )
 
-    final_chart = alt.layer(outer_layer).properties(
-        width="container",
-        height="container",
-        usermeta={
-            "chartType": "pie",
-            "pieSettings": usermeta,
-            "styleSettings": style,
-            "subplots": subplots,
-        },
-    ).configure(background=bg_col)
+    final_chart = (
+        alt.layer(outer_layer)
+        .properties(
+            width="container",
+            height="container",
+            usermeta={
+                "chartType": "pie",
+                "pieSettings": usermeta,
+                "styleSettings": style,
+                "subplots": subplots,
+            },
+        )
+        .configure(background=bg_col)
+    )
 
     # Convert the chart to Vega JSON spec
     vega_spec = final_chart.to_json(format="vega")
@@ -382,16 +386,16 @@ def histogram(
 
     # For dark mode
     color_mode = style.get("mode", "light")
-    bg_col = 'white'
-    grid_col = 'lightgray'
-    axis_col = 'black'
-    tick_col = 'black'
+    bg_col = "white"
+    grid_col = "lightgray"
+    axis_col = "black"
+    tick_col = "black"
 
-    if color_mode=="dark":
-        bg_col = _get_darkmode_color('background')
-        grid_col = _get_darkmode_color('grid lines')
-        axis_col = _get_darkmode_color('axis labels')
-        tick_col = _get_darkmode_color('tick labels')
+    if color_mode == "dark":
+        bg_col = _get_darkmode_color("background")
+        grid_col = _get_darkmode_color("grid lines")
+        axis_col = _get_darkmode_color("axis labels")
+        tick_col = _get_darkmode_color("tick labels")
 
     base = (
         base.transform_calculate(
@@ -421,9 +425,9 @@ def histogram(
                     if x_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
                     labelOverlap=True,
-                    labelColor=axis_col,        # Dark mode
-                    gridColor=grid_col,         # Dark mode
-                    tickColor=tick_col          # Dark mode
+                    labelColor=axis_col,  # Dark mode
+                    gridColor=grid_col,  # Dark mode
+                    tickColor=tick_col,  # Dark mode
                 ),
                 scale=alt.Scale(
                     domainMax=int(x_axis_settings["max"])
@@ -460,9 +464,9 @@ def histogram(
                     if y_axis_settings.get("grid", "none") == "dashed"
                     else alt.Undefined,
                     labelOverlap=True,
-                    labelColor=axis_col,        # Dark mode
-                    gridColor=grid_col,         # Dark mode
-                    tickColor=tick_col          # Dark mode
+                    labelColor=axis_col,  # Dark mode
+                    gridColor=grid_col,  # Dark mode
+                    tickColor=tick_col,  # Dark mode
                 ),
                 scale=alt.Scale(
                     domainMax=int(y_axis_settings["max"])
@@ -495,16 +499,20 @@ def histogram(
     y_lines = create_line(df, "y", style)
 
     # Create the layer and add to inner layers
-    chart = alt.layer(chart, *x_lines, *y_lines).properties(
-        width="container",
-        height="container",
-        usermeta={
-            "chartType": "histogram",
-            "histogramSettings": usermeta,
-            "styleSettings": style,
-            "subplots": subplots,
-        },
-    ).configure(background=bg_col)
+    chart = (
+        alt.layer(chart, *x_lines, *y_lines)
+        .properties(
+            width="container",
+            height="container",
+            usermeta={
+                "chartType": "histogram",
+                "histogramSettings": usermeta,
+                "styleSettings": style,
+                "subplots": subplots,
+            },
+        )
+        .configure(background=bg_col)
+    )
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
@@ -582,7 +590,7 @@ def main_chart(
     legend_position = style_settings.get("legend", {}).get("position", "right")
     legend_title = style_settings.get("legend", {}).get("title", alt.Undefined)
     legend_font_size = style_settings.get("fontSize", 10)
-    legend_font_color = '#93715A' # dark mode
+    legend_font_color = "#93715A"  # dark mode
 
     tooltip_show = style_settings.get("tooltip", True)
 
@@ -781,7 +789,7 @@ def main_chart(
             )
 
         # Create selectors
-        brush = alt.selection_interval(encodings=["x"],name="brush")
+        brush = alt.selection_interval(encodings=["x"], name="brush")
         select = alt.selection_point(name="select", on="click")
         highlight = alt.selection_point(name="highlight", on="pointerover", empty=False)
 
@@ -835,10 +843,10 @@ def main_chart(
 
         # For dark mode
         color_mode = style_settings.get("mode", "light")
-        bg_col = 'white'
+        bg_col = "white"
 
-        if color_mode=="dark":
-            bg_col = _get_darkmode_color('background')
+        if color_mode == "dark":
+            bg_col = _get_darkmode_color("background")
 
         # Labels position mapping
         label_position_map = {
@@ -1215,7 +1223,7 @@ def main_chart(
                     base_layer = alt.layer(lines)
 
         elif mark_type == "point":
-            brush = alt.selection_interval(name="brush")
+            brush = alt.selection_interval(encodings=["x"], name="brush")
             if color_by_aggregate:
                 base_layer = (
                     alt.Chart(df)
@@ -1782,16 +1790,16 @@ def create_x_encoding(
 
     # For dark mode
     color_mode = style.get("mode", "light")
-    bg_col = 'white'
-    grid_col = 'lightgray'
-    axis_col = 'black'
-    tick_col = 'black'
+    bg_col = "white"
+    grid_col = "lightgray"
+    axis_col = "black"
+    tick_col = "black"
 
-    if color_mode=="dark":
-        bg_col = _get_darkmode_color('background')
-        grid_col = _get_darkmode_color('grid lines')
-        axis_col = _get_darkmode_color('axis labels')
-        tick_col = _get_darkmode_color('tick labels')
+    if color_mode == "dark":
+        bg_col = _get_darkmode_color("background")
+        grid_col = _get_darkmode_color("grid lines")
+        axis_col = _get_darkmode_color("axis labels")
+        tick_col = _get_darkmode_color("tick labels")
 
     if type == "temporal" and temporal_format and temporal_format != "none":
         return alt.X(
@@ -1811,9 +1819,9 @@ def create_x_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
-                labelColor=axis_col,        # Dark mode
-                gridColor=grid_col,         # Dark mode
-                tickColor=tick_col          # Dark mode
+                labelColor=axis_col,  # Dark mode
+                gridColor=grid_col,  # Dark mode
+                tickColor=tick_col,  # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=iso_to_alt_datetime(axis_settings["max"])
@@ -1844,9 +1852,9 @@ def create_x_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
-                labelColor=axis_col,        # Dark mode
-                gridColor=grid_col,         # Dark mode
-                tickColor=tick_col          # Dark mode
+                labelColor=axis_col,  # Dark mode
+                gridColor=grid_col,  # Dark mode
+                tickColor=tick_col,  # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=int(axis_settings["max"])
@@ -1866,16 +1874,16 @@ def create_y_encoding(
     axis_settings = style.get("yAxis", {})
 
     color_mode = style.get("mode", "light")
-    bg_col = 'white'
-    grid_col = 'lightgray'
-    axis_col = 'black'
-    tick_col = 'black'
+    bg_col = "white"
+    grid_col = "lightgray"
+    axis_col = "black"
+    tick_col = "black"
 
-    if color_mode=="dark":
-        bg_col = _get_darkmode_color('background')
-        grid_col = _get_darkmode_color('grid lines')
-        axis_col = _get_darkmode_color('axis labels')
-        tick_col = _get_darkmode_color('tick labels')
+    if color_mode == "dark":
+        bg_col = _get_darkmode_color("background")
+        grid_col = _get_darkmode_color("grid lines")
+        axis_col = _get_darkmode_color("axis labels")
+        tick_col = _get_darkmode_color("tick labels")
 
     if type == "temporal" and temporal_format and temporal_format != "none":
         return alt.Y(
@@ -1895,9 +1903,9 @@ def create_y_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
-                labelColor=axis_col,        # Dark mode
-                gridColor=grid_col,         # Dark mode
-                tickColor=tick_col          # Dark mode
+                labelColor=axis_col,  # Dark mode
+                gridColor=grid_col,  # Dark mode
+                tickColor=tick_col,  # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=iso_to_alt_datetime(axis_settings["max"])
@@ -1928,9 +1936,9 @@ def create_y_encoding(
                 if axis_settings.get("grid", "none") == "dashed"
                 else alt.Undefined,
                 labelOverlap=True,
-                labelColor=axis_col,        # Dark mode
-                gridColor=grid_col,         # Dark mode
-                tickColor=tick_col          # Dark mode
+                labelColor=axis_col,  # Dark mode
+                gridColor=grid_col,  # Dark mode
+                tickColor=tick_col,  # Dark mode
             ),
             scale=alt.Scale(
                 domainMax=int(axis_settings["max"])
