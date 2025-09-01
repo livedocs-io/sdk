@@ -63,9 +63,7 @@ def get_altair_datasource_query(datasource: ElementDataSource):
             )
 
 
-def create_vega_spec(
-    df: pl.DataFrame, spec: Spec, schema: dict, cache_info: CacheInfo = None
-):
+def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
     """
     Returns a Vega spec for a given Livedocs chart configuration and a dataframe
     retrieved using get_altair_datasource_query method. In production, the vegafusion
@@ -102,7 +100,6 @@ def create_vega_spec(
                 "spec": vega_spec,
                 "schema": schema,
                 "status": status,
-                "cache_info": cache_info,
             }
         )
         return validated_spec.model_dump_json()
@@ -119,7 +116,6 @@ def create_vega_spec(
                 "spec": json.dumps(empty_chart, separators=(",", ":")),
                 "schema": schema,
                 "status": "EMPTY",
-                "cache_info": cache_info,
             }
         )
         return validated_spec.model_dump_json()

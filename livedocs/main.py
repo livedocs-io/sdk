@@ -22,6 +22,7 @@ from cryptography.hazmat.backends import default_backend
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
+    ChartResult,
     DatabaseType,
     DBSaveConfig,
     ElementDataSource,
@@ -465,21 +466,23 @@ class Livedocs:
                         "spec": json.dumps(empty_chart, separators=(",", ":")),
                         "schema": schema,
                         "status": "OVERLOADED",
-                        "cache_info": cache_info,
                     }
                 )
                 vega_spec_json_str = validated_spec.model_dump_json()
             else:
-                vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
+                vega_spec_json_str = create_vega_spec(df, settings, schema)
             vega_span.finish()
 
             # Post-process the results
             post_span = sentry_sdk.start_span(name="post-processing")
             compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
             encoded = base64.b64encode(compressed).decode("ascii")
+
+            result = ChartResult(data=encoded, cache_info=cache_info)
+            payload = LivedocsResult(result)
             post_span.finish()
 
-            return encoded
+            return payload
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -645,9 +648,14 @@ class Livedocs:
             )
             compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
             encoded = base64.b64encode(compressed).decode("ascii")
+
+            # Create empty cache info for schema requests
+            empty_cache_info = CacheInfo(id="", status=CacheStatus.MISS)
+            result = ChartResult(data=encoded, cache_info=empty_cache_info)
+            payload = LivedocsResult(result)
             post_span.finish()
 
-            return encoded
+            return payload
 
     def _query_with_schema(
         self,
