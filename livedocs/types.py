@@ -110,6 +110,37 @@ class QueryResult(LivedocsResultInterface):
         }
 
 
+class ChartResult(LivedocsResultInterface):
+    """
+    A class to represent the result of a chart generation.
+
+    Attributes:
+    ----------
+    data : str
+        The encoded chart spec data.
+    metadata : dict
+        Metadata associated with the chart result including cache info.
+    """
+
+    def __init__(self, data: str, cache_info: Optional[CacheInfo] = None):
+        self.data = data
+        self.cache_info = cache_info
+
+    def serialize(self) -> str:
+        return self.data
+
+    def get_metadata(self):
+        return {
+            "text/plain": {
+                "compression": "gzip",
+                "encoding": "base64",
+            },
+            "chart": {
+                "cache_info": self.cache_info,
+            },
+        }
+
+
 class LivedocsResult:
     def __init__(self, result: LivedocsResultInterface):
         self.result = result
@@ -207,7 +238,6 @@ class VegaSpec(BaseModel):
     spec: str
     schema: dict
     status: str
-    cache_info: Optional[CacheInfo] = None
 
     @model_validator(mode="before")
     def validate_usermeta(cls, values):
