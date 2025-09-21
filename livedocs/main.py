@@ -449,26 +449,40 @@ class Livedocs:
 
             # Find how many data points we have
             total_data_points = len(df) * len(df.columns)
+            debug(f"Total data points: {total_data_points}")
 
-            # Vegafusion
             vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
-            if total_data_points > 50000:
-                style_settings = settings.get("styleSettings", {})
-                empty_chart = {
-                    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                    "usermeta": {
-                        "styleSettings": style_settings,
-                        "chartType": "main",
-                    },
-                }
-                validated_spec = VegaSpec(
-                    **{
-                        "spec": json.dumps(empty_chart, separators=(",", ":")),
-                        "schema": schema,
-                        "status": "OVERLOADED",
+            MAX_POINTS = 50000
+            if total_data_points > MAX_POINTS:
+                # Limit the dataframe so that rendered points stay within the cap
+                num_cols = max(1, len(df.columns))
+                max_rows = max(1, MAX_POINTS // num_cols)
+                try:
+                    df_limited = df.slice(0, max_rows)
+                    # Build a normal spec from the limited data
+                    limited_spec_json = create_vega_spec(df_limited, settings, schema)
+                    # Change status to signal warning while still rendering the chart
+                    limited_spec = json.loads(limited_spec_json)
+                    limited_spec["status"] = "OVERLOADED"
+                    validated_spec = VegaSpec(**limited_spec)
+                    vega_spec_json_str = validated_spec.model_dump_json()
+                except Exception:
+                    style_settings = settings.get("styleSettings", {})
+                    empty_chart = {
+                        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+                        "usermeta": {
+                            "styleSettings": style_settings,
+                            "chartType": "main",
+                        },
                     }
-                )
-                vega_spec_json_str = validated_spec.model_dump_json()
+                    validated_spec = VegaSpec(
+                        **{
+                            "spec": json.dumps(empty_chart, separators=(",", ":")),
+                            "schema": schema,
+                            "status": "OVERLOADED",
+                        }
+                    )
+                    vega_spec_json_str = validated_spec.model_dump_json()
             else:
                 vega_spec_json_str = create_vega_spec(df, settings, schema)
             vega_span.finish()
