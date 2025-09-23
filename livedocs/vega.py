@@ -1758,6 +1758,12 @@ def swapped_main_chart(
 
     chart = chart.resolve_scale(color="independent", y="shared")
 
+    # Set background based on style settings (light/dark)
+    color_mode = style_settings.get("mode", "light")
+    bg_col = "white"
+    if color_mode == "dark":
+        bg_col = _get_darkmode_color("background")
+
     chart = chart.properties(
         width="container",
         height="container",
@@ -1767,7 +1773,7 @@ def swapped_main_chart(
             "styleSettings": style_settings,
             "subplots": subplots,
         },
-    )
+    ).configure(background=bg_col)
 
     vega_spec = chart.to_json(format="vega")
     return (vega_spec, "SUCCESS")
