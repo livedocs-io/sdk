@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from functools import lru_cache, wraps
 from typing import Dict, Optional
@@ -78,6 +79,11 @@ def _capture_exceptions(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            sanitized_args = tuple(
+                sanitize_sensitive_data(str(arg)) for arg in e.args
+            )
+            if sanitized_args:
+                e.args = sanitized_args
             sentry_sdk.capture_exception(e)
             raise  # Re-raise the exception after capturing it
 
@@ -197,6 +203,7 @@ def _fetch_file_manifest(
                 api_error_message = error_response_json.get("message", e.response.text)
             except ValueError:
                 api_error_message = e.response.text
+            api_error_message = sanitize_sensitive_data(api_error_message)
 
             if status_code == 404:
                 identifier = file_id or file_name
@@ -224,16 +231,55 @@ def _fetch_file_manifest(
                 ) from e
             else:
                 raise RuntimeError(
-                    f"Failed to get file manifest for '{file_name}'. Status: {status_code}. Error: {api_error_message}"
-                ) from e
+                    sanitize_sensitive_data(
+                        f"Failed to get file manifest for '{file_name}'. Status: {status_code}. Error: {api_error_message}"
+                    )
+                )
         else:
             raise RuntimeError(
-                f"Failed to get file manifest for '{file_name}': {e}"
-            ) from e
+                sanitize_sensitive_data(
+                    f"Failed to get file manifest for '{file_name}': {e}"
+                )
+            )
     except Exception as e:
         raise RuntimeError(
-            f"An unexpected error occurred while fetching manifest for '{file_name}': {e}"
-        ) from e
+            sanitize_sensitive_data(
+                f"An unexpected error occurred while fetching manifest for '{file_name}': {e}"
+            )
+        )
+
+
+_URI_CREDENTIALS_RE = re.compile(
+    r"([a-zA-Z][a-zA-Z0-9+\-.]*://)([^:@/]+):([^@]+)@", re.IGNORECASE
+)
+_KEY_VALUE_RE = re.compile(
+    r"(?P<prefix>(?:^|[^a-zA-Z0-9_])(?:password|secret|token|api[_-]?key|private_key)\s*(?:=|:)\s*)(?P<value>[^\s,;]+)",
+    re.IGNORECASE,
+)
+_JSON_SECRET_RE = re.compile(
+    r'("(?P<key>[^"]*(?:password|secret|token|private_key|apiKey)[^"]*)"\s*:\s*")(?P<value>[^"]*)(")',
+    re.IGNORECASE,
+)
+_PEM_RE = re.compile(
+    r"-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----", re.IGNORECASE
+)
+
+
+def sanitize_sensitive_data(message: Optional[str]) -> str:
+    """
+    Best-effort scrubbing of secrets from error/log messages.
+    Redacts credentials in URIs, obvious password/secret key patterns,
+    and PEM/private key blobs.
+    """
+    if not message:
+        return ""
+
+    sanitized = _URI_CREDENTIALS_RE.sub(r"\1***:***@", message)
+    sanitized = _KEY_VALUE_RE.sub(r"\g<prefix>***", sanitized)
+    sanitized = _JSON_SECRET_RE.sub(r'\1***"', sanitized)
+    sanitized = _PEM_RE.sub("-----REDACTED PRIVATE KEY-----", sanitized)
+
+    return sanitized
 
 
 @_capture_exceptions

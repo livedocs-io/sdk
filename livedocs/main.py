@@ -49,6 +49,7 @@ from livedocs.utils.common import (
     _setup_dirs,
     _setup_sentry,
     get_run_context,
+    sanitize_sensitive_data,
 )
 from livedocs.utils.postgres import (
     _create_postgres_connection_url,
@@ -846,7 +847,9 @@ class Livedocs:
             return df, cursor.description
 
         except Exception as e:
-            raise RuntimeError(f"Error querying Snowflake: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error querying Snowflake: {e}")
+            )
         finally:
             if "connection" in locals():
                 connection.close()
@@ -897,7 +900,9 @@ class Livedocs:
             return df, tuple(zip(result.column_names, result.column_types))
 
         except Exception as e:
-            raise RuntimeError(f"Error querying Clickhouse: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error querying Clickhouse: {e}")
+            )
 
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
@@ -942,12 +947,18 @@ class Livedocs:
         try:
             self._duckdb.attach_postgres(connection_string, alias)
         except Exception as e:
-            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(
+                    f"Error attaching PostgreSQL database: {e}"
+                )
+            )
 
         try:
             result = self._duckdb.conn.sql(query).pl()
         except Exception as e:
-            raise RuntimeError(f"Error executing query: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error executing query: {e}")
+            )
 
         return result
 
@@ -1003,7 +1014,9 @@ class Livedocs:
             df_pointer = query_job.to_dataframe(create_bqstorage_client=True)
             df_polars = pl.from_pandas(df_pointer)
         except Exception as e:
-            raise RuntimeError(f"Error querying BigQuery: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error querying BigQuery: {e}")
+            )
 
         return df_polars, schema
 
@@ -1030,7 +1043,11 @@ class Livedocs:
         except KeyError as e:
             raise ValueError(f"Missing required information in datasource: {e}")
         except Exception as e:
-            raise RuntimeError(f"An error occurred while querying the file: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(
+                    f"An error occurred while querying the file: {e}"
+                )
+            )
 
     def _query_file_with_schema(
         self, query: str, datasource: dict
@@ -1070,7 +1087,11 @@ class Livedocs:
         try:
             result = self._duckdb.conn.sql(query).pl()
         except Exception as e:
-            raise RuntimeError(f"An error occurred while querying the DataFrame: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(
+                    f"An error occurred while querying the DataFrame: {e}"
+                )
+            )
 
         return result
 
@@ -1135,7 +1156,11 @@ class Livedocs:
         try:
             self._duckdb.attach_postgres(connection_string, alias)
         except Exception as e:
-            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(
+                    f"Error attaching PostgreSQL database: {e}"
+                )
+            )
 
         try:
             qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
@@ -1148,7 +1173,11 @@ class Livedocs:
             )
 
             if result["error"]:
-                raise RuntimeError(f"Error writing to PostgreSQL: {result['error']}")
+                raise RuntimeError(
+                    sanitize_sensitive_data(
+                        f"Error writing to PostgreSQL: {result['error']}"
+                    )
+                )
             else:
                 # Compress and encode response
                 output = QueryResult(
@@ -1164,7 +1193,9 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(f"DBSave Error: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"DBSave Error: {e}")
+            )
 
     def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1216,7 +1247,11 @@ class Livedocs:
             )
 
             if result["error"]:
-                raise RuntimeError(f"Error writing to BigQuery: {result['error']}")
+                raise RuntimeError(
+                    sanitize_sensitive_data(
+                        f"Error writing to BigQuery: {result['error']}"
+                    )
+                )
             else:
                 # Compress and encode response
                 output = QueryResult(
@@ -1232,7 +1267,9 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(f"DBSave Error: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"DBSave Error: {e}")
+            )
 
     def _write_to_snowflake(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1321,7 +1358,11 @@ class Livedocs:
             )
 
             if result["error"]:
-                raise RuntimeError(f"Error writing to Snowflake: {result['error']}")
+                raise RuntimeError(
+                    sanitize_sensitive_data(
+                        f"Error writing to Snowflake: {result['error']}"
+                    )
+                )
             else:
                 # Compress and encode response
                 output = QueryResult(
@@ -1337,7 +1378,9 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(f"DBSave Error: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"DBSave Error: {e}")
+            )
 
     def _write_to_clickhouse(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1389,7 +1432,11 @@ class Livedocs:
             )
 
             if result["error"]:
-                raise RuntimeError(f"Error writing to Clickhouse: {result['error']}")
+                raise RuntimeError(
+                    sanitize_sensitive_data(
+                        f"Error writing to Clickhouse: {result['error']}"
+                    )
+                )
             else:
                 # Compress and encode response
                 output = QueryResult(
@@ -1405,7 +1452,9 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(f"DBSave Error: {e}")
+            raise RuntimeError(
+                sanitize_sensitive_data(f"DBSave Error: {e}")
+            )
 
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         """
