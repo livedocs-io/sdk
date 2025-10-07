@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime
 from functools import lru_cache, wraps
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import altair as alt
 import dateutil.parser
@@ -12,30 +12,28 @@ import sentry_sdk
 from tqdm.auto import tqdm
 
 from livedocs.types import (
-    Credentials,
     FileManifest,
     FileManifestAction,
     GCSBucketType,
     StyleSettings,
 )
 
-
-_LIVEDOCS_COLORS=[
-'#713E5A',
-'#D57A66',
-'#6564A6',
-'#CBD20F',
-'#F1BB4F',
-'#22577A',
-'#63A375',
-'#E46B62'
+_LIVEDOCS_COLORS = [
+    "#713E5A",
+    "#D57A66",
+    "#6564A6",
+    "#CBD20F",
+    "#F1BB4F",
+    "#22577A",
+    "#63A375",
+    "#E46B62",
 ]
 
-_DARKMODE_COLORS={
-    'background': '#0C0A09',
-    'grid lines': '#292524',
-    'axis labels': '#93715A',
-    'tick labels': '#D3C3B6'
+_DARKMODE_COLORS = {
+    "background": "#0C0A09",
+    "grid lines": "#292524",
+    "axis labels": "#93715A",
+    "tick labels": "#D3C3B6",
 }
 
 _LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
@@ -79,9 +77,7 @@ def _capture_exceptions(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            sanitized_args = tuple(
-                sanitize_sensitive_data(str(arg)) for arg in e.args
-            )
+            sanitized_args = tuple(sanitize_sensitive_data(str(arg)) for arg in e.args)
             if sanitized_args:
                 e.args = sanitized_args
             sentry_sdk.capture_exception(e)
@@ -93,8 +89,9 @@ def _capture_exceptions(func):
 def _get_color(index: int) -> str:
     return _LIVEDOCS_COLORS[index % len(_LIVEDOCS_COLORS)]
 
+
 def _get_darkmode_color(feature: str) -> str:
-    return _DARKMODE_COLORS.get(feature, '')
+    return _DARKMODE_COLORS.get(feature, "")
 
 
 def _get_color_group_key(value):
@@ -132,7 +129,7 @@ def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
 
 
 @_capture_exceptions
-def _fetch_credentials(report_id: str, token: str) -> Credentials:
+def _fetch_credentials(report_id: str, token: str) -> Dict[str, Any]:
     CORE_URL = os.getenv("CORE_BASE_URL")
     if not CORE_URL:
         raise ValueError("CORE_BASE_URL environment variable not set")
@@ -260,9 +257,7 @@ _JSON_SECRET_RE = re.compile(
     r'("(?P<key>[^"]*(?:password|secret|token|private_key|apiKey)[^"]*)"\s*:\s*")(?P<value>[^"]*)(")',
     re.IGNORECASE,
 )
-_PEM_RE = re.compile(
-    r"-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----", re.IGNORECASE
-)
+_PEM_RE = re.compile(r"-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----", re.IGNORECASE)
 
 
 def sanitize_sensitive_data(message: Optional[str]) -> str:

@@ -2,27 +2,27 @@ import base64
 import gzip
 import json
 import os
-from typing import List, Optional
-import snowflake.connector
+from typing import Dict, List, Optional
+
 import clickhouse_connect
 import pandas as pd
-from livedocs.utils.chart_helpers import apply_chart_filters
-from livedocs.utils.clickhouse import process_clickhouse_schema, write_df_to_clickhouse
-from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
 import polars as pl
-from livedocs.utils.debug import debug
 import sentry_sdk
+import snowflake.connector
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from jinja2 import Template
+
 from livedocs.cache import QueryCache
+from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.duckdb import DuckDBSingleton
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
     ChartResult,
+    DatabaseConnection,
     DatabaseType,
     DBSaveConfig,
     ElementDataSource,
@@ -36,13 +36,15 @@ from livedocs.types import (
     Schema,
     Spec,
     VegaSpec,
+    WorkspaceSecret,
 )
 from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
+from livedocs.utils.chart_helpers import apply_chart_filters
+from livedocs.utils.clickhouse import process_clickhouse_schema, write_df_to_clickhouse
 from livedocs.utils.common import (
     _LIVEDOCS_PROTECTED_VARS,
     _capture_exceptions,
     _download_file,
-    _fetch_credentials,
     _fetch_file_manifest,
     _get_dataframe_schema,
     _persist_built_in_vars,
@@ -51,6 +53,7 @@ from livedocs.utils.common import (
     get_run_context,
     sanitize_sensitive_data,
 )
+from livedocs.utils.debug import debug
 from livedocs.utils.postgres import (
     _create_postgres_connection_url,
     _process_postgres_schema,
@@ -58,6 +61,7 @@ from livedocs.utils.postgres import (
 )
 from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
+from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import create_vega_spec, get_altair_datasource_query
 
@@ -81,8 +85,9 @@ class Livedocs:
         self._duckdb = DuckDBSingleton(
             file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
         )
-        self._secrets = {}
-        self._built_in_vars = {}
+        self._credential_store: Optional[CredentialStore] = None
+        self._secrets: Dict[str, WorkspaceSecret] = {}
+        self._built_in_vars: Dict[str, str] = {}
         self.is_initialized = False
 
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
@@ -99,17 +104,40 @@ class Livedocs:
             self._report_id = report_id
             self._token = token
             span = sentry_sdk.start_span(name="fetch credentials")
-            self._credentials = _fetch_credentials(report_id, token)
+            self._credential_store = CredentialStore(report_id, token)
+            bundle = self._credential_store.load()
             span.finish()
             self.is_initialized = True
 
-            secrets = self._credentials.get("workspace_secrets", {})
-            secrets_dict = {
-                key: secret_info["value"] for key, secret_info in secrets.items()
+            self._secrets = {
+                key: secret for key, secret in bundle.workspace_secrets.items()
             }
-            self._secrets = secrets_dict
-            self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
+            self._built_in_vars = {**bundle.built_in_vars}
             self._query_cache = QueryCache(report_id=report_id, token=token)
+
+    def _require_store(self) -> CredentialStore:
+        if not self._credential_store:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
+        return self._credential_store
+
+    def _get_database_connection(self, connector_id: str) -> DatabaseConnection:
+        store = self._require_store()
+        db = store.get_database(connector_id)
+        if db is None:
+            db = store.refresh().databases.get(connector_id)
+        if db is None:
+            raise ValueError(f"Database connector '{connector_id}' not found")
+        return db
+
+    def _get_database_details(
+        self, connector_id: str
+    ) -> tuple[DatabaseConnection, dict]:
+        model = self._get_database_connection(connector_id)
+        try:
+            parsed = json.loads(model.connection_details.get_secret_value())
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+        return model, parsed
 
     @_capture_exceptions
     def set_var(self, key: str, value: str):
@@ -179,7 +207,22 @@ class Livedocs:
         if not hasattr(self, "_secrets"):
             return default_value
 
-        return self._secrets.get(key, default_value)
+        if key in self._secrets:
+            return self._secrets[key].value.get_secret_value()
+
+        try:
+            store = self._require_store()
+        except RuntimeError:
+            return default_value
+
+        secret_model = store.get_secret(key)
+        if secret_model is None:
+            secret_model = store.refresh().workspace_secrets.get(key)
+        if secret_model:
+            self._secrets[key] = secret_model
+            return secret_model.value.get_secret_value()
+
+        return default_value
 
     @_capture_exceptions
     @sentry_sdk.trace
@@ -418,23 +461,11 @@ class Livedocs:
                     db_connector_id = datasource["database_info"][
                         "database_connector_id"
                     ]
-                    credentials = self._credentials.get("databases", {}).get(
-                        db_connector_id
-                    )
-
-                    if not credentials:
-                        self._credentials = _fetch_credentials(
-                            self._report_id, self._token
-                        )
-                        credentials = self._credentials["databases"][db_connector_id]
+                    _, parsed_credentials = self._get_database_details(db_connector_id)
                 except KeyError as e:
                     raise ValueError(f"Missing required information: {e}")
 
-                try:
-                    parsed_credentials = json.loads(credentials["connection_details"])
-                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"Error parsing connection details: {e}")
+                query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
 
             df, schema, cache_info = self._query_with_schema(
                 query,
@@ -537,23 +568,11 @@ class Livedocs:
                     db_connector_id = datasource["database_info"][
                         "database_connector_id"
                     ]
-                    credentials = self._credentials.get("databases", {}).get(
-                        db_connector_id
-                    )
-
-                    if not credentials:
-                        self._credentials = _fetch_credentials(
-                            self._report_id, self._token
-                        )
-                        credentials = self._credentials["databases"][db_connector_id]
+                    _, parsed_credentials = self._get_database_details(db_connector_id)
                 except KeyError as e:
                     raise ValueError(f"Missing required information: {e}")
 
-                try:
-                    parsed_credentials = json.loads(credentials["connection_details"])
-                    query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"Error parsing connection details: {e}")
+                query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
 
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
             df, schema, cache_info = self._query_with_schema(
@@ -771,18 +790,11 @@ class Livedocs:
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                credentials = self._credentials["databases"][db_connector_id]
+            credentials_model, parsed_credentials = self._get_database_details(
+                db_connector_id
+            )
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
-
-        try:
-            parsed_credentials = json.loads(credentials["connection_details"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
         try:
             if parsed_credentials.get("auth_type") == "username_password":
@@ -869,18 +881,11 @@ class Livedocs:
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                credentials = self._credentials["databases"][db_connector_id]
+            credentials_model, parsed_credentials = self._get_database_details(
+                db_connector_id
+            )
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
-
-        try:
-            parsed_credentials = json.loads(credentials["connection_details"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
         try:
             client = clickhouse_connect.get_client(
@@ -920,18 +925,11 @@ class Livedocs:
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                credentials = self._credentials["databases"][db_connector_id]
+            credentials_model, parsed_credentials = self._get_database_details(
+                db_connector_id
+            )
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
-
-        try:
-            parsed_credentials = json.loads(credentials["connection_details"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
         try:
             if parsed_credentials.get("connect_using") == "url":
@@ -942,23 +940,19 @@ class Livedocs:
             raise ValueError(f"Missing required database connection detail: {e}")
 
         # This is unique to the workspace, so no chance of conflict
-        alias = credentials["db_name"]
+        alias = credentials_model.db_name
 
         try:
             self._duckdb.attach_postgres(connection_string, alias)
         except Exception as e:
             raise RuntimeError(
-                sanitize_sensitive_data(
-                    f"Error attaching PostgreSQL database: {e}"
-                )
+                sanitize_sensitive_data(f"Error attaching PostgreSQL database: {e}")
             )
 
         try:
             result = self._duckdb.conn.sql(query).pl()
         except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error executing query: {e}")
-            )
+            raise RuntimeError(sanitize_sensitive_data(f"Error executing query: {e}"))
 
         return result
 
@@ -978,19 +972,11 @@ class Livedocs:
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            # This won't throw an error if the credentials are not found
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
-                credentials = self._credentials["databases"][db_connector_id]
+            _, outer_parsed = self._get_database_details(db_connector_id)
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
         try:
-            # Needs to be parsed twice
-            outer_parsed = json.loads(credentials["connection_details"])
             service_account_parsed = json.loads(outer_parsed["service_account_key"])
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
@@ -1014,9 +1000,7 @@ class Livedocs:
             df_pointer = query_job.to_dataframe(create_bqstorage_client=True)
             df_polars = pl.from_pandas(df_pointer)
         except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error querying BigQuery: {e}")
-            )
+            raise RuntimeError(sanitize_sensitive_data(f"Error querying BigQuery: {e}"))
 
         return df_polars, schema
 
@@ -1127,20 +1111,11 @@ class Livedocs:
         """
         try:
             db_connector_id = save_config["database_id"]
-            # This won't throw an error if the credentials are not found
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
-                credentials = self._credentials["databases"][db_connector_id]
+            credentials_model, parsed_credentials = self._get_database_details(
+                db_connector_id
+            )
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
-
-        try:
-            parsed_credentials = json.loads(credentials["connection_details"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
         try:
             if parsed_credentials.get("connect_using") == "url":
@@ -1151,15 +1126,13 @@ class Livedocs:
             raise ValueError(f"Missing required database connection detail: {e}")
 
         # This is unique to the workspace, so no chance of conflict
-        alias = credentials["db_name"]
+        alias = credentials_model.db_name
 
         try:
             self._duckdb.attach_postgres(connection_string, alias)
         except Exception as e:
             raise RuntimeError(
-                sanitize_sensitive_data(
-                    f"Error attaching PostgreSQL database: {e}"
-                )
+                sanitize_sensitive_data(f"Error attaching PostgreSQL database: {e}")
             )
 
         try:
@@ -1193,9 +1166,7 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"DBSave Error: {e}")
-            )
+            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
 
     def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1211,19 +1182,14 @@ class Livedocs:
         """
         try:
             db_connector_id = save_config["database_id"]
-            # This won't throw an error if the credentials are not found
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
-                credentials = self._credentials["databases"][db_connector_id]
+            credentials_model, outer_parsed = self._get_database_details(
+                db_connector_id
+            )
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
         try:
             # Needs to be parsed twice
-            outer_parsed = json.loads(credentials["connection_details"])
             service_account_parsed = json.loads(outer_parsed["service_account_key"])
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
@@ -1267,9 +1233,7 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"DBSave Error: {e}")
-            )
+            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
 
     def _write_to_snowflake(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1285,22 +1249,11 @@ class Livedocs:
         """
         try:
             db_connector_id = save_config["database_id"]
-            # This won't throw an error if the credentials are not found
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
-                credentials = self._credentials["databases"][db_connector_id]
+            credentials_model, parsed_credentials = self._get_database_details(
+                db_connector_id
+            )
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
-
-        try:
-            # Needs to be parsed twice
-            parsed_credentials = json.loads(credentials["connection_details"])
-
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
         try:
             qualified_table_name = f"{parsed_credentials['database']}.{save_config['schema_name']}.{save_config['table_name']}"
@@ -1378,9 +1331,7 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"DBSave Error: {e}")
-            )
+            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
 
     def _write_to_clickhouse(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1396,20 +1347,9 @@ class Livedocs:
         """
         try:
             db_connector_id = save_config["database_id"]
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                credentials = self._credentials["databases"][db_connector_id]
+            _, parsed_credentials = self._get_database_details(db_connector_id)
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
-
-        try:
-            # Needs to be parsed twice
-            parsed_credentials = json.loads(credentials["connection_details"])
-
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
         try:
             qualified_table_name = (
@@ -1452,9 +1392,7 @@ class Livedocs:
                 payload = LivedocsResult(output)
                 return payload
         except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"DBSave Error: {e}")
-            )
+            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
 
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         """

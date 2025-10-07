@@ -6,8 +6,6 @@ from typing import Dict
 import polars as pl
 from typing_extensions import Literal
 
-from livedocs.utils.debug import debug
-
 
 def _create_postgres_connection_url(details: Dict[str, str]) -> str:
     user = details.get("user_name", "")
