@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict
 import msgpack
 from IPython.core.display import DisplayObject
 from polars import DataFrame
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, SecretStr, model_validator
 
 from livedocs.utils.serialize import serializer
 
@@ -311,22 +311,23 @@ class ElementDataSource(TypedDict):
     source_type: ElementDatasourceType
 
 
-class DecryptedSecret(TypedDict):
+class WorkspaceSecret(BaseModel):
     id: str
     key: str
-    value: str
+    value: SecretStr
 
 
-class DatabaseConnector(TypedDict):
-    database_connector_id: str
-    database_name: str
-    connection_details: dict[str, str]
+class DatabaseConnection(BaseModel):
+    db_connector_id: str
+    db_name: str
+    connection_details: SecretStr
 
 
-class Credentials(TypedDict):
+class Credentials(BaseModel):
     workspace_id: str
-    workspace_secrets: List[DecryptedSecret]
-    databases: List[DatabaseConnector]
+    workspace_secrets: Dict[str, WorkspaceSecret]
+    databases: Dict[str, DatabaseConnection]
+    built_in_vars: Dict[str, Optional[Any]]
 
 
 class Schema(TypedDict):

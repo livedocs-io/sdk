@@ -1,7 +1,8 @@
 import os
+import re
 from datetime import datetime
 from functools import lru_cache, wraps
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import altair as alt
 import dateutil.parser
@@ -11,30 +12,28 @@ import sentry_sdk
 from tqdm.auto import tqdm
 
 from livedocs.types import (
-    Credentials,
     FileManifest,
     FileManifestAction,
     GCSBucketType,
     StyleSettings,
 )
 
-
-_LIVEDOCS_COLORS=[
-'#713E5A',
-'#D57A66',
-'#6564A6',
-'#CBD20F',
-'#F1BB4F',
-'#22577A',
-'#63A375',
-'#E46B62'
+_LIVEDOCS_COLORS = [
+    "#713E5A",
+    "#D57A66",
+    "#6564A6",
+    "#CBD20F",
+    "#F1BB4F",
+    "#22577A",
+    "#63A375",
+    "#E46B62",
 ]
 
-_DARKMODE_COLORS={
-    'background': '#0C0A09',
-    'grid lines': '#292524',
-    'axis labels': '#93715A',
-    'tick labels': '#D3C3B6'
+_DARKMODE_COLORS = {
+    "background": "#0C0A09",
+    "grid lines": "#292524",
+    "axis labels": "#93715A",
+    "tick labels": "#D3C3B6",
 }
 
 _LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
@@ -78,6 +77,9 @@ def _capture_exceptions(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            sanitized_args = tuple(sanitize_sensitive_data(str(arg)) for arg in e.args)
+            if sanitized_args:
+                e.args = sanitized_args
             sentry_sdk.capture_exception(e)
             raise  # Re-raise the exception after capturing it
 
@@ -87,8 +89,9 @@ def _capture_exceptions(func):
 def _get_color(index: int) -> str:
     return _LIVEDOCS_COLORS[index % len(_LIVEDOCS_COLORS)]
 
+
 def _get_darkmode_color(feature: str) -> str:
-    return _DARKMODE_COLORS.get(feature, '')
+    return _DARKMODE_COLORS.get(feature, "")
 
 
 def _get_color_group_key(value):
@@ -126,7 +129,7 @@ def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
 
 
 @_capture_exceptions
-def _fetch_credentials(report_id: str, token: str) -> Credentials:
+def _fetch_credentials(report_id: str, token: str) -> Dict[str, Any]:
     CORE_URL = os.getenv("CORE_BASE_URL")
     if not CORE_URL:
         raise ValueError("CORE_BASE_URL environment variable not set")
@@ -197,6 +200,7 @@ def _fetch_file_manifest(
                 api_error_message = error_response_json.get("message", e.response.text)
             except ValueError:
                 api_error_message = e.response.text
+            api_error_message = sanitize_sensitive_data(api_error_message)
 
             if status_code == 404:
                 identifier = file_id or file_name
@@ -224,16 +228,53 @@ def _fetch_file_manifest(
                 ) from e
             else:
                 raise RuntimeError(
-                    f"Failed to get file manifest for '{file_name}'. Status: {status_code}. Error: {api_error_message}"
-                ) from e
+                    sanitize_sensitive_data(
+                        f"Failed to get file manifest for '{file_name}'. Status: {status_code}. Error: {api_error_message}"
+                    )
+                )
         else:
             raise RuntimeError(
-                f"Failed to get file manifest for '{file_name}': {e}"
-            ) from e
+                sanitize_sensitive_data(
+                    f"Failed to get file manifest for '{file_name}': {e}"
+                )
+            )
     except Exception as e:
         raise RuntimeError(
-            f"An unexpected error occurred while fetching manifest for '{file_name}': {e}"
-        ) from e
+            sanitize_sensitive_data(
+                f"An unexpected error occurred while fetching manifest for '{file_name}': {e}"
+            )
+        )
+
+
+_URI_CREDENTIALS_RE = re.compile(
+    r"([a-zA-Z][a-zA-Z0-9+\-.]*://)([^:@/]+):([^@]+)@", re.IGNORECASE
+)
+_KEY_VALUE_RE = re.compile(
+    r"(?P<prefix>(?:^|[^a-zA-Z0-9_])(?:password|secret|token|api[_-]?key|private_key)\s*(?:=|:)\s*)(?P<value>[^\s,;]+)",
+    re.IGNORECASE,
+)
+_JSON_SECRET_RE = re.compile(
+    r'("(?P<key>[^"]*(?:password|secret|token|private_key|apiKey)[^"]*)"\s*:\s*")(?P<value>[^"]*)(")',
+    re.IGNORECASE,
+)
+_PEM_RE = re.compile(r"-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----", re.IGNORECASE)
+
+
+def sanitize_sensitive_data(message: Optional[str]) -> str:
+    """
+    Best-effort scrubbing of secrets from error/log messages.
+    Redacts credentials in URIs, obvious password/secret key patterns,
+    and PEM/private key blobs.
+    """
+    if not message:
+        return ""
+
+    sanitized = _URI_CREDENTIALS_RE.sub(r"\1***:***@", message)
+    sanitized = _KEY_VALUE_RE.sub(r"\g<prefix>***", sanitized)
+    sanitized = _JSON_SECRET_RE.sub(r'\1***"', sanitized)
+    sanitized = _PEM_RE.sub("-----REDACTED PRIVATE KEY-----", sanitized)
+
+    return sanitized
 
 
 @_capture_exceptions
