@@ -2,7 +2,9 @@ import base64
 import gzip
 import json
 import os
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Callable, Dict, List, Optional
 
 import clickhouse_connect
 import pandas as pd
@@ -69,6 +71,15 @@ from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import create_vega_spec, get_altair_datasource_query
 
 
+@dataclass(frozen=True)
+class LivedocsConfig:
+    """Runtime configuration hooks that make Livedocs more testable and tunable."""
+
+    credential_store_factory: Callable[[str, str], CredentialStore] = CredentialStore
+    query_cache_factory: Callable[[str, str], QueryCache] = QueryCache
+    template_cache_size: int = 256
+
+
 class Livedocs:
     """
     Main class for the Livedocs library. Handles initialization, querying, and data processing.
@@ -78,12 +89,14 @@ class Livedocs:
     livedocs.initialize(report_id, session_token)
     """
 
-    def __init__(self):
+    def __init__(self, config: Optional[LivedocsConfig] = None):
         """
         Creates the Livedocs instance, setting up necessary components and configurations.
         """
         _setup_sentry()
         _setup_dirs()
+
+        self._config = config or LivedocsConfig()
 
         self._duckdb = DuckDBSingleton(
             file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
@@ -91,6 +104,10 @@ class Livedocs:
         self._credential_store: Optional[CredentialStore] = None
         self._secrets: Dict[str, WorkspaceSecret] = {}
         self._built_in_vars: Dict[str, str] = {}
+        self._template_factory = lru_cache(maxsize=self._config.template_cache_size)(
+            self._compile_template
+        )
+        self._query_cache: Optional[QueryCache] = None
         self.is_initialized = False
 
     def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
@@ -107,7 +124,9 @@ class Livedocs:
             self._report_id = report_id
             self._token = token
             span = sentry_sdk.start_span(name="fetch credentials")
-            self._credential_store = CredentialStore(report_id, token)
+            self._credential_store = self._config.credential_store_factory(
+                report_id, token
+            )
             bundle = self._credential_store.load()
             span.finish()
             self.is_initialized = True
@@ -116,7 +135,7 @@ class Livedocs:
                 key: secret for key, secret in bundle.workspace_secrets.items()
             }
             self._built_in_vars = {**bundle.built_in_vars}
-            self._query_cache = QueryCache(report_id=report_id, token=token)
+            self._query_cache = self._config.query_cache_factory(report_id, token)
 
     def _require_store(self) -> CredentialStore:
         if not self._credential_store:
@@ -362,6 +381,11 @@ class Livedocs:
         }
         return MsgPackDisplay(enriched_prompt)
 
+    def _compile_template(self, text: str) -> Template:
+        """Compile a Jinja template string. Wrapped so we can memoize easily."""
+
+        return Template(text)
+
     def add_jinja_vars(self, text: str, context: dict) -> str:
         """
         Adds Jinja variables to the given text.
@@ -373,7 +397,7 @@ class Livedocs:
         Returns:
             str: The processed text with Jinja variables.
         """
-        template = Template(text)
+        template = self._template_factory(text)
         return template.render(context)
 
     def process_dependencies(
@@ -723,6 +747,9 @@ class Livedocs:
             tuple[pl.DataFrame, dict, CacheMetadata]: A tuple containing the resulting DataFrame,
             schema as a dict, and info about the cache.
         """
+
+        if self._query_cache is None:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
 
         cache_info = CacheInfo(
             id=self._query_cache.generate_cache_id(query, datasource),
