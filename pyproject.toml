@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75", "wheel"]
+requires = ["setuptools>=80", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -25,7 +25,8 @@ dependencies = [
     "tqdm>=4.67.1",
     "snowflake-connector-python>=3.15.0,<4",
     "cryptography>=44.0.1",
-    "clickhouse-connect>=0.8.17"
+    "clickhouse-connect>=0.8.17",
+    "psycopg[binary]>=3.2.12",
 ]
 requires-python = ">=3.12"
 classifiers = [
@@ -35,6 +36,10 @@ classifiers = [
 
 [project.urls]
 homepage = "https://github.com/livedocs-io/vm-lib"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["livedocs"]
 
 [project.optional-dependencies]
 test = ["flask", "flask-cors"]

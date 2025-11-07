@@ -22,11 +22,6 @@ class DuckDBSingleton:
             # cls._instance.conn.execute("SET enable_profiling='json';")
             # cls._instance.conn.execute("SET profiling_output='./profile.json';")
             # cls._instance.conn.execute("SET profiling_mode='detailed';")
-
-            # Install and load extensions
-            cls._instance.conn.install_extension("postgres")
-            cls._instance.conn.load_extension("postgres")
-
             # cls._instance.conn.install_extension("spatial")
             # cls._instance.conn.load_extension("spatial")
 
@@ -36,15 +31,3 @@ class DuckDBSingleton:
             # Initialize tracking for attached databases
             cls._instance.postgres_connections = {}
         return cls._instance
-
-    def attach_postgres(self, connection_string: str, alias: str):
-        if alias not in self.postgres_connections:
-            self.conn.execute(
-                f"ATTACH '{connection_string}' AS {alias} (TYPE postgres)"
-            )
-            self.postgres_connections[alias] = connection_string
-
-    def detach_postgres(self, alias: str):
-        if alias in self.postgres_connections:
-            self.conn.execute(f"DETACH {alias}")
-            del self.postgres_connections[alias]

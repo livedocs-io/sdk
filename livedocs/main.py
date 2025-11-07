@@ -7,6 +7,8 @@ from typing import Dict, List, Optional
 import clickhouse_connect
 import pandas as pd
 import polars as pl
+import psycopg
+from psycopg.rows import dict_row
 import sentry_sdk
 import snowflake.connector
 from cryptography.hazmat.backends import default_backend
@@ -57,6 +59,7 @@ from livedocs.utils.debug import debug
 from livedocs.utils.postgres import (
     _create_postgres_connection_url,
     _process_postgres_schema,
+    _schema_from_description,
     _write_df_to_postgres,
 )
 from livedocs.utils.serialize import serializer
@@ -763,10 +766,9 @@ class Livedocs:
         """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
-                _schema = self._query_postgres(f"DESCRIBE {query}", datasource)
-                schema = _process_postgres_schema(_schema)
-                result = self._query_postgres(query, datasource)
-                return [result, schema]
+                result_df, schema_df = self._query_postgres(query, datasource)
+                schema = _process_postgres_schema(schema_df)
+                return [result_df, schema]
             case DatabaseType.Bigquery:
                 result, raw_schema = self._query_bigquery(query, datasource)
                 schema = process_bigquery_schema(raw_schema)
@@ -790,9 +792,7 @@ class Livedocs:
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials_model, parsed_credentials = self._get_database_details(
-                db_connector_id
-            )
+            _, parsed_credentials = self._get_database_details(db_connector_id)
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
@@ -881,9 +881,7 @@ class Livedocs:
         """
         try:
             db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials_model, parsed_credentials = self._get_database_details(
-                db_connector_id
-            )
+            _, parsed_credentials = self._get_database_details(db_connector_id)
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
@@ -909,52 +907,77 @@ class Livedocs:
                 sanitize_sensitive_data(f"Error querying Clickhouse: {e}")
             )
 
+    def _build_postgres_connection_string(self, parsed_credentials: dict) -> str:
+        try:
+            if parsed_credentials.get("connect_using") == "url":
+                return parsed_credentials["connection_url"]
+            return _create_postgres_connection_url(parsed_credentials)
+        except KeyError as e:
+            raise ValueError(f"Missing required database connection detail: {e}")
+
+    def _get_postgres_connection_string(self, datasource: ElementDataSource) -> str:
+        try:
+            db_connector_id = datasource["database_info"]["database_connector_id"]
+            _, parsed_credentials = self._get_database_details(db_connector_id)
+        except KeyError as e:
+            raise ValueError(f"Missing required information: {e}")
+
+        return self._build_postgres_connection_string(parsed_credentials)
+
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
         """
-        Queries a Postgres database. Attaches the database to DuckDB and executes the
-        query under the alias same as the database name.
+        Queries a Postgres database using psycopg and returns the result along with a
+        schema DataFrame describing the output columns.
 
         Args:
             query (str): The query string.
             datasource (ElementDataSource): The datasource to execute the query on.
 
         Returns:
-            pl.DataFrame: The resulting Polars DataFrame.
+            tuple[pl.DataFrame, pl.DataFrame]: The resulting Polars DataFrame and a
+            schema DataFrame with column metadata.
         """
+        schema_rows: list[dict[str, str]] = []
+
         try:
-            db_connector_id = datasource["database_info"]["database_connector_id"]
-            credentials_model, parsed_credentials = self._get_database_details(
-                db_connector_id
+            connection_string = self._get_postgres_connection_string(datasource)
+        except ValueError as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
             )
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
 
         try:
-            if parsed_credentials.get("connect_using") == "url":
-                connection_string = parsed_credentials["connection_url"]
-            else:
-                connection_string = _create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
+            with psycopg.connect(connection_string) as conn:
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(query)
+                    rows = cursor.fetchall()
+                    description = cursor.description or ()
+                    column_names = [desc.name for desc in description]
 
-        # This is unique to the workspace, so no chance of conflict
-        alias = credentials_model.db_name
-
-        try:
-            self._duckdb.attach_postgres(connection_string, alias)
+                schema_rows = _schema_from_description(conn, description)
         except Exception as e:
             raise RuntimeError(
-                sanitize_sensitive_data(f"Error attaching PostgreSQL database: {e}")
+                sanitize_sensitive_data(f"Error executing PostgreSQL query: {e}")
             )
 
-        try:
-            result = self._duckdb.conn.sql(query).pl()
-        except Exception as e:
-            raise RuntimeError(sanitize_sensitive_data(f"Error executing query: {e}"))
+        schema_df = (
+            pl.DataFrame(schema_rows)
+            if schema_rows
+            else pl.DataFrame({"column_name": [], "data_type": []})
+        )
 
-        return result
+        if rows:
+            result_df = pl.DataFrame(rows)
+            if column_names:
+                result_df = result_df.select(column_names)
+        elif column_names:
+            result_df = pl.DataFrame({column: [] for column in column_names})
+        else:
+            result_df = pl.DataFrame()
+
+        return result_df, schema_df
 
     def _query_bigquery(
         self, query: str, datasource: ElementDataSource
@@ -1098,8 +1121,7 @@ class Livedocs:
 
     def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
-        Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
-        write operation under the alias same as the database name.
+        Writes a DataFrame to a Postgres database using psycopg.
 
         Args:
             df (pl.DataFrame): The DataFrame to write to the database.
@@ -1111,35 +1133,26 @@ class Livedocs:
         """
         try:
             db_connector_id = save_config["database_id"]
-            credentials_model, parsed_credentials = self._get_database_details(
-                db_connector_id
-            )
+            _, parsed_credentials = self._get_database_details(db_connector_id)
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
         try:
-            if parsed_credentials.get("connect_using") == "url":
-                connection_string = parsed_credentials["connection_url"]
-            else:
-                connection_string = _create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
-
-        # This is unique to the workspace, so no chance of conflict
-        alias = credentials_model.db_name
-
-        try:
-            self._duckdb.attach_postgres(connection_string, alias)
-        except Exception as e:
+            connection_string = self._build_postgres_connection_string(
+                parsed_credentials
+            )
+        except ValueError as e:
             raise RuntimeError(
-                sanitize_sensitive_data(f"Error attaching PostgreSQL database: {e}")
+                sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
             )
 
         try:
-            qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
+            qualified_table_name = (
+                f"{save_config['schema_name']}.{save_config['table_name']}"
+            )
             result = _write_df_to_postgres(
                 df,
-                self._duckdb.conn,
+                connection_string,
                 qualified_table_name,
                 save_config["table_is_new"],
                 save_config["write_mode"],
