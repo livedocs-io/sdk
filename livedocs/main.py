@@ -642,6 +642,11 @@ class Livedocs:
                         == DatabaseType.Clickhouse
                     ):
                         query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
+                    elif (
+                        DatabaseType(datasource["database_info"]["database_type"])
+                        == DatabaseType.Postgres
+                    ):
+                        query = f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 10'
                     else:
                         query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
                     _, schema = self._query_database_with_schema(query, datasource)
