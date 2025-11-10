@@ -47,10 +47,10 @@ def get_altair_datasource_query(datasource: ElementDataSource):
                 == DatabaseType.Clickhouse.value
             ):
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
-            elif (
-                datasource["database_info"]["database_type"]
-                == DatabaseType.Postgres.value
-            ):
+            elif datasource["database_info"]["database_type"] in {
+                DatabaseType.Postgres.value,
+                DatabaseType.Motherduck.value,
+            }:
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
             else:
                 return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'

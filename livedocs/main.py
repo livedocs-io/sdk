@@ -6,17 +6,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Dict, List, Optional
 
-import clickhouse_connect
 import pandas as pd
 import polars as pl
-import psycopg
-from psycopg.rows import dict_row
 import sentry_sdk
-import snowflake.connector
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
-from google.cloud import bigquery
-from google.oauth2 import service_account
 from jinja2 import Template
 
 from livedocs.cache import QueryCache
@@ -42,9 +34,9 @@ from livedocs.types import (
     VegaSpec,
     WorkspaceSecret,
 )
-from livedocs.utils.bigquery import process_bigquery_schema, write_df_to_bigquery
+from livedocs.utils.bigquery import process_bigquery_schema
 from livedocs.utils.chart_helpers import apply_chart_filters
-from livedocs.utils.clickhouse import process_clickhouse_schema, write_df_to_clickhouse
+from livedocs.utils.clickhouse import process_clickhouse_schema
 from livedocs.utils.common import (
     _LIVEDOCS_PROTECTED_VARS,
     _capture_exceptions,
@@ -58,17 +50,20 @@ from livedocs.utils.common import (
     sanitize_sensitive_data,
 )
 from livedocs.utils.debug import debug
-from livedocs.utils.postgres import (
-    _create_postgres_connection_url,
-    _process_postgres_schema,
-    _schema_from_description,
-    _write_df_to_postgres,
-)
+from livedocs.datasources import bigquery as bigquery_datasource
+from livedocs.datasources import clickhouse as clickhouse_datasource
+from livedocs.datasources import motherduck as motherduck_datasource
+from livedocs.datasources import postgres as postgres_datasource
+from livedocs.datasources import snowflake as snowflake_datasource
+from livedocs.utils.postgres import _process_postgres_schema
 from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
-from livedocs.utils.snowflake import process_snowflake_schema, write_df_to_snowflake
+from livedocs.utils.snowflake import process_snowflake_schema
 from livedocs.utils.table_helpers import apply_table_operations
 from livedocs.vega import create_vega_spec, get_altair_datasource_query
+
+
+_process_motherduck_schema = _process_postgres_schema
 
 
 @dataclass(frozen=True)
@@ -329,6 +324,13 @@ class Livedocs:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
                     result = self._write_to_postgres(dataframe, save_config)
+                    return result
+                else:
+                    pass
+            elif DatabaseType(save_config["database_type"]) == DatabaseType.Motherduck:
+                current_run_context = get_run_context()
+                if current_run_context in save_config["run_settings"]:
+                    result = self._write_to_motherduck(dataframe, save_config)
                     return result
                 else:
                     pass
@@ -666,10 +668,10 @@ class Livedocs:
                         == DatabaseType.Clickhouse
                     ):
                         query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
-                    elif (
-                        DatabaseType(datasource["database_info"]["database_type"])
-                        == DatabaseType.Postgres
-                    ):
+                    elif DatabaseType(datasource["database_info"]["database_type"]) in {
+                        DatabaseType.Postgres,
+                        DatabaseType.Motherduck,
+                    }:
                         query = f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 10'
                     else:
                         query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
@@ -801,6 +803,10 @@ class Livedocs:
                 result_df, schema_df = self._query_postgres(query, datasource)
                 schema = _process_postgres_schema(schema_df)
                 return [result_df, schema]
+            case DatabaseType.Motherduck:
+                result_df, schema_df = self._query_motherduck(query, datasource)
+                schema = _process_motherduck_schema(schema_df)
+                return [result_df, schema]
             case DatabaseType.Bigquery:
                 result, raw_schema = self._query_bigquery(query, datasource)
                 schema = process_bigquery_schema(raw_schema)
@@ -822,81 +828,7 @@ class Livedocs:
         """
         Queries a Snowflake database.
         """
-        try:
-            db_connector_id = datasource["database_info"]["database_connector_id"]
-            _, parsed_credentials = self._get_database_details(db_connector_id)
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            if parsed_credentials.get("auth_type") == "username_password":
-                connection = snowflake.connector.connect(
-                    user=parsed_credentials["username"],
-                    password=parsed_credentials["password"],
-                    account=parsed_credentials["host"],
-                    database=parsed_credentials["database"],
-                    session_parameters={
-                        "QUERY_TAG": "LivedocsQuery",
-                    },
-                )
-            elif parsed_credentials.get("auth_type") == "service_account_key":
-                pem_key_from_ui = parsed_credentials["service_account_key"].strip()
-
-                # Load the private key
-                private_key = serialization.load_pem_private_key(
-                    pem_key_from_ui.encode("utf-8"),
-                    password=None,  # No password for unencrypted keys
-                    backend=default_backend(),
-                )
-
-                # Convert to DER format (bytes) - Snowflake Python needs DER, not PEM!
-                private_key_der = private_key.private_bytes(
-                    encoding=serialization.Encoding.DER,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption(),
-                )
-
-                # Clean up account format
-                account = (
-                    parsed_credentials["host"]
-                    .replace(".snowflakecomputing.com", "")
-                    .replace("https://", "")
-                    .replace("http://", "")
-                )
-
-                # Create connection
-                connection = snowflake.connector.connect(
-                    account=account,
-                    user=parsed_credentials["service_account_username"],
-                    private_key=private_key_der,  # Note: Python uses DER bytes, not PEM string!
-                    database=parsed_credentials["database"],
-                )
-            else:
-                raise ValueError("Unsupported authentication type")
-
-            cursor = connection.cursor()
-            cursor.execute(query)
-            result = cursor.fetchall()
-
-            # Convert results to Polars DataFrame
-            if result:
-                # Get column names from cursor description
-                columns = [desc[0] for desc in cursor.description]
-                # Create DataFrame from results and column names
-                df = pl.DataFrame(result, schema=columns)
-            else:
-                # Handle empty result set
-                df = pl.DataFrame()
-
-            return df, cursor.description
-
-        except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error querying Snowflake: {e}")
-            )
-        finally:
-            if "connection" in locals():
-                connection.close()
+        return snowflake_datasource.query(query, datasource, self._get_database_details)
 
     def _query_clickhouse(
         self, query: str, datasource: ElementDataSource
@@ -911,50 +843,17 @@ class Livedocs:
         Returns:
             tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
         """
-        try:
-            db_connector_id = datasource["database_info"]["database_connector_id"]
-            _, parsed_credentials = self._get_database_details(db_connector_id)
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            client = clickhouse_connect.get_client(
-                host=parsed_credentials["host"],
-                port=parsed_credentials["port"],
-                user=parsed_credentials["user_name"],
-                password=parsed_credentials["password"],
-                secure=True,
-            )
-            result = client.query(query)
-            if result.result_set:
-                columns = result.column_names
-                df = pl.DataFrame(result.result_set, schema=columns)
-            else:
-                df = pl.DataFrame()
-
-            return df, tuple(zip(result.column_names, result.column_types))
-
-        except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error querying Clickhouse: {e}")
-            )
+        return clickhouse_datasource.query(
+            query, datasource, self._get_database_details
+        )
 
     def _build_postgres_connection_string(self, parsed_credentials: dict) -> str:
-        try:
-            if parsed_credentials.get("connect_using") == "url":
-                return parsed_credentials["connection_url"]
-            return _create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
+        return postgres_datasource.build_connection_string(parsed_credentials)
 
     def _get_postgres_connection_string(self, datasource: ElementDataSource) -> str:
-        try:
-            db_connector_id = datasource["database_info"]["database_connector_id"]
-            _, parsed_credentials = self._get_database_details(db_connector_id)
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        return self._build_postgres_connection_string(parsed_credentials)
+        return postgres_datasource.get_connection_string(
+            datasource, self._get_database_details
+        )
 
     def _query_postgres(
         self, query: str, datasource: ElementDataSource
@@ -971,45 +870,26 @@ class Livedocs:
             tuple[pl.DataFrame, pl.DataFrame]: The resulting Polars DataFrame and a
             schema DataFrame with column metadata.
         """
-        schema_rows: list[dict[str, str]] = []
+        return postgres_datasource.query(query, datasource, self._get_database_details)
 
-        try:
-            connection_string = self._get_postgres_connection_string(datasource)
-        except ValueError as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
-            )
+    def _query_motherduck(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """
+        Queries a Motherduck database using DuckDB and returns the result along with a
+        schema DataFrame describing the output columns.
 
-        try:
-            with psycopg.connect(connection_string) as conn:
-                with conn.cursor(row_factory=dict_row) as cursor:
-                    cursor.execute(query)
-                    rows = cursor.fetchall()
-                    description = cursor.description or ()
-                    column_names = [desc.name for desc in description]
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
 
-                schema_rows = _schema_from_description(conn, description)
-        except Exception as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error executing PostgreSQL query: {e}")
-            )
-
-        schema_df = (
-            pl.DataFrame(schema_rows)
-            if schema_rows
-            else pl.DataFrame({"column_name": [], "data_type": []})
+        Returns:
+            tuple[pl.DataFrame, pl.DataFrame]: The resulting Polars DataFrame and a
+            schema DataFrame with column metadata.
+        """
+        return motherduck_datasource.query(
+            query, datasource, self._get_database_details
         )
-
-        if rows:
-            result_df = pl.DataFrame(rows)
-            if column_names:
-                result_df = result_df.select(column_names)
-        elif column_names:
-            result_df = pl.DataFrame({column: [] for column in column_names})
-        else:
-            result_df = pl.DataFrame()
-
-        return result_df, schema_df
 
     def _query_bigquery(
         self, query: str, datasource: ElementDataSource
@@ -1025,39 +905,7 @@ class Livedocs:
         Returns:
             pl.DataFrame: The resulting DataFrame.
         """
-        try:
-            db_connector_id = datasource["database_info"]["database_connector_id"]
-            _, outer_parsed = self._get_database_details(db_connector_id)
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            service_account_parsed = json.loads(outer_parsed["service_account_key"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
-
-        try:
-            # Setup: Create BigQuery client with the given credentials
-            credentials = service_account.Credentials.from_service_account_info(
-                service_account_parsed
-            )
-            client = bigquery.Client(
-                credentials=credentials, project=outer_parsed["project_id"]
-            )
-
-            # Execute query
-            query_job = client.query(query)
-
-            # Get schema before fetching results
-            schema = query_job.result().schema
-
-            # Convert query results to a DataFrame pointer
-            df_pointer = query_job.to_dataframe(create_bqstorage_client=True)
-            df_polars = pl.from_pandas(df_pointer)
-        except Exception as e:
-            raise RuntimeError(sanitize_sensitive_data(f"Error querying BigQuery: {e}"))
-
-        return df_polars, schema
+        return bigquery_datasource.query(query, datasource, self._get_database_details)
 
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         """
@@ -1163,55 +1011,25 @@ class Livedocs:
             Error, Result and Metrics in a tuple
             Tuple[Result (Dict), Metrics (Dict), Error (str)]
         """
-        try:
-            db_connector_id = save_config["database_id"]
-            _, parsed_credentials = self._get_database_details(db_connector_id)
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
+        return postgres_datasource.write_to_postgres(
+            df, save_config, self._get_database_details
+        )
 
-        try:
-            connection_string = self._build_postgres_connection_string(
-                parsed_credentials
-            )
-        except ValueError as e:
-            raise RuntimeError(
-                sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
-            )
+    def _write_to_motherduck(self, df: pl.DataFrame, save_config: DBSaveConfig):
+        """
+        Writes a DataFrame to a Motherduck database using DuckDB.
 
-        try:
-            qualified_table_name = (
-                f"{save_config['schema_name']}.{save_config['table_name']}"
-            )
-            result = _write_df_to_postgres(
-                df,
-                connection_string,
-                qualified_table_name,
-                save_config["table_is_new"],
-                save_config["write_mode"],
-            )
+        Args:
+            df (pl.DataFrame): The DataFrame to write to the database.
+            save_config (DBSaveConfig): The save configuration.
 
-            if result["error"]:
-                raise RuntimeError(
-                    sanitize_sensitive_data(
-                        f"Error writing to PostgreSQL: {result['error']}"
-                    )
-                )
-            else:
-                # Compress and encode response
-                output = QueryResult(
-                    data=result["result"],
-                    metadata=QueryResultMetadata(
-                        limit=50,
-                        offset=0,
-                        total_rows=result["rows_written"],
-                        run_date=result["run_date"],
-                        cache_info=None,
-                    ),
-                )
-                payload = LivedocsResult(output)
-                return payload
-        except Exception as e:
-            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
+        Returns:
+            Error, Result and Metrics in a tuple
+            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+        """
+        return motherduck_datasource.write_to_motherduck(
+            df, save_config, self._get_database_details
+        )
 
     def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1225,60 +1043,9 @@ class Livedocs:
             Error, Result and Metrics in a tuple
             Tuple[Result (Dict), Metrics (Dict), Error (str)]
         """
-        try:
-            db_connector_id = save_config["database_id"]
-            credentials_model, outer_parsed = self._get_database_details(
-                db_connector_id
-            )
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            # Needs to be parsed twice
-            service_account_parsed = json.loads(outer_parsed["service_account_key"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
-
-        try:
-            qualified_table_name = f"{outer_parsed['project_id']}.{save_config['schema_name']}.{save_config['table_name']}"
-
-            credentials = service_account.Credentials.from_service_account_info(
-                service_account_parsed
-            )
-            client = bigquery.Client(
-                credentials=credentials, project=outer_parsed["project_id"]
-            )
-
-            result = write_df_to_bigquery(
-                df,
-                client,
-                qualified_table_name,
-                save_config["table_is_new"],
-                save_config["write_mode"],
-            )
-
-            if result["error"]:
-                raise RuntimeError(
-                    sanitize_sensitive_data(
-                        f"Error writing to BigQuery: {result['error']}"
-                    )
-                )
-            else:
-                # Compress and encode response
-                output = QueryResult(
-                    data=result["result"],
-                    metadata=QueryResultMetadata(
-                        limit=50,
-                        offset=0,
-                        total_rows=result["rows_written"],
-                        run_date=result["run_date"],
-                        cache_info=None,
-                    ),
-                )
-                payload = LivedocsResult(output)
-                return payload
-        except Exception as e:
-            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
+        return bigquery_datasource.write_to_bigquery(
+            df, save_config, self._get_database_details
+        )
 
     def _write_to_snowflake(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1292,91 +1059,9 @@ class Livedocs:
             Error, Result and Metrics in a tuple
             Tuple[Result (Dict), Metrics (Dict), Error (str)]
         """
-        try:
-            db_connector_id = save_config["database_id"]
-            credentials_model, parsed_credentials = self._get_database_details(
-                db_connector_id
-            )
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            qualified_table_name = f"{parsed_credentials['database']}.{save_config['schema_name']}.{save_config['table_name']}"
-            if parsed_credentials.get("auth_type") == "username_password":
-                connection = snowflake.connector.connect(
-                    user=parsed_credentials["username"],
-                    password=parsed_credentials["password"],
-                    account=parsed_credentials["host"],
-                    database=parsed_credentials["database"],
-                    session_parameters={
-                        "QUERY_TAG": "LivedocsQuery",
-                    },
-                )
-            elif parsed_credentials.get("auth_type") == "service_account_key":
-                pem_key_from_ui = parsed_credentials["service_account_key"].strip()
-
-                # Load the private key
-                private_key = serialization.load_pem_private_key(
-                    pem_key_from_ui.encode("utf-8"),
-                    password=None,  # No password for unencrypted keys
-                    backend=default_backend(),
-                )
-
-                # Convert to DER format (bytes) - Snowflake Python needs DER, not PEM!
-                private_key_der = private_key.private_bytes(
-                    encoding=serialization.Encoding.DER,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption(),
-                )
-
-                # Clean up account format
-                account = (
-                    parsed_credentials["host"]
-                    .replace(".snowflakecomputing.com", "")
-                    .replace("https://", "")
-                    .replace("http://", "")
-                )
-
-                # Create connection
-                connection = snowflake.connector.connect(
-                    account=account,
-                    user=parsed_credentials["service_account_username"],
-                    private_key=private_key_der,  # Note: Python uses DER bytes, not PEM string!
-                    database=parsed_credentials["database"],
-                )
-            else:
-                raise ValueError("Unsupported authentication type")
-
-            result = write_df_to_snowflake(
-                df,
-                connection,
-                qualified_table_name,
-                save_config["table_is_new"],
-                save_config["write_mode"],
-            )
-
-            if result["error"]:
-                raise RuntimeError(
-                    sanitize_sensitive_data(
-                        f"Error writing to Snowflake: {result['error']}"
-                    )
-                )
-            else:
-                # Compress and encode response
-                output = QueryResult(
-                    data=result["result"],
-                    metadata=QueryResultMetadata(
-                        limit=50,
-                        offset=0,
-                        total_rows=result["rows_written"],
-                        run_date=result["run_date"],
-                        cache_info=None,
-                    ),
-                )
-                payload = LivedocsResult(output)
-                return payload
-        except Exception as e:
-            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
+        return snowflake_datasource.write_to_snowflake(
+            df, save_config, self._get_database_details
+        )
 
     def _write_to_clickhouse(self, df: pl.DataFrame, save_config: DBSaveConfig):
         """
@@ -1390,54 +1075,9 @@ class Livedocs:
             Error, Result and Metrics in a tuple
             Tuple[Result (Dict), Metrics (Dict), Error (str)]
         """
-        try:
-            db_connector_id = save_config["database_id"]
-            _, parsed_credentials = self._get_database_details(db_connector_id)
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            qualified_table_name = (
-                f"{save_config['schema_name']}.{save_config['table_name']}"
-            )
-            client = clickhouse_connect.get_client(
-                host=parsed_credentials["host"],
-                port=parsed_credentials["port"],
-                user=parsed_credentials["user_name"],
-                password=parsed_credentials["password"],
-                secure=True,
-            )
-
-            result = write_df_to_clickhouse(
-                df,
-                client,
-                qualified_table_name,
-                save_config["table_is_new"],
-                save_config["write_mode"],
-            )
-
-            if result["error"]:
-                raise RuntimeError(
-                    sanitize_sensitive_data(
-                        f"Error writing to Clickhouse: {result['error']}"
-                    )
-                )
-            else:
-                # Compress and encode response
-                output = QueryResult(
-                    data=result["result"],
-                    metadata=QueryResultMetadata(
-                        limit=50,
-                        offset=0,
-                        total_rows=result["rows_written"],
-                        run_date=result["run_date"],
-                        cache_info=None,
-                    ),
-                )
-                payload = LivedocsResult(output)
-                return payload
-        except Exception as e:
-            raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
+        return clickhouse_datasource.write_to_clickhouse(
+            df, save_config, self._get_database_details
+        )
 
     def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
         """

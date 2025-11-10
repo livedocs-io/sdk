@@ -265,6 +265,7 @@ class VegaSpec(BaseModel):
 class DatabaseType(Enum):
     Bigquery = "bigquery"
     Clickhouse = "clickhouse"
+    Motherduck = "motherduck"
     Mysql = "mysql"
     Postgres = "postgres"
     Redshift = "redshift"
