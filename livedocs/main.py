@@ -50,7 +50,9 @@ from livedocs.utils.common import (
     sanitize_sensitive_data,
 )
 from livedocs.utils.debug import debug
+from livedocs.utils.databricks import process_databricks_schema
 from livedocs.datasources import bigquery as bigquery_datasource
+from livedocs.datasources import databricks as databricks_datasource
 from livedocs.datasources import clickhouse as clickhouse_datasource
 from livedocs.datasources import motherduck as motherduck_datasource
 from livedocs.datasources import postgres as postgres_datasource
@@ -671,6 +673,7 @@ class Livedocs:
                     elif DatabaseType(datasource["database_info"]["database_type"]) in {
                         DatabaseType.Postgres,
                         DatabaseType.Motherduck,
+                        DatabaseType.Databricks,
                     }:
                         query = f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 10'
                     else:
@@ -807,6 +810,10 @@ class Livedocs:
                 result_df, schema_df = self._query_motherduck(query, datasource)
                 schema = _process_motherduck_schema(schema_df)
                 return [result_df, schema]
+            case DatabaseType.Databricks:
+                result, raw_schema = self._query_databricks(query, datasource)
+                schema = process_databricks_schema(raw_schema)
+                return [result, schema]
             case DatabaseType.Bigquery:
                 result, raw_schema = self._query_bigquery(query, datasource)
                 schema = process_bigquery_schema(raw_schema)
@@ -844,6 +851,23 @@ class Livedocs:
             tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
         """
         return clickhouse_datasource.query(
+            query, datasource, self._get_database_details
+        )
+
+    def _query_databricks(
+        self, query: str, datasource: ElementDataSource
+    ) -> tuple[pl.DataFrame, dict]:
+        """
+        Queries a Databricks database.
+
+        Args:
+            query (str): The query string.
+            datasource (ElementDataSource): The datasource to execute the query on.
+
+        Returns:
+            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
+        """
+        return databricks_datasource.query(
             query, datasource, self._get_database_details
         )
 

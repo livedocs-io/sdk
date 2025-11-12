@@ -27,6 +27,7 @@ dependencies = [
     "cryptography>=44.0.1",
     "clickhouse-connect>=0.8.17",
     "psycopg[binary]>=3.2.12",
+    "databricks-sql-connector>=4.1.4",
 ]
 requires-python = ">=3.12"
 classifiers = [

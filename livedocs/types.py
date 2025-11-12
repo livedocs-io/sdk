@@ -266,6 +266,7 @@ class DatabaseType(Enum):
     Bigquery = "bigquery"
     Clickhouse = "clickhouse"
     Motherduck = "motherduck"
+    Databricks = "databricks"
     Mysql = "mysql"
     Postgres = "postgres"
     Redshift = "redshift"
