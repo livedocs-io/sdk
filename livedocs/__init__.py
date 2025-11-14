@@ -1,3 +1,3 @@
-from .main import Livedocs
+from .main import Livedocs, LivedocsConfig
 
-__all__ = ["Livedocs"]
+__all__ = ["Livedocs", "LivedocsConfig"]

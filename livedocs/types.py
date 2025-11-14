@@ -265,6 +265,8 @@ class VegaSpec(BaseModel):
 class DatabaseType(Enum):
     Bigquery = "bigquery"
     Clickhouse = "clickhouse"
+    Motherduck = "motherduck"
+    Databricks = "databricks"
     Mysql = "mysql"
     Postgres = "postgres"
     Redshift = "redshift"
@@ -286,6 +288,7 @@ class DatabaseInfo(TypedDict):
 
 class DatabaseTableInfo(TypedDict):
     instance_id: Optional[str]
+    catalog_name: Optional[str]
     schema_name: str
     table_name: str
 

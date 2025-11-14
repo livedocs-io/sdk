@@ -470,15 +470,19 @@ def _setup_sentry():
     """
     Initializes Sentry for error tracking and performance monitoring.
     """
+    dsn = os.getenv("VMLIB_SENTRY_DSN")
+    if not dsn:
+        return
+
     try:
         sentry_sdk.init(
-            dsn=os.getenv("VMLIB_SENTRY_DSN"),
+            dsn=dsn,
             traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
             profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
             environment=os.getenv("APP_ENV"),
         )
     except Exception as e:
-        raise f"Failed to initialize Sentry: {e}"
+        raise RuntimeError("Failed to initialize Sentry") from e
 
 
 def _setup_dirs():
