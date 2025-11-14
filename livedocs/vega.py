@@ -50,9 +50,13 @@ def get_altair_datasource_query(datasource: ElementDataSource):
             elif datasource["database_info"]["database_type"] in {
                 DatabaseType.Postgres.value,
                 DatabaseType.Motherduck.value,
-                DatabaseType.Databricks.value,
             }:
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
+            elif (
+                datasource["database_info"]["database_type"]
+                == DatabaseType.Databricks.value
+            ):
+                return f'SELECT * FROM {datasource["database_table_info"]["catalog_name"]}.{datasource["database_table_info"]["schema_name"]}.{datasource["database_table_info"]["table_name"]} LIMIT 500000;'
             else:
                 return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
         ###

@@ -288,6 +288,7 @@ class DatabaseInfo(TypedDict):
 
 class DatabaseTableInfo(TypedDict):
     instance_id: Optional[str]
+    catalog_name: Optional[str]
     schema_name: str
     table_name: str
 
