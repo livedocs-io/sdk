@@ -1,9 +1,9 @@
 import json
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 
 def format_single_value(
-    value: Any, format_type: str, fixed_decimals: Optional[int] = None
+    value: Any, format_type: str, fixed_decimals: int | None = None
 ) -> str:
     """
     Format a value according to the specified format type
@@ -51,12 +51,12 @@ def format_single_value(
 
 
 def process_comparison(
-    main_value: Union[int, float],
-    compare_value: Union[int, float],
+    main_value: int | float,
+    compare_value: int | float,
     compare_type: str,
-    compare_format: Optional[str] = None,
-    fixed_decimals: Optional[int] = None,
-) -> Dict[str, Any]:
+    compare_format: str | None = None,
+    fixed_decimals: int | None = None,
+) -> dict[str, Any]:
     """
     Process comparison between main value and comparison value
 
@@ -139,7 +139,9 @@ def process_comparison(
         }
 
 
-def process_single_value(config: str, context: Optional[dict] = None) -> Dict[str, Any]:
+def process_single_value(
+    config: str, context: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Process a SingleValue element with formatting and comparison calculations
 

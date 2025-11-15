@@ -2,7 +2,7 @@ import traceback
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any
 
 import polars as pl
 import psycopg
@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from typing_extensions import Literal
 
 
-def _create_postgres_connection_url(details: Dict[str, str]) -> str:
+def _create_postgres_connection_url(details: dict[str, str]) -> str:
     user = details.get("user_name", "")
     password = details.get("password", "")
     host = details.get("host", "")
@@ -60,7 +60,7 @@ def _process_postgres_schema(schema_data: pl.DataFrame) -> dict:
             "Schema DataFrame must contain a 'data_type' or 'column_type' column"
         )
 
-    processed_schema: Dict[str, str] = {}
+    processed_schema: dict[str, str] = {}
     for row in schema_data.iter_rows(named=True):
         processed_schema[row["column_name"]] = _map_postgres_type(row[type_column])
 
@@ -127,8 +127,8 @@ def _write_df_to_postgres(
 
         schema_name, table_identifier = _parse_table_identifier(table_name)
         aligned_df = df.clone()
-        table_schema: List[Dict[str, Any]] = []
-        rows_to_insert: List[Tuple[Any, ...]] = []
+        table_schema: list[dict[str, Any]] = []
+        rows_to_insert: list[tuple[Any, ...]] = []
 
         with psycopg.connect(connection_string) as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
@@ -174,7 +174,7 @@ def _write_df_to_postgres(
 
 def _schema_from_description(
     conn: psycopg.Connection, description: Sequence[Any]
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if not description:
         return []
 
@@ -184,7 +184,7 @@ def _schema_from_description(
         if type_code is not None
     ]
 
-    type_map: Dict[Any, Dict[str, Any]] = {}
+    type_map: dict[Any, dict[str, Any]] = {}
 
     if type_oids:
         with conn.cursor(row_factory=dict_row) as meta_cursor:
@@ -206,7 +206,7 @@ def _schema_from_description(
             for row in meta_cursor.fetchall() or []:
                 type_map[row["oid"]] = row
 
-    schema_rows: List[Dict[str, Any]] = []
+    schema_rows: list[dict[str, Any]] = []
     for desc in description:
         type_info = type_map.get(getattr(desc, "type_code", None), {})
         data_type = type_info.get("data_type", "TEXT")
@@ -221,7 +221,7 @@ def _schema_from_description(
     return schema_rows
 
 
-def _parse_table_identifier(table_name: str) -> Tuple[str, str]:
+def _parse_table_identifier(table_name: str) -> tuple[str, str]:
     parts = [part.strip() for part in table_name.split(".") if part.strip()]
     if not parts:
         raise ValueError("table_name cannot be empty")
@@ -357,7 +357,7 @@ def _polars_to_postgres_type(dtype: pl.DataType) -> str:
 
 def _fetch_postgres_schema(
     cursor, schema_name: str, table_identifier: str
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     schema_query = """
         SELECT
             a.attname AS column_name,
@@ -381,7 +381,7 @@ def _fetch_postgres_schema(
     cursor.execute(schema_query, (table_identifier, schema_name))
     rows = cursor.fetchall() or []
 
-    schema: List[Dict[str, Any]] = []
+    schema: list[dict[str, Any]] = []
     for row in rows:
         enum_values = None
         if row.get("typcategory") == "E":
@@ -401,7 +401,7 @@ def _fetch_postgres_schema(
     return schema
 
 
-def _fetch_enum_values(cursor, enum_type: str, enum_schema: str | None) -> List[str]:
+def _fetch_enum_values(cursor, enum_type: str, enum_schema: str | None) -> list[str]:
     if not enum_type:
         return []
 
@@ -420,7 +420,7 @@ def _fetch_enum_values(cursor, enum_type: str, enum_schema: str | None) -> List[
     return [row["enumlabel"] for row in cursor.fetchall() or []]
 
 
-def _validate_required_columns(df: pl.DataFrame, schema: List[Dict[str, Any]]) -> None:
+def _validate_required_columns(df: pl.DataFrame, schema: list[dict[str, Any]]) -> None:
     missing_required = [
         column["column_name"]
         for column in schema
@@ -431,7 +431,18 @@ def _validate_required_columns(df: pl.DataFrame, schema: List[Dict[str, Any]]) -
         raise ValueError(f"Missing required columns: {missing_required}")
 
 
-def _postgres_to_polars_type(type_name: str) -> pl.DataType:
+def _postgres_to_polars_type(
+    type_name: str,
+) -> (
+    type[pl.Int64]
+    | type[pl.Float64]
+    | type[pl.Boolean]
+    | type[pl.Datetime]
+    | type[pl.Date]
+    | type[pl.Time]
+    | type[pl.Utf8]
+    | type[pl.Binary]
+):
     type_upper = type_name.upper()
 
     if any(keyword in type_upper for keyword in ["BIGINT", "INT", "SMALLINT"]):
@@ -458,7 +469,7 @@ def _postgres_to_polars_type(type_name: str) -> pl.DataType:
 
 
 def _align_dataframe_to_schema(
-    df: pl.DataFrame, schema: Iterable[Dict[str, Any]]
+    df: pl.DataFrame, schema: Iterable[dict[str, Any]]
 ) -> pl.DataFrame:
     if df.is_empty():
         base = {column["column_name"]: [] for column in schema}
@@ -559,13 +570,13 @@ def _truncate_table(cursor, schema_name: str, table_identifier: str) -> None:
 
 
 def _prepare_rows_for_insert(
-    aligned_df: pl.DataFrame, schema: Iterable[Dict[str, Any]]
-) -> List[Tuple[Any, ...]]:
+    aligned_df: pl.DataFrame, schema: Iterable[dict[str, Any]]
+) -> list[tuple[Any, ...]]:
     if aligned_df.is_empty():
         return []
 
     columns = [column["column_name"] for column in schema]
-    rows: List[Tuple[Any, ...]] = []
+    rows: list[tuple[Any, ...]] = []
 
     for row in aligned_df.iter_rows(named=True):
         rows.append(tuple(row[column] for column in columns))
@@ -574,7 +585,7 @@ def _prepare_rows_for_insert(
 
 
 def _build_insert_query(
-    schema_name: str, table_identifier: str, schema: Iterable[Dict[str, Any]]
+    schema_name: str, table_identifier: str, schema: Iterable[dict[str, Any]]
 ):
     columns_sql = [sql.Identifier(column["column_name"]) for column in schema]
     placeholders = [sql.Placeholder() for _ in schema]
@@ -589,9 +600,9 @@ def _build_insert_query(
 
 def _prepare_result_payload(
     aligned_df: pl.DataFrame,
-    schema: Iterable[Dict[str, Any]],
+    schema: Iterable[dict[str, Any]],
     rows_written: int,
-) -> Tuple[pl.DataFrame, int]:
+) -> tuple[pl.DataFrame, int]:
     ordered_schema = OrderedDict(
         (column["column_name"], column["data_type"]) for column in schema
     )

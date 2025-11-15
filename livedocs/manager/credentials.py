@@ -1,21 +1,21 @@
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 from livedocs.types import Credentials, DatabaseConnection, WorkspaceSecret
-from livedocs.utils.common import _fetch_credentials
+from livedocs.utils.internals import livedocs_internal_fetch_credentials
 
 
 class CredentialStore:
     """Lazy credential loader with basic TTL caching."""
 
     def __init__(self, report_id: str, token: str, ttl_seconds: int = 300) -> None:
-        self._report_id = report_id
-        self._token = token
-        self._ttl = ttl_seconds
-        self._lock = threading.Lock()
-        self._bundle: Optional[Credentials] = None
-        self._loaded_at: Optional[float] = None
+        self._report_id: str = report_id
+        self._token: str = token
+        self._ttl: int = ttl_seconds
+        self._lock: threading.Lock = threading.Lock()
+        self._bundle: Credentials | None = None
+        self._loaded_at: float | None = None
 
     def load(self, force: bool = False) -> Credentials:
         with self._lock:
@@ -28,7 +28,7 @@ class CredentialStore:
             ):
                 return self._bundle
 
-            raw = _fetch_credentials(self._report_id, self._token)
+            raw = livedocs_internal_fetch_credentials(self._report_id, self._token)
 
             bundle = Credentials.model_validate(raw)
 
@@ -39,15 +39,15 @@ class CredentialStore:
     def refresh(self) -> Credentials:
         return self.load(force=True)
 
-    def get_secret(self, key: str) -> Optional[WorkspaceSecret]:
+    def get_secret(self, key: str) -> WorkspaceSecret | None:
         bundle = self.load()
         return bundle.workspace_secrets.get(key)
 
-    def get_database(self, connector_id: str) -> Optional[DatabaseConnection]:
+    def get_database(self, connector_id: str) -> DatabaseConnection | None:
         bundle = self.load()
         return bundle.databases.get(connector_id)
 
-    def get_built_in_vars(self) -> dict[str, Optional[Any]]:
+    def get_built_in_vars(self) -> dict[str, Any | None]:
         bundle = self.load()
         return dict(bundle.built_in_vars)
 
@@ -65,11 +65,11 @@ class StaticCredentialStore(CredentialStore):
     def refresh(self) -> Credentials:
         return self._static_bundle
 
-    def get_secret(self, key: str) -> Optional[WorkspaceSecret]:
+    def get_secret(self, key: str) -> WorkspaceSecret | None:
         return self._static_bundle.workspace_secrets.get(key)
 
-    def get_database(self, connector_id: str) -> Optional[DatabaseConnection]:
+    def get_database(self, connector_id: str) -> DatabaseConnection | None:
         return self._static_bundle.databases.get(connector_id)
 
-    def get_built_in_vars(self) -> dict[str, Optional[Any]]:
+    def get_built_in_vars(self) -> dict[str, Any | None]:
         return dict(self._static_bundle.built_in_vars)

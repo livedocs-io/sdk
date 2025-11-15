@@ -1,12 +1,10 @@
-from typing import List
-
 import duckdb
 
 
 class DuckDBSingleton:
     _instance = None
 
-    def __new__(cls, file_search_path: List[str] = None):
+    def __new__(cls, file_search_path: list[str] | None = None):
         if cls._instance is None:
             cls._instance = super(DuckDBSingleton, cls).__new__(cls)
             # Initialize connection
@@ -14,7 +12,7 @@ class DuckDBSingleton:
 
             # Set configuration options
             if file_search_path:
-                cls._instance.conn.execute(
+                _ = cls._instance.conn.execute(
                     f"SET file_search_path = '{','.join(file_search_path)}';"
                 )
 
@@ -28,6 +26,4 @@ class DuckDBSingleton:
             cls._instance.conn.install_extension("excel")
             cls._instance.conn.load_extension("excel")
 
-            # Initialize tracking for attached databases
-            cls._instance.postgres_connections = {}
         return cls._instance

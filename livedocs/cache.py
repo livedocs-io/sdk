@@ -29,11 +29,13 @@ class QueryCache:
             max_workers (int): Maximum number of threads for parallel operations. Defaults to 2.
         """
         self.cache = {}
-        self.ttl = ttl
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self.lock = threading.Lock()
-        self.report_id = report_id
-        self.token = token
+        self.ttl: int = ttl
+        self.executor: concurrent.futures.ThreadPoolExecutor = (
+            concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        )
+        self.lock: threading.Lock = threading.Lock()
+        self.report_id: str = report_id
+        self.token: str = token
 
     def generate_cache_id(self, query: str, datasource: ElementDataSource) -> str:
         """
@@ -72,7 +74,7 @@ class QueryCache:
 
     def get(
         self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
+    ) -> tuple[pl.DataFrame, dict] | None:
         """
         Retrieves a cached entry for a given query and datasource if available and not expired.
 

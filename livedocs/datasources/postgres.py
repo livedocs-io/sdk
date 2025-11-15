@@ -4,8 +4,10 @@ from typing import Callable
 
 import polars as pl
 import psycopg
+from psycopg.abc import Query
 from psycopg.rows import dict_row
 
+from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
     DBSaveConfig,
     ElementDataSource,
@@ -19,6 +21,74 @@ from livedocs.utils.postgres import (
     _schema_from_description,
     _write_df_to_postgres,
 )
+
+
+class PostgresDatasourceConnector(BaseDatasourceConnector):
+    """
+    Datasource connector for PostgreSQL.
+    """
+
+    def init(
+        self, get_database_details: Callable[[str], tuple[object, dict[str, str]]]
+    ) -> Any:
+        return self._connection
+
+    def read(
+        self,
+        query: Query,
+        datasource: ElementDataSource,
+        get_database_details: Callable[[str], tuple[object, dict]],
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        try:
+            connection_string = get_connection_string(datasource, get_database_details)
+        except ValueError as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
+            )
+
+        schema_rows: list[dict[str, str]] = []
+
+        try:
+            with psycopg.connect(connection_string) as conn:
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    _ = cursor.execute(query)
+                    rows = cursor.fetchall()
+                    description = cursor.description or ()
+                    column_names = [desc.name for desc in description]
+
+                schema_rows = _schema_from_description(conn, description)
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error executing PostgreSQL query: {e}")
+            )
+
+        schema_df = (
+            pl.DataFrame(schema_rows)
+            if schema_rows
+            else pl.DataFrame({"column_name": [], "data_type": []})
+        )
+
+        if rows:
+            result_df = pl.DataFrame(rows)
+            if column_names:
+                result_df = result_df.select(column_names)
+        elif column_names:
+            result_df = pl.DataFrame({column: [] for column in column_names})
+        else:
+            result_df = pl.DataFrame()
+
+        return result_df, schema_df
+
+    def write(
+        self,
+        df: pl.DataFrame,
+        save_config: DBSaveConfig,
+        get_database_details: Callable[[str], tuple[object, dict[str, str]]],
+    ) -> LivedocsResult:
+        pass
+
+    def teardown(self) -> None:
+        pass
 
 
 def build_connection_string(parsed_credentials: dict) -> str:
@@ -41,59 +111,6 @@ def get_connection_string(
         raise ValueError(f"Missing required information: {e}")
 
     return build_connection_string(parsed_credentials)
-
-
-def query_with_connection(
-    query: str,
-    connection_string: str,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    schema_rows: list[dict[str, str]] = []
-
-    try:
-        with psycopg.connect(connection_string) as conn:
-            with conn.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(query)
-                rows = cursor.fetchall()
-                description = cursor.description or ()
-                column_names = [desc.name for desc in description]
-
-            schema_rows = _schema_from_description(conn, description)
-    except Exception as e:
-        raise RuntimeError(
-            sanitize_sensitive_data(f"Error executing PostgreSQL query: {e}")
-        )
-
-    schema_df = (
-        pl.DataFrame(schema_rows)
-        if schema_rows
-        else pl.DataFrame({"column_name": [], "data_type": []})
-    )
-
-    if rows:
-        result_df = pl.DataFrame(rows)
-        if column_names:
-            result_df = result_df.select(column_names)
-    elif column_names:
-        result_df = pl.DataFrame({column: [] for column in column_names})
-    else:
-        result_df = pl.DataFrame()
-
-    return result_df, schema_df
-
-
-def query(
-    query: str,
-    datasource: ElementDataSource,
-    get_database_details: Callable[[str], tuple[object, dict]],
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    try:
-        connection_string = get_connection_string(datasource, get_database_details)
-    except ValueError as e:
-        raise RuntimeError(
-            sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
-        )
-
-    return query_with_connection(query, connection_string)
 
 
 def write_to_postgres(

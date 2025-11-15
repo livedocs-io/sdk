@@ -1,11 +1,11 @@
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import dateutil.parser
 import polars as pl
 
 
-def apply_sort(df: pl.DataFrame, sort_operation: Dict[str, Any]) -> pl.DataFrame:
+def apply_sort(df: pl.DataFrame, sort_operation: dict[str, Any]) -> pl.DataFrame:
     """
     Apply sorting to a DataFrame based on sort operation metadata.
 
@@ -30,8 +30,8 @@ def apply_sort(df: pl.DataFrame, sort_operation: Dict[str, Any]) -> pl.DataFrame
 
 
 def apply_table_operations(
-    df: pl.DataFrame, metadata: Dict[str, Any]
-) -> Tuple[pl.DataFrame, Dict[str, Any]]:
+    df: pl.DataFrame, metadata: dict[str, Any]
+) -> tuple[pl.DataFrame, dict[str, Any]]:
     """
     Apply all table operations from metadata to a DataFrame.
 
@@ -71,9 +71,9 @@ def apply_table_operations(
 
 def process_conditions(
     df: pl.DataFrame,
-    filters: List[Dict[str, Any]] = [],
-    styles: List[Dict[str, Any]] = [],
-) -> Tuple[pl.DataFrame, Dict[str, Any]]:
+    filters: list[dict[str, Any]] = [],
+    styles: list[dict[str, Any]] = [],
+) -> tuple[pl.DataFrame, dict[str, Any]]:
     """
     Process both filter conditions and style rules in a single pass.
 
@@ -219,7 +219,7 @@ def process_conditions(
 
 def create_condition_mask(
     df: pl.DataFrame, column: str, operator: str, value: Any, column_type: str
-) -> Optional[pl.Expr]:
+) -> pl.Expr | None:
     """
     Create a filter mask for a specific condition.
 
@@ -290,7 +290,7 @@ def create_condition_mask(
 
 def create_date_condition_mask(
     df: pl.DataFrame, column: str, operator: str, value: str
-) -> Optional[pl.Expr]:
+) -> pl.Expr | None:
     """
     Create a filter mask for date conditions with robust date parsing.
 
@@ -340,7 +340,7 @@ def create_date_condition_mask(
         return None
 
 
-def _get_column_types(df: pl.DataFrame) -> Dict[str, str]:
+def _get_column_types(df: pl.DataFrame) -> dict[str, str]:
     """
     Get the data types for all columns in the dataframe.
 
@@ -416,8 +416,8 @@ def _get_column_type(df: pl.DataFrame, column: str) -> str:
 
 
 def _compute_calculations(
-    df: pl.DataFrame, calculations: List[Dict[str, Any]]
-) -> Dict[str, Dict[str, Any]]:
+    df: pl.DataFrame, calculations: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     """
     Compute statistical calculations for columns in the dataframe.
 

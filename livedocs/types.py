@@ -3,7 +3,7 @@ import gzip
 import json
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
 
 import msgpack
 from IPython.core.display import DisplayObject
@@ -37,10 +37,10 @@ class FileManifest(BaseModel):
     file_id: str  # The unique ID of the file (resolved by the API)
     file_name: str  # The display name of the file
     signed_url: str  # The GCS signed URL for download/access
-    size: Optional[int]  # File size in bytes, can be None if unknown
-    type: Optional[str]  # e.g., 'csv', 'xlsx'
-    created_at: Optional[str]  # ISO string for creation timestamp
-    bucket: Optional[GCSBucketType]  # The bucket type (user-files or cache-artifacts)
+    size: int | None  # File size in bytes, can be None if unknown
+    type: str | None  # e.g., 'csv', 'xlsx'
+    created_at: str | None  # ISO string for creation timestamp
+    bucket: GCSBucketType | None  # The bucket type (user-files or cache-artifacts)
     action: FileManifestAction  # Action type (read/write)
 
 
@@ -49,8 +49,8 @@ class QueryResultMetadata(TypedDict, total=False):
     offset: int
     total_rows: int
     cache_info: CacheInfo
-    applied_metadata: Optional[Dict[str, Any]]
-    calculation_results: Optional[Dict[str, Dict[str, Any]]]
+    applied_metadata: dict[str, Any] | None
+    calculation_results: dict[str, dict[str, Any]] | None
 
 
 class LivedocsResultInterface(ABC):
@@ -122,7 +122,7 @@ class ChartResult(LivedocsResultInterface):
         Metadata associated with the chart result including cache info.
     """
 
-    def __init__(self, data: str, cache_info: Optional[CacheInfo] = None):
+    def __init__(self, data: str, cache_info: CacheInfo | None = None):
         self.data = data
         self.cache_info = cache_info
 
@@ -143,7 +143,7 @@ class ChartResult(LivedocsResultInterface):
 
 class LivedocsResult:
     def __init__(self, result: LivedocsResultInterface):
-        self.result = result
+        self.result: LivedocsResultInterface = result
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         data = {
@@ -160,7 +160,7 @@ class MsgPackDisplay(DisplayObject):
     Custom display class for msgpack data in IPython
     """
 
-    def __init__(self, data, metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: dict[str, Any] | None = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}
@@ -189,7 +189,7 @@ class JsonDisplay(DisplayObject):
     Simple JSON display class for IPython - no msgpack, just JSON
     """
 
-    def __init__(self, data, metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: dict[str, Any] | None = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}
@@ -208,11 +208,11 @@ class JsonDisplay(DisplayObject):
 class UserMeta(BaseModel):
     styleSettings: dict
     chartType: str
-    colorGroups: Optional[dict] = None
-    pieSettings: Optional[dict] = None
-    histogramSettings: Optional[dict] = None
-    chartSettings: Optional[dict] = None
-    swappedChartSettings: Optional[dict] = None
+    colorGroups: dict[str, Any] | None = None
+    pieSettings: dict[str, Any] | None = None
+    histogramSettings: dict[str, Any] | None = None
+    chartSettings: dict[str, Any] | None = None
+    swappedChartSettings: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     def validate_exclusive_chart_settings(cls, values):
@@ -287,8 +287,8 @@ class DatabaseInfo(TypedDict):
 
 
 class DatabaseTableInfo(TypedDict):
-    instance_id: Optional[str]
-    catalog_name: Optional[str]
+    instance_id: str | None
+    catalog_name: str | None
     schema_name: str
     table_name: str
 
@@ -303,14 +303,14 @@ class FileInfo(TypedDict):
     file_name: str
     file_type: str
     file_has_layers: bool
-    layer_name: Optional[str]
+    layer_name: str | None
 
 
 class ElementDataSource(TypedDict):
-    database_info: Optional[DatabaseInfo]
-    database_table_info: Optional[DatabaseTableInfo]
-    dataframe_info: Optional[DataframeInfo]
-    file_info: Optional[FileInfo]
+    database_info: DatabaseInfo | None
+    database_table_info: DatabaseTableInfo | None
+    dataframe_info: DataframeInfo | None
+    file_info: FileInfo | None
     source_type: ElementDatasourceType
 
 
@@ -328,9 +328,9 @@ class DatabaseConnection(BaseModel):
 
 class Credentials(BaseModel):
     workspace_id: str
-    workspace_secrets: Dict[str, WorkspaceSecret]
-    databases: Dict[str, DatabaseConnection]
-    built_in_vars: Dict[str, Optional[Any]]
+    workspace_secrets: dict[str, WorkspaceSecret]
+    databases: dict[str, DatabaseConnection]
+    built_in_vars: dict[str, Any | None]
 
 
 class Schema(TypedDict):
@@ -349,7 +349,7 @@ class DBSaveConfig(TypedDict):
     table_name: str
     table_is_new: bool
     write_mode: Literal["append", "overwrite"]
-    run_settings: List[
+    run_settings: list[
         Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]
     ]
 
@@ -358,34 +358,35 @@ class DBSaveConfig(TypedDict):
 
 
 class ReferenceLineSettings(TypedDict):
-    label: Optional[str]
-    value: Optional[str]
-    color: Optional[str]
-    labelPosition: Optional[
+    label: str | None
+    value: str | None
+    color: str | None
+    labelPosition: (
         Literal[
             "none", "outside", "top-left", "top-right", "bottom-left", "bottom-right"
         ]
-    ]
-    labelAngle: Optional[int]
-    lineWidth: Optional[int]
-    lineStyle: Optional[Literal["solid", "dashed", "dotted"]]
+        | None
+    )
+    labelAngle: int | None
+    lineWidth: int | None
+    lineStyle: Literal["solid", "dashed", "dotted"] | None
 
 
 class AxisStyleSettings(TypedDict, total=False):
-    title: Optional[str]
-    format: Optional[str]
-    min: Optional[float]
-    max: Optional[float]
-    ticks: Optional[int]
-    grid: Optional[Literal["solid", "dashed", "none"]]
-    labelAngle: Optional[int]
-    scale: Optional[Literal["linear", "log", "pow", "sqrt"]]
-    referenceLines: Optional[List[ReferenceLineSettings]]
+    title: str | None
+    format: str | None
+    min: float | None
+    max: float | None
+    ticks: int | None
+    grid: Literal["solid", "dashed", "none"] | None
+    labelAngle: int | None
+    scale: Literal["linear", "log", "pow", "sqrt"] | None
+    referenceLines: list[ReferenceLineSettings] | None
 
 
 class LegendSettings(TypedDict, total=False):
-    show: Optional[bool]
-    position: Optional[
+    show: bool | None
+    position: (
         Literal[
             "top",
             "right",
@@ -396,43 +397,44 @@ class LegendSettings(TypedDict, total=False):
             "top-right",
             "bottom-right",
         ]
-    ]
-    title: Optional[str]
+        | None
+    )
+    title: str | None
 
 
 class MarkColorSettings(TypedDict):
-    hex: List[Dict[str, str]]
+    hex: list[dict[str, str]]
     mode: Literal["all_fields"]
 
 
 class MarkOpacitySettings(TypedDict):
-    value: List[Dict[str, float]]
+    value: list[dict[str, float]]
     mode: Literal["all_fields", "by_field", "based_on_field"]
 
 
 class MarkDataLabelsSettings(TypedDict):
-    show: Optional[bool]
-    mode: Optional[Literal["per_color", "total"]]
-    position: Optional[Literal["inside-top", "center", "outside-top"]]
-    color: Optional[Literal["auto", "white", "black"]]
-    angle: Optional[int]
-    fontSize: Optional[int]
+    show: bool | None
+    mode: Literal["per_color", "total"] | None
+    position: Literal["inside-top", "center", "outside-top"] | None
+    color: Literal["auto", "white", "black"] | None
+    angle: int | None
+    fontSize: int | None
 
 
 class MarkSettings(TypedDict):
-    color: Optional[MarkColorSettings]
-    opacity: Optional[MarkOpacitySettings]
-    dataLabels: Optional[MarkDataLabelsSettings]
+    color: MarkColorSettings | None
+    opacity: MarkOpacitySettings | None
+    dataLabels: MarkDataLabelsSettings | None
 
 
 class StyleSettings(TypedDict, total=False):
-    fontSize: Optional[int]
-    tooltip: Optional[bool]
-    legend: Optional[LegendSettings]
-    markSettings: Optional[Dict[str, MarkSettings]]
-    xAxis: Optional[AxisStyleSettings]
-    yAxis: Optional[AxisStyleSettings]
-    mode: Optional[Literal["light", "dark"]]
+    fontSize: int | None
+    tooltip: bool | None
+    legend: LegendSettings | None
+    markSettings: dict[str, MarkSettings] | None
+    xAxis: AxisStyleSettings | None
+    yAxis: AxisStyleSettings | None
+    mode: Literal["light", "dark"] | None
 
 
 class ColorBy(TypedDict):
@@ -448,7 +450,7 @@ class YAxisSeries(TypedDict):
     mark: str
     type: str
     color_by: ColorBy
-    name: Optional[str]
+    name: str | None
 
 
 class XAxis(TypedDict):
@@ -458,8 +460,8 @@ class XAxis(TypedDict):
 
 
 class YAxis(TypedDict):
-    primary: List[YAxisSeries]
-    secondary: Optional[List[YAxisSeries]]
+    primary: list[YAxisSeries]
+    secondary: list[YAxisSeries] | None
 
 
 class LivedocsChartSpec(TypedDict):
@@ -502,20 +504,20 @@ class HistogramSpec(TypedDict):
 
 
 class HorizontalSubplotSettings(TypedDict):
-    field: Optional[str]
-    sort: Optional[Literal["ascending", "descending"]]
-    wrap: Optional[bool]
-    columns: Optional[int]
-    bin: Optional[bool]
-    bin_count: Optional[int]
+    field: str | None
+    sort: Literal["ascending", "descending"] | None
+    wrap: bool | None
+    columns: int | None
+    bin: bool | None
+    bin_count: int | None
 
 
 class VerticalSubplotSettings(TypedDict):
-    field: Optional[str]
-    sort: Optional[Literal["ascending", "descending"]]
-    linkYAxis: Optional[bool]
-    bin: Optional[bool]
-    bin_count: Optional[int]
+    field: str | None
+    sort: Literal["ascending", "descending"] | None
+    linkYAxis: bool | None
+    bin: bool | None
+    bin_count: int | None
 
 
 class SubplotSettings(TypedDict):
@@ -525,13 +527,13 @@ class SubplotSettings(TypedDict):
 
 class Spec(TypedDict):
     chartType: Literal["main", "histogram", "swapped_main", "pie"]
-    styleSettings: Optional[StyleSettings]
-    chartSettings: Optional[LivedocsChartSpec]
-    swappedChartSettings: Optional[LivedocsSwappedChartSpec]
-    histogramSettings: Optional[HistogramSpec]
-    pieSettings: Optional[PieChartSpec]
-    colorGroups: Optional[Dict[str, Dict[str, str] | str]]
-    subplots: Optional[SubplotSettings]
+    styleSettings: StyleSettings | None
+    chartSettings: LivedocsChartSpec | None
+    swappedChartSettings: LivedocsSwappedChartSpec | None
+    histogramSettings: HistogramSpec | None
+    pieSettings: PieChartSpec | None
+    colorGroups: dict[str, dict[str, str] | str] | None
+    subplots: SubplotSettings | None
 
 
 __all__ = [

@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime
 from functools import lru_cache, wraps
-from typing import Any, Dict, Optional
+from typing import Any
 
 import altair as alt
 import dateutil.parser
@@ -12,6 +12,9 @@ import sentry_sdk
 from tqdm.auto import tqdm
 
 from livedocs.types import (
+    DatabaseType,
+    ElementDataSource,
+    ElementDatasourceType,
     FileManifest,
     FileManifestAction,
     GCSBucketType,
@@ -71,19 +74,64 @@ def get_run_context() -> str:
     return current_run_context
 
 
-def _capture_exceptions(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            sanitized_args = tuple(sanitize_sensitive_data(str(arg)) for arg in e.args)
-            if sanitized_args:
-                e.args = sanitized_args
-            sentry_sdk.capture_exception(e)
-            raise  # Re-raise the exception after capturing it
+def get_query_for_datasource(
+    datasource: ElementDataSource,
+    limit: int = 10,
+) -> str | None:
+    """
+    Prepares the DuckDB query for each datasource
+    """
 
-    return wrapper
+    match datasource["source_type"]:
+        case ElementDatasourceType.dataframe.value:
+            if datasource["dataframe_info"] is None:
+                raise ValueError("Dataframe info is required")
+            return f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT {limit};"
+        case ElementDatasourceType.database_table.value:
+            if datasource["database_info"] is None:
+                raise ValueError("Database info is required")
+            if datasource["database_table_info"] is None:
+                raise ValueError("Database table info is required")
+
+            if (
+                DatabaseType(datasource["database_info"]["database_type"])
+                == DatabaseType.Bigquery
+            ):
+                return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT {limit};"
+            elif (
+                DatabaseType(datasource["database_info"]["database_type"])
+                == DatabaseType.Clickhouse
+            ):
+                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
+            elif datasource["database_info"]["database_type"] in {
+                DatabaseType.Postgres.value,
+                DatabaseType.Motherduck.value,
+            }:
+                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
+            elif (
+                DatabaseType(datasource["database_info"]["database_type"])
+                == DatabaseType.Databricks
+            ):
+                return f'SELECT * FROM {datasource["database_table_info"]["catalog_name"]}.{datasource["database_table_info"]["schema_name"]}.{datasource["database_table_info"]["table_name"]} LIMIT {limit};'
+            else:
+                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
+
+        case ElementDatasourceType.file:
+            if datasource["file_info"] is None:
+                raise ValueError("File info is required")
+            file_name = datasource["file_info"]["file_name"]
+            if datasource["file_info"]["file_type"] == "csv":
+                return f"SELECT * FROM read_csv_auto('{file_name}') LIMIT {limit};"
+            elif datasource["file_info"]["file_type"] == "xlsx":
+                return f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}') LIMIT {limit};"
+        case ElementDatasourceType.dataframe:
+            if datasource["dataframe_info"] is None:
+                raise ValueError("Dataframe info is required")
+            return f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT {limit};"
+        case _:
+            raise ValueError(
+                f"Unsupported datasource type: {datasource['source_type']}"
+            )
 
 
 def _get_color(index: int) -> str:
@@ -128,37 +176,14 @@ def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
     return alt.value(1)
 
 
-@_capture_exceptions
-def _fetch_credentials(report_id: str, token: str) -> Dict[str, Any]:
-    CORE_URL = os.getenv("CORE_BASE_URL")
-    if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
-
-    response = requests.get(
-        f"{CORE_URL}/v1/credentials/{report_id}",
-        headers={"authorization": token},
-    )
-
-    CORE_URL = os.getenv("CORE_BASE_URL")
-    if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
-
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception(
-            f"Failed to fetch credentials. Status code: {response.status_code}"
-        )
-
-
 @lru_cache(maxsize=128)
 def _fetch_file_manifest(
     report_id: str,
     token: str,
     action: FileManifestAction,
     bucket: GCSBucketType,
-    file_id: Optional[str] = None,
-    file_name: Optional[str] = None,
+    file_id: str | None = None,
+    file_name: str | None = None,
 ) -> FileManifest:
     CORE_URL = os.getenv("CORE_BASE_URL")
     if not CORE_URL:
@@ -260,7 +285,7 @@ _JSON_SECRET_RE = re.compile(
 _PEM_RE = re.compile(r"-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----", re.IGNORECASE)
 
 
-def sanitize_sensitive_data(message: Optional[str]) -> str:
+def sanitize_sensitive_data(message: str | None) -> str:
     """
     Best-effort scrubbing of secrets from error/log messages.
     Redacts credentials in URIs, obvious password/secret key patterns,
@@ -277,26 +302,7 @@ def sanitize_sensitive_data(message: Optional[str]) -> str:
     return sanitized
 
 
-@_capture_exceptions
-def _persist_built_in_vars(report_id: str, token: str, vars: dict) -> dict:
-    CORE_URL = os.getenv("CORE_BASE_URL")
-    if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
-
-    response = requests.post(
-        f"{CORE_URL}/v1/vars/{report_id}",
-        json=vars,
-        headers={"authorization": token},
-    )
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception(
-            f"Failed to persist built-in vars. Status code: {response.status_code}"
-        )
-
-
-def _get_dataframe_schema(df: pl.DataFrame) -> Dict[str, str]:
+def _get_dataframe_schema(df: pl.DataFrame) -> dict[str, str]:
     date_formats = [
         "%Y-%m-%d",
         "%Y-%m-%dT%H:%M:%S.%f%z",
@@ -496,7 +502,7 @@ def _setup_dirs():
     os.makedirs(user_files_dir, exist_ok=True)
 
 
-def _get_chunk_size(file_size_bytes: Optional[int]) -> int:
+def _get_chunk_size(file_size_bytes: int | None) -> int:
     """
     Determines a dynamic chunk size based on the file size.
     """
@@ -520,7 +526,7 @@ def _download_file(
     signed_url: str,
     local_path: str,
     file_description: str,
-    expected_size_bytes: Optional[int],
+    expected_size_bytes: int | None,
 ):
     """
     Downloads a file from a signed URL to a local path.

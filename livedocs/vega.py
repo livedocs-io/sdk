@@ -4,7 +4,6 @@ import altair as alt
 import polars as pl
 
 from livedocs.types import (
-    CacheInfo,
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
@@ -29,53 +28,10 @@ from livedocs.utils.common import (
 )
 
 
-def get_altair_datasource_query(datasource: ElementDataSource):
-    """
-    Prepares the DuckDB query for each datasource
-    """
-    match datasource["source_type"]:
-        case ElementDatasourceType.dataframe.value:
-            return f"SELECT * FROM {datasource['dataframe_info']['df_name']}"
-        case ElementDatasourceType.database_table.value:
-            if (
-                datasource["database_info"]["database_type"]
-                == DatabaseType.Bigquery.value
-            ):
-                return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 500000;"
-            elif (
-                datasource["database_info"]["database_type"]
-                == DatabaseType.Clickhouse.value
-            ):
-                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
-            elif datasource["database_info"]["database_type"] in {
-                DatabaseType.Postgres.value,
-                DatabaseType.Motherduck.value,
-            }:
-                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
-            elif (
-                datasource["database_info"]["database_type"]
-                == DatabaseType.Databricks.value
-            ):
-                return f'SELECT * FROM {datasource["database_table_info"]["catalog_name"]}.{datasource["database_table_info"]["schema_name"]}.{datasource["database_table_info"]["table_name"]} LIMIT 500000;'
-            else:
-                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
-        ###
-        case "file":
-            return (
-                f"SELECT * FROM read_csv_auto('{datasource['file_info']['file_name']}')"
-            )
-        ###
-
-        case _:
-            raise ValueError(
-                f"Unsupported datasource type: {datasource['source_type']}"
-            )
-
-
 def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
     """
     Returns a Vega spec for a given Livedocs chart configuration and a dataframe
-    retrieved using get_altair_datasource_query method. In production, the vegafusion
+    retrieved using get_query_for_datasource method. In production, the vegafusion
     data transformer should be enabled, although that obscures the spec.
 
     This method only delegates the spec generation to other more specific functions

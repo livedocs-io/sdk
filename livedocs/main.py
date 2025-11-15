@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Callable, Dict, List, Optional
+from typing import Callable, cast
 
 import pandas as pd
 import polars as pl
@@ -39,15 +39,18 @@ from livedocs.utils.chart_helpers import apply_chart_filters
 from livedocs.utils.clickhouse import process_clickhouse_schema
 from livedocs.utils.common import (
     _LIVEDOCS_PROTECTED_VARS,
-    _capture_exceptions,
     _download_file,
     _fetch_file_manifest,
     _get_dataframe_schema,
-    _persist_built_in_vars,
     _setup_dirs,
     _setup_sentry,
+    get_query_for_datasource,
     get_run_context,
     sanitize_sensitive_data,
+)
+from livedocs.utils.internals import (
+    livedocs_internal_instrument,
+    livedocs_internal_persist_built_in_vars,
 )
 from livedocs.utils.debug import debug
 from livedocs.utils.databricks import process_databricks_schema
@@ -62,10 +65,7 @@ from livedocs.utils.serialize import serializer
 from livedocs.utils.single_value_helpers import process_single_value
 from livedocs.utils.snowflake import process_snowflake_schema
 from livedocs.utils.table_helpers import apply_table_operations
-from livedocs.vega import create_vega_spec, get_altair_datasource_query
-
-
-_process_motherduck_schema = _process_postgres_schema
+from livedocs.vega import create_vega_spec
 
 
 @dataclass(frozen=True)
@@ -86,79 +86,72 @@ class Livedocs:
     livedocs.initialize(report_id, session_token)
     """
 
-    def __init__(self, config: Optional[LivedocsConfig] = None):
+    def __init__(self, config: LivedocsConfig | None = None):
         """
         Creates the Livedocs instance, setting up necessary components and configurations.
         """
         _setup_sentry()
         _setup_dirs()
 
-        self._config = config or LivedocsConfig()
+        self._config: LivedocsConfig = config or LivedocsConfig()
 
-        self._duckdb = DuckDBSingleton(
-            file_search_path=[os.getenv("LIVEDOCS_FILES_PATH")]
+        files_path = os.getenv("LIVEDOCS_FILES_PATH")
+        self._duckdb: DuckDBSingleton = DuckDBSingleton(
+            file_search_path=[files_path] if files_path is not None else []
         )
-        self._credential_store: Optional[CredentialStore] = None
-        self._secrets: Dict[str, WorkspaceSecret] = {}
-        self._built_in_vars: Dict[str, str] = {}
-        self._template_factory = lru_cache(maxsize=self._config.template_cache_size)(
-            self._compile_template
-        )
-        self._query_cache: Optional[QueryCache] = None
-        self.is_initialized = False
+        self._report_id: str | None = None
+        self._token: str | None = None
+        self._credential_store: CredentialStore | None = None
+        self._secrets: dict[str, WorkspaceSecret] = {}
+        self._built_in_vars: dict[str, str] = {}
 
-    def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
+        self._template_factory: Callable[[str], Template] = lru_cache(
+            maxsize=self._config.template_cache_size
+        )(Template)
+        self._query_cache: QueryCache | None = None
+        self.is_initialized: bool = False
+
+    def initialize(
+        self, report_id: str, token: str, client_id_token: str | None = None
+    ) -> None:
         """
         Initializes the Livedocs instance with the given report ID and token.
-        Called when the pod is initialized.
+        Called when the pod is initialized. If an optional client ID token is provided,
+        it will be used to initialize the SDK without needing to fetch anything from the backend.
 
         Args:
             report_id (str): The report ID.
             token (str): The session token.
+            client_id_token (str, optional): The client ID token.
         """
         with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
-            sentry_sdk.set_tag("report_id", report_id)
-            self._report_id = report_id
-            self._token = token
-            span = sentry_sdk.start_span(name="fetch credentials")
-            self._credential_store = self._config.credential_store_factory(
-                report_id, token
-            )
-            bundle = self._credential_store.load()
-            span.finish()
-            self.is_initialized = True
+            if not client_id_token:
+                sentry_sdk.set_tag("report_id", report_id)
+                self._report_id = report_id
+                self._token = token
+                span = sentry_sdk.start_span(name="fetch credentials")
+                self._credential_store = self._config.credential_store_factory(
+                    report_id, token
+                )
+                bundle = self._credential_store.load()
+                _ = span.finish()
+                self.is_initialized = True
 
-            self._secrets = {
-                key: secret for key, secret in bundle.workspace_secrets.items()
-            }
-            self._built_in_vars = {**bundle.built_in_vars}
-            self._query_cache = self._config.query_cache_factory(report_id, token)
+                self._secrets = {
+                    key: secret for key, secret in bundle.workspace_secrets.items()
+                }
+                self._built_in_vars = {**bundle.built_in_vars}
+                self._query_cache = self._config.query_cache_factory(report_id, token)
+            else:
+                self.is_initialized = True
 
-    def _require_store(self) -> CredentialStore:
-        if not self._credential_store:
-            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
-        return self._credential_store
+    """
+    #########################################################
+    # PYTHON CELL HELPER FUNCTIONS
+    #########################################################
+    """
 
-    def _get_database_connection(self, connector_id: str) -> DatabaseConnection:
-        store = self._require_store()
-        db = store.get_database(connector_id)
-        if db is None:
-            db = store.refresh().databases.get(connector_id)
-        if db is None:
-            raise ValueError(f"Database connector '{connector_id}' not found")
-        return db
-
-    def _get_database_details(
-        self, connector_id: str
-    ) -> tuple[DatabaseConnection, dict]:
-        model = self._get_database_connection(connector_id)
-        try:
-            parsed = json.loads(model.connection_details.get_secret_value())
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
-        return model, parsed
-
-    @_capture_exceptions
+    @livedocs_internal_instrument
     def set_var(self, key: str, value: str):
         """
         Sets a built-in variable.
@@ -168,10 +161,12 @@ class Livedocs:
             value (str): The variable value.
         """
         self._built_in_vars[key] = value
-        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        _ = livedocs_internal_persist_built_in_vars(
+            self._report_id, self._token, self._built_in_vars
+        )
 
-    @_capture_exceptions
-    def get_var(self, key: str) -> str:
+    @livedocs_internal_instrument
+    def get_var(self, key: str) -> str | None:
         """
         Gets the value of a built-in variable.
 
@@ -186,7 +181,7 @@ class Livedocs:
 
         return self._built_in_vars.get(key, None)
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     def unset_var(self, key: str):
         """
         Unsets a built-in variable.
@@ -195,10 +190,12 @@ class Livedocs:
             key (str): The variable key.
         """
         if key not in _LIVEDOCS_PROTECTED_VARS:
-            self._built_in_vars.pop(key, None)
-            _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+            _ = self._built_in_vars.pop(key, None)
+            _ = livedocs_internal_persist_built_in_vars(
+                self._report_id, self._token, self._built_in_vars
+            )
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     def clear_vars(self):
         """
         Clears all built-in variables.
@@ -209,10 +206,12 @@ class Livedocs:
             if k in _LIVEDOCS_PROTECTED_VARS
         }
         self._built_in_vars = protected_values
-        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        _ = livedocs_internal_persist_built_in_vars(
+            self._report_id, self._token, self._built_in_vars
+        )
 
-    @_capture_exceptions
-    def secrets(self, key, default_value="") -> str:
+    @livedocs_internal_instrument
+    def secrets(self, key: str, default_value: str = "") -> str:
         """
         Access user-defined secrets with default value if not found.
 
@@ -230,7 +229,7 @@ class Livedocs:
             return self._secrets[key].value.get_secret_value()
 
         try:
-            store = self._require_store()
+            store = self.helper_get_initialized_credentials()
         except RuntimeError:
             return default_value
 
@@ -243,7 +242,90 @@ class Livedocs:
 
         return default_value
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
+    def download_file(
+        self,
+        file_name: str | None = None,
+        file_id: str | None = None,
+        force_download: bool = False,
+        path: str | None = None,
+    ) -> str:
+        """
+        Downloads a file to a local path based on either its name or ID.
+
+        Parameters:
+            file_name (str | None): The name of the file to download. Must be provided exclusively if file_id is not specified.
+            file_id (str | None): The unique identifier of the file to download. Must be provided exclusively if file_name is not specified.
+            force_download (bool): If True, forces the file to be redownloaded and overwritten if it exists locally.
+            path (str | None): The directory path where the file will be stored.
+                                Defaults to the value of the environment variable 'LIVEDOCS_FILES_PATH'.
+
+        Returns:
+            str: The local file system path where the downloaded file is stored.
+
+        Raises:
+            RuntimeError: If the system is not initialized, or if an unexpected error occurs during the manifest retrieval or download process.
+            ValueError: If neither or both of 'file_name' and 'file_id' are provided, or if multiple files with the same name are found.
+            FileNotFoundError: If the file with the specified 'file_name' or 'file_id' does not exist on the remote server.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
+
+        if path is None:
+            path = os.getenv("LIVEDOCS_FILES_PATH")
+
+        if not (file_name or file_id) or (file_name and file_id):
+            raise ValueError("Exactly one of file_name or file_id must be provided.")
+
+        if path is None:
+            raise ValueError("Please provide a valid path to save the file.")
+
+        os.makedirs(path, exist_ok=True)
+
+        manifest_data = _fetch_file_manifest(
+            report_id=self._report_id,
+            token=self._token,
+            action="read",
+            bucket=GCSBucketType.USER_FILES,
+            file_id=file_id,
+            file_name=file_name,
+        )
+
+        authoritative_file_name = manifest_data.file_name
+        local_file_path = os.path.join(path, authoritative_file_name)
+        file_exists = os.path.exists(local_file_path)
+
+        if not force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' (ID: {manifest_data.file_id}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
+            )
+            return local_file_path
+
+        if force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' already exists locally at '{local_file_path}'. Overwriting."
+            )
+            os.remove(local_file_path)
+
+        signed_url = manifest_data.signed_url
+        expected_size_bytes = manifest_data.size if manifest_data.size else None
+
+        _download_file(
+            signed_url,
+            local_file_path,
+            file_description=authoritative_file_name,
+            expected_size_bytes=expected_size_bytes,
+        )
+
+        return local_file_path
+
+    """
+    #########################################################
+    # PRIVATE HELPER FUNCTIONS
+    #########################################################
+    """
+
+    @livedocs_internal_instrument
     @sentry_sdk.trace
     def query(
         self,
@@ -279,7 +361,7 @@ class Livedocs:
                 )
 
             # Plug in the Jinja variables
-            final_query = self.add_jinja_vars(query, context)
+            final_query = self.helper_render_jinja_template(query, context)
 
             # Run the actual queries
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
@@ -317,7 +399,7 @@ class Livedocs:
 
             return (df, payload)
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     @sentry_sdk.trace
     def save_to_database(self, dataframe: pl.DataFrame, str_save_config: str):
         with sentry_sdk.start_transaction(op="task", name="save to database"):
@@ -360,7 +442,7 @@ class Livedocs:
             else:
                 raise Exception("Unsupported database type")
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     @sentry_sdk.trace
     def process_raw_text(self, str_src: str, context: dict) -> str:
         """
@@ -375,34 +457,15 @@ class Livedocs:
         """
         with sentry_sdk.start_transaction(op="task", name="run text element"):
             src = json.loads(str_src)
-            return self.add_jinja_vars(src["html"], context)
+            return self.helper_render_jinja_template(src["html"], context)
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     def enrich_prompt(self, system, user, context: dict):
         enriched_prompt = {
-            "system": self.add_jinja_vars(system, context),
-            "user": self.add_jinja_vars(user, context),
+            "system": self.helper_render_jinja_template(system, context),
+            "user": self.helper_render_jinja_template(user, context),
         }
         return MsgPackDisplay(enriched_prompt)
-
-    def _compile_template(self, text: str) -> Template:
-        """Compile a Jinja template string. Wrapped so we can memoize easily."""
-
-        return Template(text)
-
-    def add_jinja_vars(self, text: str, context: dict) -> str:
-        """
-        Adds Jinja variables to the given text.
-
-        Args:
-            text (str): The text to process.
-            context (dict): The context for Jinja variables.
-
-        Returns:
-            str: The processed text with Jinja variables.
-        """
-        template = self._template_factory(text)
-        return template.render(context)
 
     def process_dependencies(
         self, dependencies: str, datasource: dict = None, globals_dict: dict = None
@@ -454,7 +517,7 @@ class Livedocs:
 
         return ctx
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     @sentry_sdk.trace
     def _get_vega_spec(
         self,
@@ -481,7 +544,7 @@ class Livedocs:
 
             # Run actual span
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            query = get_altair_datasource_query(datasource)
+            query = get_query_for_datasource(datasource, 50000)
 
             if (
                 datasource["source_type"] == "database_table"
@@ -492,7 +555,9 @@ class Livedocs:
                     db_connector_id = datasource["database_info"][
                         "database_connector_id"
                     ]
-                    _, parsed_credentials = self._get_database_details(db_connector_id)
+                    _, parsed_credentials = self.helper_get_database_details(
+                        db_connector_id
+                    )
                 except KeyError as e:
                     raise ValueError(f"Missing required information: {e}")
 
@@ -561,7 +626,7 @@ class Livedocs:
 
             return payload
 
-    @_capture_exceptions
+    @livedocs_internal_instrument
     @sentry_sdk.trace
     def _get_table_response(
         self,
@@ -589,7 +654,7 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="run table element"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
-            query = get_altair_datasource_query(datasource)
+            query = get_query_for_datasource(datasource)
             if (
                 datasource["source_type"] == "database_table"
                 and DatabaseType(datasource["database_info"]["database_type"])
@@ -599,7 +664,9 @@ class Livedocs:
                     db_connector_id = datasource["database_info"][
                         "database_connector_id"
                     ]
-                    _, parsed_credentials = self._get_database_details(db_connector_id)
+                    _, parsed_credentials = self.helper_get_database_details(
+                        db_connector_id
+                    )
                 except KeyError as e:
                     raise ValueError(f"Missing required information: {e}")
 
@@ -639,7 +706,8 @@ class Livedocs:
             post_span.finish()
             return payload
 
-    @_capture_exceptions
+    # DOOMED: when web-client hits relay server in standalone mode
+    @livedocs_internal_instrument
     @sentry_sdk.trace
     def _get_chart_schema(
         self, datasource_str: str, dataframe: pl.DataFrame = None
@@ -658,51 +726,29 @@ class Livedocs:
             datasource: ElementDataSource = json.loads(datasource_str)
 
             query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            query = get_query_for_datasource(datasource)
+            if query is None:
+                raise ValueError("Query is required")
+
             match ElementDatasourceType(datasource["source_type"]):
                 case ElementDatasourceType.database_table:
-                    if (
-                        DatabaseType(datasource["database_info"]["database_type"])
-                        == DatabaseType.Bigquery
-                    ):
-                        query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
-                    elif (
-                        DatabaseType(datasource["database_info"]["database_type"])
-                        == DatabaseType.Clickhouse
-                    ):
-                        query = f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
-                    elif DatabaseType(datasource["database_info"]["database_type"]) in {
-                        DatabaseType.Postgres,
-                        DatabaseType.Motherduck,
-                    }:
-                        query = f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 10'
-                    elif (
-                        DatabaseType(datasource["database_info"]["database_type"])
-                        == DatabaseType.Databricks
-                    ):
-                        query = f'SELECT * FROM {datasource["database_table_info"]["catalog_name"]}.{datasource["database_table_info"]["schema_name"]}.{datasource["database_table_info"]["table_name"]} LIMIT 10'
-                    else:
-                        query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
                     _, schema = self._query_database_with_schema(query, datasource)
-                    query_span.finish()
+                    _ = query_span.finish()
                 case ElementDatasourceType.file:
-                    file_name = datasource["file_info"]["file_name"]
-                    if datasource["file_info"]["file_type"] == "csv":
-                        query = f"SELECT * FROM read_csv_auto('{file_name}') LIMIT 10"
-                    elif datasource["file_info"]["file_type"] == "xlsx":
-                        query = f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}') LIMIT 10"
                     _, schema = self._query_file_with_schema(query, datasource)
-                    query_span.finish()
+                    _ = query_span.finish()
                 case ElementDatasourceType.dataframe:
                     if dataframe is not None and datasource is not None:
                         self._duckdb.conn.register(
                             datasource["dataframe_info"]["df_name"], dataframe
                         )
-                    query = f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT 10"
                     _, schema = self._query_dataframe_with_schema(query, datasource)
-                    query_span.finish()
+                    _ = query_span.finish()
                 case _:
-                    query_span.finish()
-                    return "Unknown or unsupported datasource type for chart schema"
+                    _ = query_span.finish()
+                    raise ValueError(
+                        f"Unsupported datasource type: {datasource['source_type']}"
+                    )
 
             post_span = sentry_sdk.start_span(name="post-processing")
             empty_chart = {
@@ -728,9 +774,73 @@ class Livedocs:
             empty_cache_info = CacheInfo(id="", status=CacheStatus.MISS)
             result = ChartResult(data=encoded, cache_info=empty_cache_info)
             payload = LivedocsResult(result)
-            post_span.finish()
+            _ = post_span.finish()
 
             return payload
+
+    @livedocs_internal_instrument
+    def process_single_value(self, config: str, context: dict = None) -> dict:
+        """
+        Process a SingleValue element with formatting and comparison calculations
+
+        Args:
+            config (str): JSON string containing single value configuration
+            context (dict, optional): Context containing variables. Defaults to None.
+
+        Returns:
+            JsonDisplay: Formatted result with main value and comparison data
+        """
+        result = process_single_value(config, context)
+        return JsonDisplay(result)
+
+    """
+    #########################################################
+    # DOOMED TOP LEVEL FUNCTIONS
+    #########################################################
+    """
+
+    def helper_get_initialized_credentials(self) -> CredentialStore:
+        if not self._credential_store:
+            raise RuntimeError(
+                "Livedocs is not initialized with report_id and token. Call initialize() with report_id and token first."
+            )
+        return self._credential_store
+
+    def helper_get_database_connection(self, connector_id: str) -> DatabaseConnection:
+        store = self.helper_get_initialized_credentials()
+        db = store.get_database(connector_id)
+        if db is None:
+            db = store.refresh().databases.get(connector_id)
+        if db is None:
+            raise ValueError(f"Database connector '{connector_id}' not found")
+        return db
+
+    # DOOMED: when we move to a single query method
+    def helper_get_database_details(
+        self, connector_id: str
+    ) -> tuple[DatabaseConnection, dict[str, str]]:
+        model = self.helper_get_database_connection(connector_id)
+        try:
+            parsed = cast(
+                dict[str, str], json.loads(model.connection_details.get_secret_value())
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+        return model, parsed
+
+    def helper_render_jinja_template(self, text: str, context: dict[str, str]) -> str:
+        """
+        Adds Jinja variables to the given text.
+
+        Args:
+            text (str): The text to process.
+            context (dict[str, str]): The context for Jinja variables.
+
+        Returns:
+            str: The processed text with Jinja variables.
+        """
+        template = self._template_factory(text)
+        return template.render(context)
 
     def _query_with_schema(
         self,
@@ -839,7 +949,9 @@ class Livedocs:
         """
         Queries a Snowflake database.
         """
-        return snowflake_datasource.query(query, datasource, self._get_database_details)
+        return snowflake_datasource.query(
+            query, datasource, self.helper_get_database_details
+        )
 
     def _query_clickhouse(
         self, query: str, datasource: ElementDataSource
@@ -855,7 +967,7 @@ class Livedocs:
             tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
         """
         return clickhouse_datasource.query(
-            query, datasource, self._get_database_details
+            query, datasource, self.helper_get_database_details
         )
 
     def _query_databricks(
@@ -872,7 +984,7 @@ class Livedocs:
             tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
         """
         return databricks_datasource.query(
-            query, datasource, self._get_database_details
+            query, datasource, self.helper_get_database_details
         )
 
     def _build_postgres_connection_string(self, parsed_credentials: dict) -> str:
@@ -880,7 +992,7 @@ class Livedocs:
 
     def _get_postgres_connection_string(self, datasource: ElementDataSource) -> str:
         return postgres_datasource.get_connection_string(
-            datasource, self._get_database_details
+            datasource, self.helper_get_database_details
         )
 
     def _query_postgres(
@@ -898,7 +1010,9 @@ class Livedocs:
             tuple[pl.DataFrame, pl.DataFrame]: The resulting Polars DataFrame and a
             schema DataFrame with column metadata.
         """
-        return postgres_datasource.query(query, datasource, self._get_database_details)
+        return postgres_datasource.query(
+            query, datasource, self.helper_get_database_details
+        )
 
     def _query_motherduck(
         self, query: str, datasource: ElementDataSource
@@ -916,7 +1030,7 @@ class Livedocs:
             schema DataFrame with column metadata.
         """
         return motherduck_datasource.query(
-            query, datasource, self._get_database_details
+            query, datasource, self.helper_get_database_details
         )
 
     def _query_bigquery(
@@ -933,7 +1047,9 @@ class Livedocs:
         Returns:
             pl.DataFrame: The resulting DataFrame.
         """
-        return bigquery_datasource.query(query, datasource, self._get_database_details)
+        return bigquery_datasource.query(
+            query, datasource, self.helper_get_database_details
+        )
 
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         """
@@ -1037,10 +1153,10 @@ class Livedocs:
 
         Returns:
             Error, Result and Metrics in a tuple
-            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+            tuple[Result (dict), Metrics (dict), Error (str)]
         """
         return postgres_datasource.write_to_postgres(
-            df, save_config, self._get_database_details
+            df, save_config, self.helper_get_database_details
         )
 
     def _write_to_motherduck(self, df: pl.DataFrame, save_config: DBSaveConfig):
@@ -1053,10 +1169,10 @@ class Livedocs:
 
         Returns:
             Error, Result and Metrics in a tuple
-            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+            tuple[Result (dict), Metrics (dict), Error (str)]
         """
         return motherduck_datasource.write_to_motherduck(
-            df, save_config, self._get_database_details
+            df, save_config, self.helper_get_database_details
         )
 
     def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
@@ -1069,10 +1185,10 @@ class Livedocs:
 
         Returns:
             Error, Result and Metrics in a tuple
-            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+            tuple[Result (dict), Metrics (dict), Error (str)]
         """
         return bigquery_datasource.write_to_bigquery(
-            df, save_config, self._get_database_details
+            df, save_config, self.helper_get_database_details
         )
 
     def _write_to_snowflake(self, df: pl.DataFrame, save_config: DBSaveConfig):
@@ -1085,10 +1201,10 @@ class Livedocs:
 
         Returns:
             Error, Result and Metrics in a tuple
-            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+            tuple[Result (dict), Metrics (dict), Error (str)]
         """
         return snowflake_datasource.write_to_snowflake(
-            df, save_config, self._get_database_details
+            df, save_config, self.helper_get_database_details
         )
 
     def _write_to_clickhouse(self, df: pl.DataFrame, save_config: DBSaveConfig):
@@ -1101,13 +1217,13 @@ class Livedocs:
 
         Returns:
             Error, Result and Metrics in a tuple
-            Tuple[Result (Dict), Metrics (Dict), Error (str)]
+            tuple[Result (dict), Metrics (dict), Error (str)]
         """
         return clickhouse_datasource.write_to_clickhouse(
-            df, save_config, self._get_database_details
+            df, save_config, self.helper_get_database_details
         )
 
-    def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
+    def _get_dataframe_schema(self, df: pl.DataFrame) -> list[Schema]:
         """
         Gets the schema of any given Polars DataFrame.
 
@@ -1115,7 +1231,7 @@ class Livedocs:
             df (pl.DataFrame): The DataFrame to get the schema from.
 
         Returns:
-            List[Schema]: The schema as a list of Schema objects.
+            list[Schema]: The schema as a list of Schema objects.
         """
         schema = []
 
@@ -1165,92 +1281,3 @@ class Livedocs:
             raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
 
         return json.dumps(schema, default=str, separators=(",", ":"))
-
-    @_capture_exceptions
-    def process_single_value(self, config: str, context: dict = None) -> dict:
-        """
-        Process a SingleValue element with formatting and comparison calculations
-
-        Args:
-            config (str): JSON string containing single value configuration
-            context (dict, optional): Context containing variables. Defaults to None.
-
-        Returns:
-            JsonDisplay: Formatted result with main value and comparison data
-        """
-        result = process_single_value(config, context)
-        return JsonDisplay(result)
-
-    @_capture_exceptions
-    def download_file(
-        self,
-        file_name: Optional[str] = None,
-        file_id: Optional[str] = None,
-        force_download: bool = False,
-        path: Optional[str] = os.getenv("LIVEDOCS_FILES_PATH"),
-    ) -> str:
-        """
-        Downloads a file to a local path based on either its name or ID.
-
-        Parameters:
-            file_name (Optional[str]): The name of the file to download. Must be provided exclusively if file_id is not specified.
-            file_id (Optional[str]): The unique identifier of the file to download. Must be provided exclusively if file_name is not specified.
-            force_download (bool): If True, forces the file to be redownloaded and overwritten if it exists locally.
-            path (Optional[str]): The directory path where the file will be stored.
-                                Defaults to the value of the environment variable 'LIVEDOCS_FILES_PATH'.
-
-        Returns:
-            str: The local file system path where the downloaded file is stored.
-
-        Raises:
-            RuntimeError: If the system is not initialized, or if an unexpected error occurs during the manifest retrieval or download process.
-            ValueError: If neither or both of 'file_name' and 'file_id' are provided, or if multiple files with the same name are found.
-            FileNotFoundError: If the file with the specified 'file_name' or 'file_id' does not exist on the remote server.
-        """
-        if not self.is_initialized:
-            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
-
-        if not (file_name or file_id) or (file_name and file_id):
-            raise ValueError("Exactly one of file_name or file_id must be provided.")
-
-        if path is None:
-            raise ValueError("Please provide a valid path to save the file.")
-
-        os.makedirs(path, exist_ok=True)
-
-        manifest_data = _fetch_file_manifest(
-            report_id=self._report_id,
-            token=self._token,
-            action="read",
-            bucket=GCSBucketType.USER_FILES,
-            file_id=file_id,
-            file_name=file_name,
-        )
-
-        authoritative_file_name = manifest_data.file_name
-        local_file_path = os.path.join(path, authoritative_file_name)
-        file_exists = os.path.exists(local_file_path)
-
-        if not force_download and file_exists:
-            print(
-                f"File '{authoritative_file_name}' (ID: {manifest_data.file_id}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
-            )
-            return local_file_path
-
-        if force_download and file_exists:
-            print(
-                f"File '{authoritative_file_name}' already exists locally at '{local_file_path}'. Overwriting."
-            )
-            os.remove(local_file_path)
-
-        signed_url = manifest_data.signed_url
-        expected_size_bytes = manifest_data.size if manifest_data.size else None
-
-        _download_file(
-            signed_url,
-            local_file_path,
-            file_description=authoritative_file_name,
-            expected_size_bytes=expected_size_bytes,
-        )
-
-        return local_file_path
