@@ -76,6 +76,7 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        connection = None
         try:
             qualified_table_name = f"{parsed_credentials['database']}.{save_config['schema_name']}.{save_config['table_name']}"
             connection = self._create_connection(parsed_credentials)
@@ -96,7 +97,7 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
                 )
             output = QueryResult(
                 data=result["result"],
-                metadata=QueryResultMetadata(  # type: ignore[typeddict-item]
+                metadata=QueryResultMetadata(
                     limit=50,
                     offset=0,
                     total_rows=result["rows_written"],
@@ -108,6 +109,9 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
             return payload
         except Exception as e:
             raise RuntimeError(sanitize_sensitive_data(f"DBSave Error: {e}"))
+        finally:
+            if connection is not None:
+                connection.close()
 
     def teardown(self) -> None:
         pass

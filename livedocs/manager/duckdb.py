@@ -12,8 +12,10 @@ class DuckDBSingleton:
 
             # Set configuration options
             if file_search_path:
+                # Escape single quotes by doubling them to prevent SQL injection
+                escaped_paths = [path.replace("'", "''") for path in file_search_path]
                 _ = cls._instance.conn.execute(
-                    f"SET file_search_path = '{','.join(file_search_path)}';"
+                    f"SET file_search_path = '{','.join(escaped_paths)}';"
                 )
 
             # cls._instance.conn.execute("SET enable_http_logging=true;")

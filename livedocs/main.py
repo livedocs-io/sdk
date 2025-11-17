@@ -38,7 +38,6 @@ from livedocs.datasources.bigquery import BigQueryDatasourceConnector
 from livedocs.utils.cells.chart_helpers import apply_chart_filters
 from livedocs.datasources.clickhouse import ClickHouseDatasourceConnector
 from livedocs.utils.common import (
-    _LIVEDOCS_PROTECTED_VARS,
     _download_file,
     _get_dataframe_schema,
     _setup_dirs,
@@ -52,6 +51,7 @@ from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data,
     livedocs_internal_setup_sentry,
 )
+from livedocs.utils.cells.chart_helpers import _LIVEDOCS_PROTECTED_VARS
 from livedocs.utils.common import debug
 from livedocs.datasources.databricks import DatabricksDatasourceConnector
 from livedocs.datasources import bigquery as bigquery_datasource
@@ -524,7 +524,6 @@ class Livedocs:
                         f"Unable to find {dep_name}, ensure the element where you declared it "
                         "has been run at least once"
                     ) from e
-
         return ctx
 
     @livedocs_internal_instrument

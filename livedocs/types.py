@@ -10,8 +10,6 @@ from IPython.core.display import DisplayObject
 from polars import DataFrame
 from pydantic import BaseModel, SecretStr, model_validator
 
-from livedocs.utils.common import serializer
-
 
 class GCSBucketType(str, Enum):
     USER_FILES = "user-files"
@@ -93,6 +91,8 @@ class QueryResult(LivedocsResultInterface):
         self.metadata = metadata
 
     def serialize(self) -> str:
+        from livedocs.utils.common import serializer
+
         json_str = json.dumps(
             self.data.to_dicts(), default=serializer, separators=(",", ":")
         )
@@ -167,6 +167,8 @@ class MsgPackDisplay(DisplayObject):
 
     def _pack_data(self) -> bytes:
         """Pack the data using msgpack"""
+        from livedocs.utils.common import serializer
+
         return msgpack.packb(self.data, default=serializer)
 
     def _repr_mimebundle_(self, include=None, exclude=None):
@@ -206,7 +208,7 @@ class JsonDisplay(DisplayObject):
 
 
 class UserMeta(BaseModel):
-    styleSettings: dict
+    styleSettings: dict[str, Any]
     chartType: str
     colorGroups: dict[str, Any] | None = None
     pieSettings: dict[str, Any] | None = None
@@ -236,7 +238,7 @@ class UserMeta(BaseModel):
 
 class VegaSpec(BaseModel):
     spec: str
-    schema: dict
+    schema: dict[str, Any]
     status: str
 
     @model_validator(mode="before")
@@ -336,7 +338,7 @@ class Credentials(BaseModel):
 class Schema(TypedDict):
     name: str
     type: str
-    children: List
+    children: list["Schema"]
 
 
 class DBSaveConfig(TypedDict):
