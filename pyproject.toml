@@ -40,7 +40,7 @@ homepage = "https://github.com/livedocs-io/vm-lib"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["livedocs"]
+include = ["livedocs", "livedocs.*"]
 
 [project.optional-dependencies]
 test = ["flask", "flask-cors"]
