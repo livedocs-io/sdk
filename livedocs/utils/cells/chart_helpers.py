@@ -1,10 +1,187 @@
 import polars as pl
 import re
 import dateutil.parser
-from typing import Optional, Any
+from typing import Any
+import altair as alt
+from livedocs.types import Spec, StyleSettings
 
-from livedocs.types import Spec
-from livedocs.utils.debug import debug
+
+_LIVEDOCS_COLORS = [
+    "#713E5A",
+    "#D57A66",
+    "#6564A6",
+    "#CBD20F",
+    "#F1BB4F",
+    "#22577A",
+    "#63A375",
+    "#E46B62",
+]
+
+_DARKMODE_COLORS = {
+    "background": "#0C0A09",
+    "grid lines": "#292524",
+    "axis labels": "#93715A",
+    "tick labels": "#D3C3B6",
+}
+
+REF_STROKE_DASH = {"solid": [0, 0], "dashed": [5, 5], "dotted": [2, 5]}
+
+REF_BASELINE = {
+    "outside": "bottom",
+    "top-left": "bottom",
+    "top-right": "bottom",
+    "bottom-left": "top",
+    "bottom-right": "top",
+}
+REF_ALIGN = {
+    "outside": "center",
+    "top-left": "right",
+    "top-right": "left",
+    "bottom-left": "right",
+    "bottom-right": "left",
+}
+
+_LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
+
+
+def _get_color(index: int) -> str:
+    return _LIVEDOCS_COLORS[index % len(_LIVEDOCS_COLORS)]
+
+
+def _get_darkmode_color(feature: str) -> str:
+    return _DARKMODE_COLORS.get(feature, "")
+
+
+def _get_color_group_key(value):
+    if value is None or value == "":
+        return "Unnamed"
+    return str(value)
+
+
+def _get_user_defined_color(custom_key, value, style_settings, color_index) -> str:
+    mark_settings = style_settings.get("markSettings", {})
+    color_settings = mark_settings.get(custom_key, {}).get("color", {})
+
+    if color_settings.get("mode") == "all_fields":
+        return color_settings.get("hex", {}).get(value, _get_color(color_index))
+    return _get_color(color_index)
+
+
+def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
+    mark_settings = style_settings.get("markSettings", {})
+    opacity_settings = mark_settings.get(custom_key, {}).get("opacity", {})
+
+    if opacity_settings.get("mode") == "all_fields":
+        return alt.value(int(opacity_settings.get("value", "100")) / 100)
+    elif opacity_settings.get("mode") == "based_on_field":
+        opacity_field = opacity_settings.get("field", "no-field-found")
+        return alt.Opacity(
+            field=opacity_field
+            if opacity_field != "" or opacity_field != "no-field-found"
+            else fallback_field[0],
+            type="quantitative"
+            if opacity_field != "" or opacity_field != "no-field-found"
+            else fallback_field[1],
+        )
+    return alt.value(1)
+
+
+def get_axis_format(timeunit: str) -> str:
+    format_map = {
+        "year": "%Y",
+        "yearquarter": "%Y Q%q",
+        "yearmonth": "%b %Y",
+        "yearweek": "%Y W%W",
+        "yearmonthdate": "%b %d, %Y",
+        "yearmonthdatehours": "%b %d, %Y %I:%M %p",
+        "yearmonthdatehoursminutes": "%b %d, %Y %I:%M",
+        "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
+    }
+    return format_map.get(timeunit, "")
+
+
+def iso_to_alt_datetime(iso_string):
+    """Convert ISO date string to alt.DateTime object"""
+    dt = dateutil.parser.parse(iso_string)
+    return alt.DateTime(
+        year=dt.year,
+        month=dt.month,
+        date=dt.day,
+        hours=dt.hour,
+        minutes=dt.minute,
+        seconds=dt.second,
+    )
+
+
+def num_converter(num):
+    try:
+        return float(num)
+    except ValueError:
+        pass
+
+    try:
+        return int(num)
+    except ValueError:
+        pass
+
+    try:
+        return iso_to_alt_datetime(num)
+    except ValueError:
+        pass
+
+    return num
+
+
+"""
+Generates an altair line plot and altair label plot to layer on base plot
+"""
+
+
+def create_line(
+    df: pl.DataFrame,
+    axis: str,  # "x" or "y"
+    style_settings: StyleSettings,
+):
+    if axis not in ["x", "y"]:
+        raise ValueError("Invalid value for 'axis'. Expected 'x' or 'y'.")
+
+    ref_list = style_settings.get(f"{axis}Axis", {}).get("referenceLines", [])
+    ref_chart_list = []
+
+    if len(ref_list) > 0:
+        for line in ref_list:
+            val = num_converter(line.get("value", ""))
+
+            if line["labelPosition"] == "none":
+                line["labelPosition"] = "outside"
+
+            ref_line = (
+                alt.Chart(df)
+                .mark_rule(
+                    color=line.get("color", "#93715A"),
+                    strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
+                    strokeWidth=line.get("lineWidth", 1),
+                )
+                .encode(**{axis: alt.datum(val)})
+            )
+
+            ref_chart_list.append(ref_line)
+
+            label = ref_line.mark_text(
+                baseline=REF_BASELINE[line.get("labelPosition", "outside")],
+                align=REF_ALIGN[line.get("labelPosition", "outside")],
+                size=12,
+                angle=line.get("labelAngle", 0),
+                dx=-5,
+                dy=5.5,
+            ).encode(
+                text=alt.value(line.get("label", "Reference Line")),
+                **({"y": alt.value(0)} if axis == "x" else {"x": alt.value(0)}),
+            )
+
+            ref_chart_list.append(label)
+
+    return ref_chart_list
 
 
 def apply_chart_filters(

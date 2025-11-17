@@ -33,22 +33,6 @@ class BaseDatasourceConnector(ABC):
         self._initialized: bool = True
 
     @abstractmethod
-    def init(
-        self,
-        get_database_details: Callable[[str], tuple[object, dict[str, str]]],
-    ) -> Any:
-        """
-        Initialize the datasource connector
-
-        Args:
-            get_database_details: Callable to retrieve database credentials
-
-        Returns:
-            An instance of the connection object of whatever the connector is connecting to
-        """
-        pass
-
-    @abstractmethod
     def read(
         self,
         query: str,

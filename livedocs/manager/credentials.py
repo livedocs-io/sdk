@@ -3,7 +3,7 @@ import time
 from typing import Any
 
 from livedocs.types import Credentials, DatabaseConnection, WorkspaceSecret
-from livedocs.utils.internals import livedocs_internal_fetch_credentials
+from livedocs.utils.lib.internals import livedocs_internal_fetch_credentials
 
 
 class CredentialStore:

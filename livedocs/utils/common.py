@@ -1,63 +1,22 @@
 import os
-import re
-from datetime import datetime
-from functools import lru_cache, wraps
-from typing import Any
+from datetime import date, datetime, time
 
-import altair as alt
-import dateutil.parser
+
 import polars as pl
 import requests
-import sentry_sdk
 from tqdm.auto import tqdm
+import base64
+import decimal
+import uuid
+import json
+
+from IPython.display import display
 
 from livedocs.types import (
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
-    FileManifest,
-    FileManifestAction,
-    GCSBucketType,
-    StyleSettings,
 )
-
-_LIVEDOCS_COLORS = [
-    "#713E5A",
-    "#D57A66",
-    "#6564A6",
-    "#CBD20F",
-    "#F1BB4F",
-    "#22577A",
-    "#63A375",
-    "#E46B62",
-]
-
-_DARKMODE_COLORS = {
-    "background": "#0C0A09",
-    "grid lines": "#292524",
-    "axis labels": "#93715A",
-    "tick labels": "#D3C3B6",
-}
-
-_LIVEDOCS_PROTECTED_VARS = {"run_context", "last_scheduled_run"}
-
-
-REF_STROKE_DASH = {"solid": [0, 0], "dashed": [5, 5], "dotted": [2, 5]}
-
-REF_BASELINE = {
-    "outside": "bottom",
-    "top-left": "bottom",
-    "top-right": "bottom",
-    "bottom-left": "top",
-    "bottom-right": "top",
-}
-REF_ALIGN = {
-    "outside": "center",
-    "top-left": "right",
-    "top-right": "left",
-    "bottom-left": "right",
-    "bottom-right": "left",
-}
 
 
 def get_run_context() -> str:
@@ -72,6 +31,53 @@ def get_run_context() -> str:
         case _:
             current_run_context = "unknown_run_context"
     return current_run_context
+
+
+def debug(label: str, data=None):
+    """Sends data to the middleman for pretty-printing in its logs."""
+    try:
+        content_str = json.dumps(data, indent=2, default=str, ensure_ascii=False)
+        mime_type = "application/json"
+    except Exception:
+        content_str = str(data)
+        mime_type = "text/plain"
+    display(
+        {mime_type: content_str},
+        metadata={
+            "middleman_debug": True,
+            "middleman_debug_label": label,
+        },
+        raw=True,
+    )
+
+
+def serializer(obj):
+    """
+    Serializes an object to a JSON-compatible format.
+    """
+
+    if obj is None:
+        return None
+    elif isinstance(obj, bool):
+        return obj
+    elif isinstance(obj, (datetime, date, time)):
+        return obj.isoformat()
+    elif isinstance(obj, decimal.Decimal):
+        return str(obj)
+    elif isinstance(obj, uuid.UUID):
+        return str(obj)
+    elif isinstance(obj, bytes):
+        return base64.b64encode(obj).decode("utf-8")
+    elif isinstance(obj, dict):
+        return {k: serializer(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serializer(item) for item in obj]
+    elif isinstance(obj, (set, tuple, frozenset)):
+        return [serializer(item) for item in obj]
+    elif isinstance(obj, complex):
+        return {"real": obj.real, "imag": obj.imag}
+    else:
+        return str(obj)
 
 
 def get_query_for_datasource(
@@ -132,174 +138,6 @@ def get_query_for_datasource(
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"
             )
-
-
-def _get_color(index: int) -> str:
-    return _LIVEDOCS_COLORS[index % len(_LIVEDOCS_COLORS)]
-
-
-def _get_darkmode_color(feature: str) -> str:
-    return _DARKMODE_COLORS.get(feature, "")
-
-
-def _get_color_group_key(value):
-    if value is None or value == "":
-        return "Unnamed"
-    return str(value)
-
-
-def _get_user_defined_color(custom_key, value, style_settings, color_index) -> str:
-    mark_settings = style_settings.get("markSettings", {})
-    color_settings = mark_settings.get(custom_key, {}).get("color", {})
-
-    if color_settings.get("mode") == "all_fields":
-        return color_settings.get("hex", {}).get(value, _get_color(color_index))
-    return _get_color(color_index)
-
-
-def _get_user_defined_opacity(custom_key, style_settings, fallback_field):
-    mark_settings = style_settings.get("markSettings", {})
-    opacity_settings = mark_settings.get(custom_key, {}).get("opacity", {})
-
-    if opacity_settings.get("mode") == "all_fields":
-        return alt.value(int(opacity_settings.get("value", "100")) / 100)
-    elif opacity_settings.get("mode") == "based_on_field":
-        opacity_field = opacity_settings.get("field", "no-field-found")
-        return alt.Opacity(
-            field=opacity_field
-            if opacity_field != "" or opacity_field != "no-field-found"
-            else fallback_field[0],
-            type="quantitative"
-            if opacity_field != "" or opacity_field != "no-field-found"
-            else fallback_field[1],
-        )
-    return alt.value(1)
-
-
-@lru_cache(maxsize=128)
-def _fetch_file_manifest(
-    report_id: str,
-    token: str,
-    action: FileManifestAction,
-    bucket: GCSBucketType,
-    file_id: str | None = None,
-    file_name: str | None = None,
-) -> FileManifest:
-    CORE_URL = os.getenv("CORE_BASE_URL")
-    if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
-
-    if not file_id and not file_name:
-        raise ValueError(
-            "Either file_id or file_name must be provided to fetch manifest."
-        )
-
-    if action not in {"write", "read"}:
-        raise ValueError("Invalid action. Must be 'write' or 'read'.")
-
-    payload = {
-        "action": action,
-        "bucket": bucket,
-    }
-
-    if file_id:
-        payload["file_id"] = file_id
-    if file_name:
-        payload["file_name"] = file_name
-
-    try:
-        api_url = f"{CORE_URL}/v1/manifest/{report_id}"
-        response = requests.post(
-            api_url,
-            json=payload,
-            headers={"authorization": token, "Content-Type": "application/json"},
-        )
-
-        response.raise_for_status()
-        return FileManifest(**response.json())
-    except requests.exceptions.HTTPError as e:
-        if e.response is not None:
-            status_code = e.response.status_code
-            try:
-                error_response_json = e.response.json()
-                api_error_message = error_response_json.get("message", e.response.text)
-            except ValueError:
-                api_error_message = e.response.text
-            api_error_message = sanitize_sensitive_data(api_error_message)
-
-            if status_code == 404:
-                identifier = file_id or file_name
-                raise FileNotFoundError(
-                    f"File '{identifier}' not found. Error: {api_error_message}"
-                ) from e
-            elif status_code == 409:  # Should only occur if file_name was used
-                conflicting_files_info = ""
-                if "files" in error_response_json and isinstance(
-                    error_response_json["files"], list
-                ):
-                    details = []
-                    for f_info in error_response_json["files"]:
-                        details.append(
-                            f"  - ID: {f_info.get('id')}, Created: {f_info.get('created_at', 'N/A')}, Size: {f_info.get('size', 'N/A')} bytes"
-                        )
-                    if details:
-                        conflicting_files_info = (
-                            "\nConflicting file details:\n" + "\n".join(details)
-                        )
-
-                raise ValueError(
-                    f"Ambiguous file name: '{file_name}'. Multiple files with this name exist.{conflicting_files_info}\n"
-                    f"To resolve this, you can call livedocs.get_file(file_id='file_id') to download a specific file by ID."
-                ) from e
-            else:
-                raise RuntimeError(
-                    sanitize_sensitive_data(
-                        f"Failed to get file manifest for '{file_name}'. Status: {status_code}. Error: {api_error_message}"
-                    )
-                )
-        else:
-            raise RuntimeError(
-                sanitize_sensitive_data(
-                    f"Failed to get file manifest for '{file_name}': {e}"
-                )
-            )
-    except Exception as e:
-        raise RuntimeError(
-            sanitize_sensitive_data(
-                f"An unexpected error occurred while fetching manifest for '{file_name}': {e}"
-            )
-        )
-
-
-_URI_CREDENTIALS_RE = re.compile(
-    r"([a-zA-Z][a-zA-Z0-9+\-.]*://)([^:@/]+):([^@]+)@", re.IGNORECASE
-)
-_KEY_VALUE_RE = re.compile(
-    r"(?P<prefix>(?:^|[^a-zA-Z0-9_])(?:password|secret|token|api[_-]?key|private_key)\s*(?:=|:)\s*)(?P<value>[^\s,;]+)",
-    re.IGNORECASE,
-)
-_JSON_SECRET_RE = re.compile(
-    r'("(?P<key>[^"]*(?:password|secret|token|private_key|apiKey)[^"]*)"\s*:\s*")(?P<value>[^"]*)(")',
-    re.IGNORECASE,
-)
-_PEM_RE = re.compile(r"-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----", re.IGNORECASE)
-
-
-def sanitize_sensitive_data(message: str | None) -> str:
-    """
-    Best-effort scrubbing of secrets from error/log messages.
-    Redacts credentials in URIs, obvious password/secret key patterns,
-    and PEM/private key blobs.
-    """
-    if not message:
-        return ""
-
-    sanitized = _URI_CREDENTIALS_RE.sub(r"\1***:***@", message)
-    sanitized = _KEY_VALUE_RE.sub(r"\g<prefix>***", sanitized)
-    sanitized = _JSON_SECRET_RE.sub(r'\1***"', sanitized)
-    sanitized = _PEM_RE.sub("-----REDACTED PRIVATE KEY-----", sanitized)
-
-    return sanitized
 
 
 def _get_dataframe_schema(df: pl.DataFrame) -> dict[str, str]:
@@ -372,123 +210,6 @@ def _get_dataframe_schema(df: pl.DataFrame) -> dict[str, str]:
     column_types = {col: map_column_type(df[col]) for col in df.columns}
 
     return column_types
-
-
-def get_axis_format(timeunit: str) -> str:
-    format_map = {
-        "year": "%Y",
-        "yearquarter": "%Y Q%q",
-        "yearmonth": "%b %Y",
-        "yearweek": "%Y W%W",
-        "yearmonthdate": "%b %d, %Y",
-        "yearmonthdatehours": "%b %d, %Y %I:%M %p",
-        "yearmonthdatehoursminutes": "%b %d, %Y %I:%M",
-        "yearmonthdatehoursminutesseconds": "%b %d, %Y %I:%M:%S",
-    }
-    return format_map.get(timeunit, "")
-
-
-def iso_to_alt_datetime(iso_string):
-    """Convert ISO date string to alt.DateTime object"""
-    dt = dateutil.parser.parse(iso_string)
-    return alt.DateTime(
-        year=dt.year,
-        month=dt.month,
-        date=dt.day,
-        hours=dt.hour,
-        minutes=dt.minute,
-        seconds=dt.second,
-    )
-
-
-def num_converter(num):
-    try:
-        return float(num)
-    except ValueError:
-        pass
-
-    try:
-        return int(num)
-    except ValueError:
-        pass
-
-    try:
-        return iso_to_alt_datetime(num)
-    except ValueError:
-        pass
-
-    return num
-
-
-"""
-Generates an altair line plot and altair label plot to layer on base plot
-"""
-
-
-def create_line(
-    df: pl.DataFrame,
-    axis: str,  # "x" or "y"
-    style_settings: StyleSettings,
-):
-    if axis not in ["x", "y"]:
-        raise ValueError("Invalid value for 'axis'. Expected 'x' or 'y'.")
-
-    ref_list = style_settings.get(f"{axis}Axis", {}).get("referenceLines", [])
-    ref_chart_list = []
-
-    if len(ref_list) > 0:
-        for line in ref_list:
-            val = num_converter(line.get("value", ""))
-
-            if line["labelPosition"] == "none":
-                line["labelPosition"] = "outside"
-
-            ref_line = (
-                alt.Chart(df)
-                .mark_rule(
-                    color=line.get("color", "#93715A"),
-                    strokeDash=REF_STROKE_DASH[line.get("lineStyle", "solid")],
-                    strokeWidth=line.get("lineWidth", 1),
-                )
-                .encode(**{axis: alt.datum(val)})
-            )
-
-            ref_chart_list.append(ref_line)
-
-            label = ref_line.mark_text(
-                baseline=REF_BASELINE[line.get("labelPosition", "outside")],
-                align=REF_ALIGN[line.get("labelPosition", "outside")],
-                size=12,
-                angle=line.get("labelAngle", 0),
-                dx=-5,
-                dy=5.5,
-            ).encode(
-                text=alt.value(line.get("label", "Reference Line")),
-                **({"y": alt.value(0)} if axis == "x" else {"x": alt.value(0)}),
-            )
-
-            ref_chart_list.append(label)
-
-    return ref_chart_list
-
-
-def _setup_sentry():
-    """
-    Initializes Sentry for error tracking and performance monitoring.
-    """
-    dsn = os.getenv("VMLIB_SENTRY_DSN")
-    if not dsn:
-        return
-
-    try:
-        sentry_sdk.init(
-            dsn=dsn,
-            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            environment=os.getenv("APP_ENV"),
-        )
-    except Exception as e:
-        raise RuntimeError("Failed to initialize Sentry") from e
 
 
 def _setup_dirs():

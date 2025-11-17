@@ -10,7 +10,7 @@ from IPython.core.display import DisplayObject
 from polars import DataFrame
 from pydantic import BaseModel, SecretStr, model_validator
 
-from livedocs.utils.serialize import serializer
+from livedocs.utils.common import serializer
 
 
 class GCSBucketType(str, Enum):

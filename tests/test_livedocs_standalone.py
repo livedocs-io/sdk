@@ -7,7 +7,7 @@ import unittest
 import polars as pl
 
 from livedocs import Livedocs, LivedocsConfig
-from livedocs.cache import QueryCache
+from livedocs.utils.lib.cache import QueryCache
 from livedocs.manager.credentials import StaticCredentialStore
 from livedocs.types import CacheStatus, Credentials
 

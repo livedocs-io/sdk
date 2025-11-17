@@ -11,7 +11,7 @@ import polars as pl
 import sentry_sdk
 from jinja2 import Template
 
-from livedocs.cache import QueryCache
+from livedocs.utils.lib.cache import QueryCache
 from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
@@ -34,38 +34,38 @@ from livedocs.types import (
     VegaSpec,
     WorkspaceSecret,
 )
-from livedocs.utils.bigquery import process_bigquery_schema
-from livedocs.utils.chart_helpers import apply_chart_filters
-from livedocs.utils.clickhouse import process_clickhouse_schema
+from livedocs.datasources.bigquery import BigQueryDatasourceConnector
+from livedocs.utils.cells.chart_helpers import apply_chart_filters
+from livedocs.datasources.clickhouse import ClickHouseDatasourceConnector
 from livedocs.utils.common import (
     _LIVEDOCS_PROTECTED_VARS,
     _download_file,
-    _fetch_file_manifest,
     _get_dataframe_schema,
     _setup_dirs,
-    _setup_sentry,
     get_query_for_datasource,
     get_run_context,
-    sanitize_sensitive_data,
 )
-from livedocs.utils.internals import (
+from livedocs.utils.lib.internals import (
+    livedocs_internal_fetch_file_manifest,
     livedocs_internal_instrument,
     livedocs_internal_persist_built_in_vars,
+    livedocs_internal_sanitize_sensitive_data,
+    livedocs_internal_setup_sentry,
 )
-from livedocs.utils.debug import debug
-from livedocs.utils.databricks import process_databricks_schema
+from livedocs.utils.common import debug
+from livedocs.datasources.databricks import DatabricksDatasourceConnector
 from livedocs.datasources import bigquery as bigquery_datasource
 from livedocs.datasources import databricks as databricks_datasource
 from livedocs.datasources import clickhouse as clickhouse_datasource
 from livedocs.datasources import motherduck as motherduck_datasource
 from livedocs.datasources import postgres as postgres_datasource
 from livedocs.datasources import snowflake as snowflake_datasource
-from livedocs.utils.postgres import _process_postgres_schema
-from livedocs.utils.serialize import serializer
-from livedocs.utils.single_value_helpers import process_single_value
-from livedocs.utils.snowflake import process_snowflake_schema
-from livedocs.utils.table_helpers import apply_table_operations
-from livedocs.vega import create_vega_spec
+from livedocs.datasources.postgres import PostgresDatasourceConnector
+from livedocs.utils.common import serializer
+from livedocs.utils.cells.single_value_helpers import process_single_value
+from livedocs.datasources.snowflake import SnowflakeDatasourceConnector
+from livedocs.utils.cells.table_helpers import apply_table_operations
+from livedocs.utils.lib.vega import create_vega_spec
 
 
 @dataclass(frozen=True)
@@ -90,7 +90,7 @@ class Livedocs:
         """
         Creates the Livedocs instance, setting up necessary components and configurations.
         """
-        _setup_sentry()
+        livedocs_internal_setup_sentry()
         _setup_dirs()
 
         self._config: LivedocsConfig = config or LivedocsConfig()
@@ -282,7 +282,7 @@ class Livedocs:
 
         os.makedirs(path, exist_ok=True)
 
-        manifest_data = _fetch_file_manifest(
+        manifest_data = livedocs_internal_fetch_file_manifest(
             report_id=self._report_id,
             token=self._token,
             action="read",
@@ -407,35 +407,45 @@ class Livedocs:
             if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
-                    result = self._write_to_postgres(dataframe, save_config)
+                    result = postgres_datasource.write_to_postgres(
+                        dataframe, save_config, self.helper_get_database_details
+                    )
                     return result
                 else:
                     pass
             elif DatabaseType(save_config["database_type"]) == DatabaseType.Motherduck:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
-                    result = self._write_to_motherduck(dataframe, save_config)
+                    result = motherduck_datasource.write_to_motherduck(
+                        dataframe, save_config, self.helper_get_database_details
+                    )
                     return result
                 else:
                     pass
             elif DatabaseType(save_config["database_type"]) == DatabaseType.Bigquery:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
-                    result = self._write_to_bigquery(dataframe, save_config)
+                    result = bigquery_datasource.write_to_bigquery(
+                        dataframe, save_config, self.helper_get_database_details
+                    )
                     return result
                 else:
                     pass
             elif DatabaseType(save_config["database_type"]) == DatabaseType.Snowflake:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
-                    result = self._write_to_snowflake(dataframe, save_config)
+                    result = snowflake_datasource.write_to_snowflake(
+                        dataframe, save_config, self.helper_get_database_details
+                    )
                     return result
                 else:
                     pass
             elif DatabaseType(save_config["database_type"]) == DatabaseType.Clickhouse:
                 current_run_context = get_run_context()
                 if current_run_context in save_config["run_settings"]:
-                    result = self._write_to_clickhouse(dataframe, save_config)
+                    result = clickhouse_datasource.write_to_clickhouse(
+                        dataframe, save_config, self.helper_get_database_details
+                    )
                     return result
                 else:
                     pass
@@ -917,139 +927,49 @@ class Livedocs:
         """
         match DatabaseType(datasource["database_info"]["database_type"]):
             case DatabaseType.Postgres:
-                result_df, schema_df = self._query_postgres(query, datasource)
-                schema = _process_postgres_schema(schema_df)
+                result_df, schema_df = postgres_datasource.query(
+                    query, datasource, self.helper_get_database_details
+                )
+                connector = PostgresDatasourceConnector()
+                schema = connector.process_postgres_schema(schema_df)
                 return [result_df, schema]
             case DatabaseType.Motherduck:
-                result_df, schema_df = self._query_motherduck(query, datasource)
-                schema = _process_motherduck_schema(schema_df)
+                result_df, schema_df = motherduck_datasource.query(
+                    query, datasource, self.helper_get_database_details
+                )
+                connector = PostgresDatasourceConnector()
+                schema = connector.process_postgres_schema(schema_df)
                 return [result_df, schema]
             case DatabaseType.Databricks:
-                result, raw_schema = self._query_databricks(query, datasource)
-                schema = process_databricks_schema(raw_schema)
+                result, raw_schema = databricks_datasource.query(
+                    query, datasource, self.helper_get_database_details
+                )
+                connector = DatabricksDatasourceConnector()
+                schema = connector.process_databricks_schema(raw_schema)
                 return [result, schema]
             case DatabaseType.Bigquery:
-                result, raw_schema = self._query_bigquery(query, datasource)
-                schema = process_bigquery_schema(raw_schema)
+                result, raw_schema = bigquery_datasource.query(
+                    query, datasource, self.helper_get_database_details
+                )
+                connector = BigQueryDatasourceConnector()
+                schema = connector.process_bigquery_schema(raw_schema)
                 return [result, schema]
             case DatabaseType.Snowflake:
-                result, raw_schema = self._query_snowflake(query, datasource)
-                schema = process_snowflake_schema(raw_schema)
+                result, raw_schema = snowflake_datasource.query(
+                    query, datasource, self.helper_get_database_details
+                )
+                connector = SnowflakeDatasourceConnector()
+                schema = connector.process_snowflake_schema(raw_schema)
                 return [result, schema]
             case DatabaseType.Clickhouse:
-                result, raw_schema = self._query_clickhouse(query, datasource)
-                schema = process_clickhouse_schema(raw_schema)
+                result, raw_schema = clickhouse_datasource.query(
+                    query, datasource, self.helper_get_database_details
+                )
+                connector = ClickHouseDatasourceConnector()
+                schema = connector.process_clickhouse_schema(raw_schema)
                 return [result, schema]
             case _:
                 return "Unknown DatabaseType"
-
-    def _query_snowflake(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a Snowflake database.
-        """
-        return snowflake_datasource.query(
-            query, datasource, self.helper_get_database_details
-        )
-
-    def _query_clickhouse(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, tuple]:
-        """
-        Queries a Clickhouse database.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
-        """
-        return clickhouse_datasource.query(
-            query, datasource, self.helper_get_database_details
-        )
-
-    def _query_databricks(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a Databricks database.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema.
-        """
-        return databricks_datasource.query(
-            query, datasource, self.helper_get_database_details
-        )
-
-    def _build_postgres_connection_string(self, parsed_credentials: dict) -> str:
-        return postgres_datasource.build_connection_string(parsed_credentials)
-
-    def _get_postgres_connection_string(self, datasource: ElementDataSource) -> str:
-        return postgres_datasource.get_connection_string(
-            datasource, self.helper_get_database_details
-        )
-
-    def _query_postgres(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, pl.DataFrame]:
-        """
-        Queries a Postgres database using psycopg and returns the result along with a
-        schema DataFrame describing the output columns.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, pl.DataFrame]: The resulting Polars DataFrame and a
-            schema DataFrame with column metadata.
-        """
-        return postgres_datasource.query(
-            query, datasource, self.helper_get_database_details
-        )
-
-    def _query_motherduck(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, pl.DataFrame]:
-        """
-        Queries a Motherduck database using DuckDB and returns the result along with a
-        schema DataFrame describing the output columns.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, pl.DataFrame]: The resulting Polars DataFrame and a
-            schema DataFrame with column metadata.
-        """
-        return motherduck_datasource.query(
-            query, datasource, self.helper_get_database_details
-        )
-
-    def _query_bigquery(
-        self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
-        """
-        Queries a Postgres database. Attaches the database to DuckDB and executes the
-        query under the alias same as the database name.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        return bigquery_datasource.query(
-            query, datasource, self.helper_get_database_details
-        )
 
     def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
         """
@@ -1075,7 +995,7 @@ class Livedocs:
             raise ValueError(f"Missing required information in datasource: {e}")
         except Exception as e:
             raise RuntimeError(
-                sanitize_sensitive_data(
+                livedocs_internal_sanitize_sensitive_data(
                     f"An error occurred while querying the file: {e}"
                 )
             )
@@ -1119,7 +1039,7 @@ class Livedocs:
             result = self._duckdb.conn.sql(query).pl()
         except Exception as e:
             raise RuntimeError(
-                sanitize_sensitive_data(
+                livedocs_internal_sanitize_sensitive_data(
                     f"An error occurred while querying the DataFrame: {e}"
                 )
             )
@@ -1142,86 +1062,6 @@ class Livedocs:
         result = self._query_dataframe(query, datasource)
         schema = _get_dataframe_schema(result)
         return [result, schema]
-
-    def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
-        """
-        Writes a DataFrame to a Postgres database using psycopg.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to write to the database.
-            save_config (DBSaveConfig): The save configuration.
-
-        Returns:
-            Error, Result and Metrics in a tuple
-            tuple[Result (dict), Metrics (dict), Error (str)]
-        """
-        return postgres_datasource.write_to_postgres(
-            df, save_config, self.helper_get_database_details
-        )
-
-    def _write_to_motherduck(self, df: pl.DataFrame, save_config: DBSaveConfig):
-        """
-        Writes a DataFrame to a Motherduck database using DuckDB.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to write to the database.
-            save_config (DBSaveConfig): The save configuration.
-
-        Returns:
-            Error, Result and Metrics in a tuple
-            tuple[Result (dict), Metrics (dict), Error (str)]
-        """
-        return motherduck_datasource.write_to_motherduck(
-            df, save_config, self.helper_get_database_details
-        )
-
-    def _write_to_bigquery(self, df: pl.DataFrame, save_config: DBSaveConfig):
-        """
-        Writes a DataFrame to a BigQuery database.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to write to the database.
-            save_config (DBSaveConfig): The save configuration.
-
-        Returns:
-            Error, Result and Metrics in a tuple
-            tuple[Result (dict), Metrics (dict), Error (str)]
-        """
-        return bigquery_datasource.write_to_bigquery(
-            df, save_config, self.helper_get_database_details
-        )
-
-    def _write_to_snowflake(self, df: pl.DataFrame, save_config: DBSaveConfig):
-        """
-        Writes a DataFrame to a Snowflake database.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to write to the database.
-            save_config (DBSaveConfig): The save configuration.
-
-        Returns:
-            Error, Result and Metrics in a tuple
-            tuple[Result (dict), Metrics (dict), Error (str)]
-        """
-        return snowflake_datasource.write_to_snowflake(
-            df, save_config, self.helper_get_database_details
-        )
-
-    def _write_to_clickhouse(self, df: pl.DataFrame, save_config: DBSaveConfig):
-        """
-        Writes a DataFrame to a Clickhouse database.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to write to the database.
-            save_config (DBSaveConfig): The save configuration.
-
-        Returns:
-            Error, Result and Metrics in a tuple
-            tuple[Result (dict), Metrics (dict), Error (str)]
-        """
-        return clickhouse_datasource.write_to_clickhouse(
-            df, save_config, self.helper_get_database_details
-        )
 
     def _get_dataframe_schema(self, df: pl.DataFrame) -> list[Schema]:
         """
