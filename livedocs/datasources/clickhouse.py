@@ -349,9 +349,7 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
         else:
             return ""
 
-    def process_clickhouse_schema(
-        self, schema: tuple[tuple[str, Any], ...]
-    ) -> dict[str, str]:
+    def process_schema(self, schema: tuple[tuple[str, Any], ...]) -> dict[str, str]:
         """
         Processes Clickhouse schema and returns a mapping of column names
         to their Livedocs types (NUMBER, DATE, STRING).

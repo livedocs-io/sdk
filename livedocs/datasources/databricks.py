@@ -422,7 +422,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
             }
             return output
 
-    def process_databricks_schema(
+    def process_schema(
         self, schema: Sequence[tuple[str, str]] | None
     ) -> dict[str, str]:
         """

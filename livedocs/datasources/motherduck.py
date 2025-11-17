@@ -159,6 +159,63 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
     def teardown(self) -> None:
         pass
 
+    def process_schema(self, schema_data: pl.DataFrame) -> dict[str, str]:
+        """
+        Process Motherduck schema DataFrame and return a mapping of column names to Livedocs types.
+        This is a public method that can be used by external code.
+        """
+        if schema_data.is_empty():
+            return {}
+
+        type_column = None
+        for candidate in ("data_type", "column_type"):
+            if candidate in schema_data.columns:
+                type_column = candidate
+                break
+
+        if type_column is None:
+            raise ValueError(
+                "Schema DataFrame must contain a 'data_type' or 'column_type' column"
+            )
+
+        processed_schema: dict[str, str] = {}
+        for row in schema_data.iter_rows(named=True):
+            processed_schema[row["column_name"]] = self._map_motherduck_type(
+                row[type_column]
+            )
+
+        return processed_schema
+
+    def _map_motherduck_type(self, column_type: str) -> str:
+        """
+        Map common Motherduck/DuckDB data types to the categories expected by Livedocs.
+        """
+        if not column_type:
+            return "STRING"
+
+        normalized = column_type.upper()
+
+        if any(
+            keyword in normalized
+            for keyword in [
+                "INT",
+                "DECIMAL",
+                "NUMERIC",
+                "DOUBLE",
+                "REAL",
+                "FLOAT",
+                "BIGINT",
+                "SMALLINT",
+                "TINYINT",
+            ]
+        ):
+            return "NUMBER"
+
+        if any(keyword in normalized for keyword in ["DATE", "TIME", "TIMESTAMP"]):
+            return "DATE"
+
+        return "STRING"
+
     def _extract_details(self, connection_details: dict[str, Any]) -> dict[str, Any]:
         database = connection_details.get("database")
         token = connection_details.get("token")

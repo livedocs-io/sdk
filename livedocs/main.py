@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Callable, cast
+from typing import Any, Callable, cast
 
 import pandas as pd
 import polars as pl
@@ -13,6 +13,7 @@ from jinja2 import Template
 
 from livedocs.utils.lib.cache import QueryCache
 from livedocs.manager.credentials import CredentialStore
+from livedocs.manager.datasources import DatasourceManager
 from livedocs.manager.duckdb import DuckDBSingleton
 from livedocs.types import (
     CacheInfo,
@@ -34,36 +35,21 @@ from livedocs.types import (
     VegaSpec,
     WorkspaceSecret,
 )
-from livedocs.datasources.bigquery import BigQueryDatasourceConnector
 from livedocs.utils.cells.chart_helpers import apply_chart_filters
-from livedocs.datasources.clickhouse import ClickHouseDatasourceConnector
 from livedocs.utils.common import (
     _download_file,
-    _get_dataframe_schema,
     _setup_dirs,
     get_query_for_datasource,
-    get_run_context,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
     livedocs_internal_instrument,
     livedocs_internal_persist_built_in_vars,
-    livedocs_internal_sanitize_sensitive_data,
     livedocs_internal_setup_sentry,
 )
 from livedocs.utils.cells.chart_helpers import _LIVEDOCS_PROTECTED_VARS
-from livedocs.utils.common import debug
-from livedocs.datasources.databricks import DatabricksDatasourceConnector
-from livedocs.datasources import bigquery as bigquery_datasource
-from livedocs.datasources import databricks as databricks_datasource
-from livedocs.datasources import clickhouse as clickhouse_datasource
-from livedocs.datasources import motherduck as motherduck_datasource
-from livedocs.datasources import postgres as postgres_datasource
-from livedocs.datasources import snowflake as snowflake_datasource
-from livedocs.datasources.postgres import PostgresDatasourceConnector
-from livedocs.utils.common import serializer
+from livedocs.utils.common import debug, serializer
 from livedocs.utils.cells.single_value_helpers import process_single_value
-from livedocs.datasources.snowflake import SnowflakeDatasourceConnector
 from livedocs.utils.cells.table_helpers import apply_table_operations
 from livedocs.utils.lib.vega import create_vega_spec
 
@@ -364,10 +350,27 @@ class Livedocs:
             final_query = self.helper_render_jinja_template(query, context)
 
             # Run the actual queries
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            query_span = sentry_sdk.start_span(name="run query")
             df: pl.DataFrame = pl.DataFrame()
-            df, schema, cache_info = self._query_with_schema(
-                final_query, datasource, dataframe, use_cache
+
+            # Prepare kwargs for DatasourceManager
+            source_type = ElementDatasourceType(datasource["source_type"])
+            kwargs: dict[str, Any] = {}
+            if source_type == ElementDatasourceType.file:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["download_file"] = self.download_file
+            elif source_type == ElementDatasourceType.dataframe:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["dataframe"] = dataframe
+
+            df, schema, cache_info = DatasourceManager.read(
+                final_query,
+                datasource,
+                self.helper_get_database_details,
+                schema=True,
+                use_cache=use_cache,
+                query_cache=self._query_cache,
+                **kwargs,
             )
             query_span.finish()
 
@@ -404,53 +407,10 @@ class Livedocs:
     def save_to_database(self, dataframe: pl.DataFrame, str_save_config: str):
         with sentry_sdk.start_transaction(op="task", name="save to database"):
             save_config: DBSaveConfig = json.loads(str_save_config)
-            if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
-                current_run_context = get_run_context()
-                if current_run_context in save_config["run_settings"]:
-                    result = postgres_datasource.write_to_postgres(
-                        dataframe, save_config, self.helper_get_database_details
-                    )
-                    return result
-                else:
-                    pass
-            elif DatabaseType(save_config["database_type"]) == DatabaseType.Motherduck:
-                current_run_context = get_run_context()
-                if current_run_context in save_config["run_settings"]:
-                    result = motherduck_datasource.write_to_motherduck(
-                        dataframe, save_config, self.helper_get_database_details
-                    )
-                    return result
-                else:
-                    pass
-            elif DatabaseType(save_config["database_type"]) == DatabaseType.Bigquery:
-                current_run_context = get_run_context()
-                if current_run_context in save_config["run_settings"]:
-                    result = bigquery_datasource.write_to_bigquery(
-                        dataframe, save_config, self.helper_get_database_details
-                    )
-                    return result
-                else:
-                    pass
-            elif DatabaseType(save_config["database_type"]) == DatabaseType.Snowflake:
-                current_run_context = get_run_context()
-                if current_run_context in save_config["run_settings"]:
-                    result = snowflake_datasource.write_to_snowflake(
-                        dataframe, save_config, self.helper_get_database_details
-                    )
-                    return result
-                else:
-                    pass
-            elif DatabaseType(save_config["database_type"]) == DatabaseType.Clickhouse:
-                current_run_context = get_run_context()
-                if current_run_context in save_config["run_settings"]:
-                    result = clickhouse_datasource.write_to_clickhouse(
-                        dataframe, save_config, self.helper_get_database_details
-                    )
-                    return result
-                else:
-                    pass
-            else:
-                raise Exception("Unsupported database type")
+            result = DatasourceManager.write(
+                dataframe, save_config, self.helper_get_database_details
+            )
+            return result
 
     @livedocs_internal_instrument
     @sentry_sdk.trace
@@ -552,7 +512,7 @@ class Livedocs:
             datasource: ElementDataSource = json.loads(datasource_str)
 
             # Run actual span
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            query_span = sentry_sdk.start_span(name="run query")
             query = get_query_for_datasource(datasource, 50000)
 
             if (
@@ -572,11 +532,24 @@ class Livedocs:
 
                 query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
 
-            df, schema, cache_info = self._query_with_schema(
+            # Prepare kwargs for DatasourceManager
+            source_type = ElementDatasourceType(datasource["source_type"])
+            kwargs: dict[str, Any] = {}
+            if source_type == ElementDatasourceType.file:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["download_file"] = self.download_file
+            elif source_type == ElementDatasourceType.dataframe:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["dataframe"] = dataframe
+
+            df, schema, cache_info = DatasourceManager.read(
                 query,
                 datasource,
-                dataframe,
-                use_cache,
+                self.helper_get_database_details,
+                schema=True,
+                use_cache=use_cache,
+                query_cache=self._query_cache,
+                **kwargs,
             )
             query_span.finish()
 
@@ -681,12 +654,25 @@ class Livedocs:
 
                 query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
 
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            df, schema, cache_info = self._query_with_schema(
+            query_span = sentry_sdk.start_span(name="run query")
+            # Prepare kwargs for DatasourceManager
+            source_type = ElementDatasourceType(datasource["source_type"])
+            kwargs: dict[str, Any] = {}
+            if source_type == ElementDatasourceType.file:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["download_file"] = self.download_file
+            elif source_type == ElementDatasourceType.dataframe:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["dataframe"] = dataframe
+
+            df, schema, cache_info = DatasourceManager.read(
                 query,
                 datasource,
-                dataframe,
-                use_cache,
+                self.helper_get_database_details,
+                schema=True,
+                use_cache=use_cache,
+                query_cache=self._query_cache,
+                **kwargs,
             )
             query_span.finish()
 
@@ -734,30 +720,36 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="get schema for chart"):
             datasource: ElementDataSource = json.loads(datasource_str)
 
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
+            query_span = sentry_sdk.start_span(name="run query")
             query = get_query_for_datasource(datasource)
             if query is None:
                 raise ValueError("Query is required")
 
-            match ElementDatasourceType(datasource["source_type"]):
-                case ElementDatasourceType.database_table:
-                    _, schema = self._query_database_with_schema(query, datasource)
-                    _ = query_span.finish()
-                case ElementDatasourceType.file:
-                    _, schema = self._query_file_with_schema(query, datasource)
-                    _ = query_span.finish()
-                case ElementDatasourceType.dataframe:
-                    if dataframe is not None and datasource is not None:
-                        self._duckdb.conn.register(
-                            datasource["dataframe_info"]["df_name"], dataframe
-                        )
-                    _, schema = self._query_dataframe_with_schema(query, datasource)
-                    _ = query_span.finish()
-                case _:
-                    _ = query_span.finish()
-                    raise ValueError(
-                        f"Unsupported datasource type: {datasource['source_type']}"
+            # Prepare kwargs for DatasourceManager based on datasource type
+            source_type = ElementDatasourceType(datasource["source_type"])
+            kwargs: dict[str, Any] = {}
+
+            if source_type == ElementDatasourceType.file:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                kwargs["download_file"] = self.download_file
+            elif source_type == ElementDatasourceType.dataframe:
+                kwargs["duckdb_conn"] = self._duckdb.conn
+                if dataframe is not None and datasource is not None:
+                    self._duckdb.conn.register(
+                        datasource["dataframe_info"]["df_name"], dataframe
                     )
+
+            # Execute query using DatasourceManager (no caching for schema-only queries)
+            _, schema, _ = DatasourceManager.read(
+                query,
+                datasource,
+                self.helper_get_database_details,
+                schema=True,
+                use_cache=False,
+                query_cache=None,
+                **kwargs,
+            )
+            query_span.finish()
 
             post_span = sentry_sdk.start_span(name="post-processing")
             empty_chart = {
@@ -824,7 +816,6 @@ class Livedocs:
             raise ValueError(f"Database connector '{connector_id}' not found")
         return db
 
-    # DOOMED: when we move to a single query method
     def helper_get_database_details(
         self, connector_id: str
     ) -> tuple[DatabaseConnection, dict[str, str]]:
@@ -850,273 +841,3 @@ class Livedocs:
         """
         template = self._template_factory(text)
         return template.render(context)
-
-    def _query_with_schema(
-        self,
-        query: str,
-        datasource: ElementDataSource,
-        dataframe=None,
-        use_cache=True,
-    ) -> tuple[
-        pl.DataFrame,
-        dict,
-        CacheInfo,
-    ]:
-        """
-        Executes a query on a given datasource with schema handling and optional caching.
-
-        Args:
-            query (str): The SQL query string to execute.
-            datasource (ElementDataSource): The datasource to execute the query on.
-            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
-            use_cache (bool): Indicates whether to use caching. Defaults to True.
-
-        Returns:
-            tuple[pl.DataFrame, dict, CacheMetadata]: A tuple containing the resulting DataFrame,
-            schema as a dict, and info about the cache.
-        """
-
-        if self._query_cache is None:
-            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
-
-        cache_info = CacheInfo(
-            id=self._query_cache.generate_cache_id(query, datasource),
-            status=CacheStatus.MISS,
-        )
-
-        # Use cache if enabled and the query is found in the cache
-        if use_cache:
-            cache_result = self._query_cache.get(query, datasource)
-            if cache_result is not None and not cache_result[0].is_empty():
-                cache_info["status"] = CacheStatus.HIT
-                return (*cache_result, cache_info)
-
-        # Execute query based on datasource type
-        match ElementDatasourceType(datasource["source_type"]):
-            case ElementDatasourceType.database | ElementDatasourceType.database_table:
-                result = self._query_database_with_schema(query, datasource)
-            case ElementDatasourceType.file:
-                result = self._query_file_with_schema(query, datasource)
-            case ElementDatasourceType.dataframe:
-                if dataframe is not None:
-                    self._duckdb.conn.register(
-                        datasource["dataframe_info"]["df_name"], dataframe
-                    )
-                result = self._query_dataframe_with_schema(query, datasource)
-            case _:
-                return "Unknown ElementDataSource"
-
-        # We always cache the result, so it's available for querying in public mode
-        self._query_cache.set(query, datasource, result)
-
-        return (*result, cache_info)
-
-    def _query_database_with_schema(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a database and returns the result as a DataFrame with schema.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
-        """
-        match DatabaseType(datasource["database_info"]["database_type"]):
-            case DatabaseType.Postgres:
-                result_df, schema_df = postgres_datasource.query(
-                    query, datasource, self.helper_get_database_details
-                )
-                connector = PostgresDatasourceConnector()
-                schema = connector.process_postgres_schema(schema_df)
-                return [result_df, schema]
-            case DatabaseType.Motherduck:
-                result_df, schema_df = motherduck_datasource.query(
-                    query, datasource, self.helper_get_database_details
-                )
-                connector = PostgresDatasourceConnector()
-                schema = connector.process_postgres_schema(schema_df)
-                return [result_df, schema]
-            case DatabaseType.Databricks:
-                result, raw_schema = databricks_datasource.query(
-                    query, datasource, self.helper_get_database_details
-                )
-                connector = DatabricksDatasourceConnector()
-                schema = connector.process_databricks_schema(raw_schema)
-                return [result, schema]
-            case DatabaseType.Bigquery:
-                result, raw_schema = bigquery_datasource.query(
-                    query, datasource, self.helper_get_database_details
-                )
-                connector = BigQueryDatasourceConnector()
-                schema = connector.process_bigquery_schema(raw_schema)
-                return [result, schema]
-            case DatabaseType.Snowflake:
-                result, raw_schema = snowflake_datasource.query(
-                    query, datasource, self.helper_get_database_details
-                )
-                connector = SnowflakeDatasourceConnector()
-                schema = connector.process_snowflake_schema(raw_schema)
-                return [result, schema]
-            case DatabaseType.Clickhouse:
-                result, raw_schema = clickhouse_datasource.query(
-                    query, datasource, self.helper_get_database_details
-                )
-                connector = ClickHouseDatasourceConnector()
-                schema = connector.process_clickhouse_schema(raw_schema)
-                return [result, schema]
-            case _:
-                return "Unknown DatabaseType"
-
-    def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
-        """
-        Queries a file. Currently supports CSV and XLSX files only.
-
-        Args:
-            query (str): The query string.
-            datasource (dict): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        try:
-            file_info = datasource["file_info"]
-            file_id = file_info["file_id"]
-
-            self.download_file(file_id=file_id)
-
-            result = self._duckdb.conn.sql(query).pl()
-            return result
-
-        except KeyError as e:
-            raise ValueError(f"Missing required information in datasource: {e}")
-        except Exception as e:
-            raise RuntimeError(
-                livedocs_internal_sanitize_sensitive_data(
-                    f"An error occurred while querying the file: {e}"
-                )
-            )
-
-    def _query_file_with_schema(
-        self, query: str, datasource: dict
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a file with the schema included in the response. Currently supports CSV and XLSX files only.
-
-        Args:
-            query (str): The query string.
-            datasource (dict): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
-        """
-        result = self._query_file(query, datasource)
-        schema = _get_dataframe_schema(result)
-        return [result, schema]
-
-    def _query_dataframe(
-        self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
-        """
-        Queries a DataFrame. Currently only supports Pandas and Polars DataFrames.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        dataframe_info = datasource.get("dataframe_info")
-
-        if dataframe_info is None:
-            raise ValueError("Invalid ElementDataSource")
-
-        try:
-            result = self._duckdb.conn.sql(query).pl()
-        except Exception as e:
-            raise RuntimeError(
-                livedocs_internal_sanitize_sensitive_data(
-                    f"An error occurred while querying the DataFrame: {e}"
-                )
-            )
-
-        return result
-
-    def _query_dataframe_with_schema(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a DataFrame with the schema included in the response. Currently only supports Pandas and Polars DataFrames.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
-        """
-        result = self._query_dataframe(query, datasource)
-        schema = _get_dataframe_schema(result)
-        return [result, schema]
-
-    def _get_dataframe_schema(self, df: pl.DataFrame) -> list[Schema]:
-        """
-        Gets the schema of any given Polars DataFrame.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to get the schema from.
-
-        Returns:
-            list[Schema]: The schema as a list of Schema objects.
-        """
-        schema = []
-
-        if isinstance(df, pd.DataFrame):
-            for column in df.columns:
-                dtype = df[column].dtype
-                if pd.api.types.is_numeric_dtype(dtype):
-                    col_type = "NUMBER"
-                elif pd.api.types.is_datetime64_any_dtype(dtype):
-                    col_type = "DATE"
-                else:
-                    col_type = "STRING"
-
-                schema.append(
-                    {"name": column, "livedocs_type": col_type, "children": []}
-                )
-
-        elif isinstance(df, pl.DataFrame):
-            for column in df.columns:
-                dtype = df[column].dtype
-                if isinstance(
-                    dtype,
-                    (
-                        pl.Int8,
-                        pl.Int16,
-                        pl.Int32,
-                        pl.Int64,
-                        pl.UInt8,
-                        pl.UInt16,
-                        pl.UInt32,
-                        pl.UInt64,
-                        pl.Float32,
-                        pl.Float64,
-                    ),
-                ):
-                    col_type = "NUMBER"
-                elif isinstance(dtype, (pl.Date, pl.Datetime, pl.Time)):
-                    col_type = "DATE"
-                else:
-                    col_type = "STRING"
-
-                schema.append(
-                    {"name": column, "livedocs_type": col_type, "children": []}
-                )
-
-        else:
-            raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
-
-        return json.dumps(schema, default=str, separators=(",", ":"))

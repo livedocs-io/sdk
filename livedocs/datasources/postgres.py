@@ -701,7 +701,7 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
             ]
         )
 
-    def process_postgres_schema(self, schema_data: pl.DataFrame) -> dict[str, str]:
+    def process_schema(self, schema_data: pl.DataFrame) -> dict[str, str]:
         """
         Process postgres schema DataFrame and return a mapping of column names to Livedocs types.
         This is a public method that can be used by external code.

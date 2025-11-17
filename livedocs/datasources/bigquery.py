@@ -337,7 +337,7 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         else:
             return ""
 
-    def process_bigquery_schema(self, schema: Any) -> dict[str, str]:
+    def process_schema(self, schema: Any) -> dict[str, str]:
         """
         Processes BigQuery schema and returns a mapping of column names
         to their Livedocs types (NUMBER, DATE, STRING).

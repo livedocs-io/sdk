@@ -4,6 +4,8 @@ __all__ = [
     "bigquery",
     "clickhouse",
     "databricks",
+    "dataframe",
+    "file",
     "motherduck",
     "postgres",
     "snowflake",

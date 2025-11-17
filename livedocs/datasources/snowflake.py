@@ -362,7 +362,7 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
             output["error"] = {"message": str(e), "stacktrace": traceback.format_exc()}
             return output
 
-    def process_snowflake_schema(self, schema: Any) -> dict[str, str]:
+    def process_schema(self, schema: Any) -> dict[str, str]:
         """
         Processes Snowflake schema and returns a mapping of column names
         to their Livedocs types (NUMBER, DATE, STRING).

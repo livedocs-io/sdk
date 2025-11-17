@@ -80,7 +80,9 @@ def test_all_functions():
     print("\n1. Initializing Livedocs...")
     livedocs = Livedocs(config=config)
     try:
-        livedocs.initialize("test-report-id", "test-session-token")
+        test_report_id = ""
+        test_session_token = ""
+        livedocs.initialize(test_report_id, test_session_token)
         print(f"   {GREEN}✓ Initialization successful{RESET}")
         test_results.append(("1. Initializing Livedocs", True, None))
     except Exception as e:
@@ -163,7 +165,7 @@ def test_all_functions():
     try:
         # This will likely fail without a real backend, but we test the interface
         result = livedocs.download_file(
-            file_name="test_file.csv",
+            file_name="sales.csv",
             path=temp_dir,
             force_download=False,
         )
@@ -309,9 +311,31 @@ def test_all_functions():
             },
         }
         settings = {
-            "chartType": "bar",
-            "xAxis": {"field": "name"},
-            "yAxis": {"field": "score"},
+            "chartSettings": {
+                "xAxis": {
+                    "field": "age",
+                    "sort": "ascending",
+                    "temporalFormat": None,
+                    "type": "quantitative",
+                },
+                "yAxis": {
+                    "primary": [
+                        {
+                            "aggregate": "none",
+                            "color_by": None,
+                            "field": "age",
+                            "mark": "grouped_column",
+                            "name": "line layer 1",
+                            "temporalFormat": None,
+                            "type": "quantitative",
+                        }
+                    ]
+                },
+            },
+            "chartType": "main",
+            "colorGroups": {"line layer 1": "#713E5A"},
+            "styleSettings": {"mode": "light"},
+            "subplots": {},
         }
         _ = livedocs._get_vega_spec(  # noqa: SLF001
             settings_str=json.dumps(settings),
