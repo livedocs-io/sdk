@@ -747,3 +747,220 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
             return "DATE"
 
         return "STRING"
+
+    def _get_livedocs_type(self, pg_type: str) -> str:
+        """
+        Map PostgreSQL type to LivedocsStandardType.
+        Returns: "NUMBER", "DATE", "BOOLEAN", or "STRING"
+        """
+        type_lower = pg_type.lower()
+
+        numeric_types = [
+            "smallint",
+            "integer",
+            "bigint",
+            "decimal",
+            "numeric",
+            "real",
+            "double precision",
+            "serial",
+            "bigserial",
+            "int",
+            "int2",
+            "int4",
+            "int8",
+            "float4",
+            "float8",
+        ]
+
+        date_types = [
+            "date",
+            "time",
+            "timetz",
+            "timestamp",
+            "timestamptz",
+            "interval",
+        ]
+
+        boolean_types = ["boolean", "bool"]
+
+        if any(nt in type_lower for nt in numeric_types):
+            return "NUMBER"
+        elif any(dt in type_lower for dt in date_types):
+            return "DATE"
+        elif any(bt in type_lower for bt in boolean_types):
+            return "BOOLEAN"
+        else:
+            return "STRING"
+
+    def get_schema(
+        self, connector_id: str, connection_details: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch schema information from PostgreSQL database and return as list of schema nodes.
+
+        Args:
+            connector_id: The connector ID to use for schema nodes
+            connection_details: Dictionary containing connection details (host, port, database, etc.)
+
+        Returns:
+            List of schema node dictionaries matching SchemaNode structure
+        """
+        nodes: list[dict[str, Any]] = []
+
+        # Get database name
+        db_name: str | None = None
+        if connection_details.get("connect_using") == "url":
+            from urllib.parse import urlparse
+
+            connection_url = connection_details.get("connection_url", "")
+            if not connection_url:
+                raise ValueError("Connection URL is required when using 'url' connection type")
+            parsed_url = urlparse(connection_url)
+            db_name = parsed_url.path.lstrip("/")
+            if not db_name:
+                raise ValueError("Invalid connection URL: database is required")
+        else:
+            db_name = connection_details.get("database")
+            if not db_name:
+                raise ValueError(
+                    "Database name is not available in connection parameters, cannot build schema."
+                )
+
+        # Build connection string
+        connection_string = self._build_connection_string(connection_details)
+
+        # Create database node (level 0)
+        db_node_id = str(uuid.uuid4())
+        db_path = db_name
+        nodes.append({
+            "id": db_node_id,
+            "connector_id": connector_id,
+            "parent_id": None,
+            "path": db_path,
+            "type": "DATABASE",
+            "name": db_name,
+            "data_type": None,
+            "livedocs_type": None,
+            "description": None,
+            "level": 0,
+            "metadata": {},
+        })
+
+        # Query schema details
+        schema_details_query = """
+            SELECT 
+                c.table_schema,
+                c.table_name,
+                c.column_name,
+                c.udt_name AS data_type,
+                t.table_type,
+                col_description(
+                    (quote_ident(c.table_schema)||'.'||quote_ident(c.table_name))::regclass::oid, 
+                    c.ordinal_position
+                ) AS column_description,
+                obj_description(
+                    (quote_ident(t.table_schema)||'.'||quote_ident(c.table_name))::regclass::oid, 
+                    'pg_class'
+                ) AS table_description
+            FROM 
+                information_schema.columns c
+            JOIN 
+                information_schema.tables t
+                ON c.table_schema = t.table_schema
+                AND c.table_name = t.table_name
+            WHERE 
+                c.table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast') 
+                AND t.table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+            ORDER BY 
+                c.table_schema, c.table_name, c.ordinal_position;
+        """
+
+        schema_node_ids: dict[str, str] = {}  # "schemaName" -> nodeId
+        table_node_ids: dict[str, str] = {}  # "schemaName.tableName" -> nodeId
+
+        try:
+            with psycopg.connect(connection_string) as conn:
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(schema_details_query)
+                    rows = cursor.fetchall()
+
+                    for row in rows:
+                        table_schema = row.get("table_schema")
+                        table_name = row.get("table_name")
+                        column_name = row.get("column_name")
+                        data_type = row.get("data_type")
+                        table_type = row.get("table_type")
+                        column_description = row.get("column_description")
+                        table_description = row.get("table_description")
+
+                        # Create or get schema node (level 1)
+                        schema_node_id = schema_node_ids.get(table_schema)
+                        schema_path = f"{db_path}/{table_schema}"
+                        if not schema_node_id:
+                            schema_node_id = str(uuid.uuid4())
+                            nodes.append({
+                                "id": schema_node_id,
+                                "connector_id": connector_id,
+                                "parent_id": db_node_id,
+                                "path": schema_path,
+                                "type": "SCHEMA",
+                                "name": table_schema,
+                                "data_type": None,
+                                "livedocs_type": None,
+                                "description": None,
+                                "level": 1,
+                                "metadata": {},
+                            })
+                            schema_node_ids[table_schema] = schema_node_id
+
+                        # Create or get table/view node (level 2)
+                        table_key = f"{table_schema}.{table_name}"
+                        table_node_id = table_node_ids.get(table_key)
+                        table_path = f"{schema_path}/{table_name}"
+                        node_type = "VIEW" if table_type == "VIEW" else "TABLE"
+
+                        if not table_node_id:
+                            table_node_id = str(uuid.uuid4())
+                            nodes.append({
+                                "id": table_node_id,
+                                "connector_id": connector_id,
+                                "parent_id": schema_node_id,
+                                "path": table_path,
+                                "type": node_type,
+                                "name": table_name,
+                                "data_type": None,
+                                "livedocs_type": None,
+                                "description": table_description if table_description else None,
+                                "level": 2,
+                                "metadata": {
+                                    "database_type": "postgres",
+                                    "schema_name": table_schema,
+                                    "database_name": db_name,
+                                },
+                            })
+                            table_node_ids[table_key] = table_node_id
+
+                        # Create column node (level 3)
+                        column_node_id = str(uuid.uuid4())
+                        column_path = f"{table_path}/{column_name}"
+                        nodes.append({
+                            "id": column_node_id,
+                            "connector_id": connector_id,
+                            "parent_id": table_node_id,
+                            "path": column_path,
+                            "type": "COLUMN",
+                            "name": column_name,
+                            "data_type": data_type if data_type else None,
+                            "livedocs_type": self._get_livedocs_type(data_type) if data_type else None,
+                            "description": column_description if column_description else None,
+                            "level": 3,
+                            "metadata": {},
+                        })
+
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error fetching PostgreSQL schema: {e}")
+            )
+
+        return nodes

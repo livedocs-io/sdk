@@ -14,7 +14,7 @@ from livedocs.utils.lib.cache import QueryCache
 from livedocs.manager.credentials import StaticCredentialStore
 from livedocs.types import Credentials, DatabaseConnection
 
-POSTGRES_URL_ENV = "postgresql://@localhost/appstore"
+POSTGRES_URL_ENV = ""
 
 
 @unittest.skipUnless(
