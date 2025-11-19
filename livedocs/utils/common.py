@@ -82,17 +82,19 @@ def serializer(obj):
 
 def get_query_for_datasource(
     datasource: ElementDataSource,
-    limit: int = 10,
+    limit: int | None = 10,
 ) -> str | None:
     """
     Prepares the DuckDB query for each datasource
     """
 
+    limit_clause = f" LIMIT {limit}" if limit is not None else ""
+
     match datasource["source_type"]:
         case ElementDatasourceType.dataframe.value:
             if datasource["dataframe_info"] is None:
                 raise ValueError("Dataframe info is required")
-            return f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT {limit};"
+            return f"SELECT * FROM {datasource['dataframe_info']['df_name']}{limit_clause};"
         case ElementDatasourceType.database_table.value:
             if datasource["database_info"] is None:
                 raise ValueError("Database info is required")
@@ -103,37 +105,53 @@ def get_query_for_datasource(
                 DatabaseType(datasource["database_info"]["database_type"])
                 == DatabaseType.Bigquery
             ):
-                return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT {limit};"
+                return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}{limit_clause};"
             elif (
                 DatabaseType(datasource["database_info"]["database_type"])
                 == DatabaseType.Clickhouse
             ):
-                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
+                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
             elif datasource["database_info"]["database_type"] in {
                 DatabaseType.Postgres.value,
                 DatabaseType.Motherduck.value,
             }:
-                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
+                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
             elif (
                 DatabaseType(datasource["database_info"]["database_type"])
                 == DatabaseType.Databricks
             ):
-                return f"SELECT * FROM {datasource['database_table_info']['catalog_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT {limit};"
+                return (
+                    "SELECT * FROM "
+                    f"{datasource['database_table_info']['catalog_name']}."
+                    f"{datasource['database_table_info']['schema_name']}."
+                    f"{datasource['database_table_info']['table_name']}"
+                    f"{limit_clause};"
+                )
             else:
-                return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
+                return (
+                    "SELECT * FROM "
+                    f'"{datasource["database_info"]["database_name"]}".'
+                    f'"{datasource["database_table_info"]["schema_name"]}".'
+                    f'"{datasource["database_table_info"]["table_name"]}"'
+                    f"{limit_clause};"
+                )
 
         case ElementDatasourceType.file:
             if datasource["file_info"] is None:
                 raise ValueError("File info is required")
             file_name = datasource["file_info"]["file_name"]
             if datasource["file_info"]["file_type"] == "csv":
-                return f"SELECT * FROM read_csv_auto('{file_name}') LIMIT {limit};"
+                return f"SELECT * FROM read_csv_auto('{file_name}'){limit_clause};"
             elif datasource["file_info"]["file_type"] == "xlsx":
-                return f"SELECT * FROM read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}') LIMIT {limit};"
+                return (
+                    "SELECT * FROM "
+                    f"read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
+                    f"{limit_clause};"
+                )
         case ElementDatasourceType.dataframe:
             if datasource["dataframe_info"] is None:
                 raise ValueError("Dataframe info is required")
-            return f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT {limit};"
+            return f"SELECT * FROM {datasource['dataframe_info']['df_name']}{limit_clause};"
         case _:
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"

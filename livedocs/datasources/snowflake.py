@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+from uuid import UUID
 
 import polars as pl
 import snowflake.connector
@@ -17,6 +19,8 @@ from livedocs.types import (
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
+    SchemaNode,
+    SchemaNodeType,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -542,3 +546,226 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
             return datetime.now(timezone.utc).date()
         else:
             return ""
+
+    def _get_livedocs_type(self, snowflake_type: str) -> str:
+        """
+        Map Snowflake type to LivedocsStandardType.
+        Returns: "NUMBER", "DATE", "BOOLEAN", or "STRING"
+        """
+        type_upper = (snowflake_type or "").upper()
+
+        numeric_types = {
+            "NUMBER",
+            "DECIMAL",
+            "NUMERIC",
+            "INT",
+            "INTEGER",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
+            "BYTEINT",
+            "FLOAT",
+            "FLOAT4",
+            "FLOAT8",
+            "DOUBLE",
+            "DOUBLE PRECISION",
+            "REAL",
+        }
+
+        date_types = {
+            "DATE",
+            "TIME",
+            "TIMESTAMP",
+            "TIMESTAMP_LTZ",
+            "TIMESTAMP_NTZ",
+            "TIMESTAMP_TZ",
+            "DATETIME",
+        }
+
+        boolean_types = {"BOOLEAN"}
+
+        if type_upper in numeric_types:
+            return "NUMBER"
+        elif type_upper in date_types:
+            return "DATE"
+        elif type_upper in boolean_types:
+            return "BOOLEAN"
+        else:
+            return "STRING"
+
+    def get_schema(
+        self, connector_id: str, connection_details: dict[str, Any]
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema information from Snowflake database and return as list of schema nodes.
+
+        Args:
+            connector_id: The connector ID to use for schema nodes
+            connection_details: Dictionary containing connection details
+
+        Returns:
+            List of SchemaNode objects
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        # Get database name (Snowflake is case-insensitive for unquoted by default, but stores in upper)
+        database_name = connection_details.get("database", "").upper()
+        if not database_name:
+            raise ValueError("Database name is required in connection details")
+
+        # Create database node (level 0)
+        db_node_id = uuid.uuid4()
+        db_path = database_name
+        nodes.append(
+            SchemaNode(
+                id=db_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=db_path,
+                type=SchemaNodeType.DATABASE,
+                name=database_name,
+                data_type=None,
+                livedocs_type=None,
+                description=None,
+                level=0,
+                metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        # Build connection
+        connection = None
+        try:
+            connection = self._create_connection(connection_details)
+            cursor = connection.cursor()
+
+            # Query schema details
+            schema_details_query = f"""
+                SELECT
+                  S.SCHEMA_NAME,
+                  S.COMMENT AS SCHEMA_COMMENT,
+                  T.TABLE_NAME,
+                  T.TABLE_TYPE,
+                  T.COMMENT AS TABLE_COMMENT,
+                  C.COLUMN_NAME,
+                  C.DATA_TYPE,
+                  C.COMMENT AS COLUMN_COMMENT,
+                  C.ORDINAL_POSITION
+                FROM {database_name}.INFORMATION_SCHEMA.SCHEMATA S
+                JOIN {database_name}.INFORMATION_SCHEMA.TABLES T
+                  ON S.CATALOG_NAME = T.TABLE_CATALOG AND S.SCHEMA_NAME = T.TABLE_SCHEMA
+                JOIN {database_name}.INFORMATION_SCHEMA.COLUMNS C
+                  ON T.TABLE_CATALOG = C.TABLE_CATALOG AND T.TABLE_SCHEMA = C.TABLE_SCHEMA AND T.TABLE_NAME = C.TABLE_NAME
+                WHERE S.SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA')
+                  AND T.TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+                ORDER BY S.SCHEMA_NAME, T.TABLE_NAME, C.ORDINAL_POSITION;
+            """
+
+            cursor.execute(schema_details_query)
+            result_rows = cursor.fetchall()
+
+            schema_node_ids: dict[str, UUID] = {}  # "SCHEMA_NAME" -> nodeId
+            table_node_ids: dict[str, UUID] = {}  # "SCHEMA_NAME.TABLE_NAME" -> nodeId
+
+            for row in result_rows:
+                schema_name = row[0]
+                schema_comment = row[1]
+                table_name = row[2]
+                table_type = row[3]
+                table_comment = row[4]
+                column_name = row[5]
+                data_type = row[6]
+                column_comment = row[7]
+
+                # Create or get schema node (level 1)
+                schema_node_id = schema_node_ids.get(schema_name)
+                schema_path = f"{db_path}/{schema_name}"
+                if not schema_node_id:
+                    schema_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=schema_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=db_node_id,
+                            path=schema_path,
+                            type=SchemaNodeType.SCHEMA,
+                            name=schema_name,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=schema_comment if schema_comment else None,
+                            level=1,
+                            metadata={},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    schema_node_ids[schema_name] = schema_node_id
+
+                # Create or get table/view node (level 2)
+                table_key = f"{schema_name}.{table_name}"
+                table_node_id = table_node_ids.get(table_key)
+                table_path = f"{schema_path}/{table_name}"
+                node_type = (
+                    SchemaNodeType.VIEW if table_type == "VIEW" else SchemaNodeType.TABLE
+                )
+
+                if not table_node_id:
+                    table_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=table_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=schema_node_id,
+                            path=table_path,
+                            type=node_type,
+                            name=table_name,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=table_comment if table_comment else None,
+                            level=2,
+                            metadata={
+                                "table_type": table_type,
+                                "database_type": "snowflake",
+                                "schema_name": schema_name,
+                                "database_name": database_name,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    table_node_ids[table_key] = table_node_id
+
+                # Create column node (level 3)
+                column_node_id = uuid.uuid4()
+                column_path = f"{table_path}/{column_name}"
+                nodes.append(
+                    SchemaNode(
+                        id=column_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=table_node_id,
+                        path=column_path,
+                        type=SchemaNodeType.COLUMN,
+                        name=column_name,
+                        data_type=data_type if data_type else None,
+                        livedocs_type=(
+                            self._get_livedocs_type(data_type) if data_type else None
+                        ),
+                        description=column_comment if column_comment else None,
+                        level=3,
+                        metadata={},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error fetching Snowflake schema: {e}")
+            )
+        finally:
+            if connection is not None:
+                connection.close()
+
+        return nodes

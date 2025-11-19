@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import quote_plus
+from uuid import UUID
 
 import duckdb
 import polars as pl
@@ -14,6 +16,8 @@ from livedocs.types import (
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
+    SchemaNode,
+    SchemaNodeType,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -290,3 +294,207 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
             return types_df
 
         return pl.concat([types_df, preview_df.select(columns)], how="vertical_relaxed")
+
+    def _get_livedocs_type(self, duckdb_type: str) -> str:
+        """
+        Map DuckDB/Motherduck type to LivedocsStandardType.
+        Returns: "NUMBER", "DATE", "BOOLEAN", or "STRING"
+        """
+        type_lower = (duckdb_type or "").lower()
+
+        numeric_types = [
+            "int",
+            "integer",
+            "bigint",
+            "smallint",
+            "tinyint",
+            "hugeint",
+            "decimal",
+            "numeric",
+            "double",
+            "real",
+            "float",
+            "float4",
+            "float8",
+        ]
+
+        date_types = ["date", "time", "timestamp", "timestamptz", "interval"]
+
+        boolean_types = ["boolean", "bool"]
+
+        if any(nt in type_lower for nt in numeric_types):
+            return "NUMBER"
+        elif any(dt in type_lower for dt in date_types):
+            return "DATE"
+        elif any(bt in type_lower for bt in boolean_types):
+            return "BOOLEAN"
+        else:
+            return "STRING"
+
+    def get_schema(
+        self, connector_id: str, connection_details: dict[str, Any]
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema information from Motherduck database and return as list of schema nodes.
+
+        Args:
+            connector_id: The connector ID to use for schema nodes
+            connection_details: Dictionary containing connection details
+
+        Returns:
+            List of SchemaNode objects
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        details = self._extract_details(connection_details)
+        database_name = details.get("database") or "main"
+
+        # Create database node (level 0)
+        db_node_id = uuid.uuid4()
+        db_path = database_name
+        nodes.append(
+            SchemaNode(
+                id=db_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=db_path,
+                type=SchemaNodeType.DATABASE,
+                name=database_name,
+                data_type=None,
+                livedocs_type=None,
+                description=None,
+                level=0,
+                metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        conn = None
+        try:
+            conn = self._motherduck_connection(details)
+
+            # Query schema details (DuckDB uses information_schema similar to Postgres)
+            schema_details_query = """
+                SELECT 
+                    c.table_schema,
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    t.table_type,
+                    c.ordinal_position
+                FROM 
+                    information_schema.columns c
+                JOIN 
+                    information_schema.tables t
+                    ON c.table_schema = t.table_schema
+                    AND c.table_name = t.table_name
+                WHERE 
+                    c.table_schema NOT IN ('information_schema', 'pg_catalog')
+                    AND t.table_schema NOT IN ('information_schema', 'pg_catalog')
+                ORDER BY 
+                    c.table_schema, c.table_name, c.ordinal_position;
+            """
+
+            result = conn.execute(schema_details_query).fetchall()
+
+            schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
+            table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
+
+            for row in result:
+                table_schema = row[0]
+                table_name = row[1]
+                column_name = row[2]
+                data_type = row[3]
+                table_type = row[4]
+
+                # Create or get schema node (level 1)
+                schema_node_id = schema_node_ids.get(table_schema)
+                schema_path = f"{db_path}/{table_schema}"
+                if not schema_node_id:
+                    schema_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=schema_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=db_node_id,
+                            path=schema_path,
+                            type=SchemaNodeType.SCHEMA,
+                            name=table_schema,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=None,
+                            level=1,
+                            metadata={},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    schema_node_ids[table_schema] = schema_node_id
+
+                # Create or get table/view node (level 2)
+                table_key = f"{table_schema}.{table_name}"
+                table_node_id = table_node_ids.get(table_key)
+                table_path = f"{schema_path}/{table_name}"
+                node_type = (
+                    SchemaNodeType.VIEW if table_type == "VIEW" else SchemaNodeType.TABLE
+                )
+
+                if not table_node_id:
+                    table_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=table_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=schema_node_id,
+                            path=table_path,
+                            type=node_type,
+                            name=table_name,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=None,
+                            level=2,
+                            metadata={
+                                "database_type": "motherduck",
+                                "schema_name": table_schema,
+                                "database_name": database_name,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    table_node_ids[table_key] = table_node_id
+
+                # Create column node (level 3)
+                column_node_id = uuid.uuid4()
+                column_path = f"{table_path}/{column_name}"
+                nodes.append(
+                    SchemaNode(
+                        id=column_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=table_node_id,
+                        path=column_path,
+                        type=SchemaNodeType.COLUMN,
+                        name=column_name,
+                        data_type=data_type if data_type else None,
+                        livedocs_type=(
+                            self._get_livedocs_type(data_type) if data_type else None
+                        ),
+                        description=None,
+                        level=3,
+                        metadata={},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error fetching Motherduck schema: {e}")
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+
+        return nodes

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+from uuid import UUID
 
 import polars as pl
 from google.cloud import bigquery
@@ -17,6 +19,8 @@ from livedocs.types import (
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
+    SchemaNode,
+    SchemaNodeType,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -384,3 +388,289 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         # Mapping to STRING (default case)
         else:
             return "STRING"
+
+    def _get_livedocs_type(self, bq_type: str) -> str:
+        """
+        Map BigQuery type to LivedocsStandardType.
+        Returns: "NUMBER", "DATE", "BOOLEAN", or "STRING"
+        """
+        type_upper = bq_type.upper()
+
+        numeric_types = [
+            "INT64",
+            "INT",
+            "INTEGER",
+            "SMALLINT",
+            "TINYINT",
+            "BYTEINT",
+            "NUMERIC",
+            "DECIMAL",
+            "BIGNUMERIC",
+            "BIGDECIMAL",
+            "FLOAT64",
+            "FLOAT",
+            "DOUBLE",
+        ]
+
+        date_types = ["DATE", "DATETIME", "TIME", "TIMESTAMP"]
+
+        boolean_type = "BOOL"
+
+        if type_upper in numeric_types:
+            return "NUMBER"
+        elif type_upper in date_types:
+            return "DATE"
+        elif type_upper == boolean_type:
+            return "BOOLEAN"
+        else:
+            return "STRING"
+
+    def get_schema(
+        self, connector_id: str, connection_details: dict[str, Any]
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema information from BigQuery and return as list of schema nodes.
+
+        Args:
+            connector_id: The connector ID to use for schema nodes
+            connection_details: Dictionary containing connection details
+
+        Returns:
+            List of SchemaNode objects
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        project_id = connection_details.get("project_id")
+        if not project_id:
+            raise ValueError("project_id is required in connection details")
+
+        # Create project node (level 0) - BigQuery uses projects as the top level
+        project_node_id = uuid.uuid4()
+        project_path = project_id
+        nodes.append(
+            SchemaNode(
+                id=project_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=project_path,
+                type=SchemaNodeType.DATABASE,
+                name=project_id,
+                data_type=None,
+                livedocs_type=None,
+                description=f"BigQuery Project: {project_id}",
+                level=0,
+                metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        # Initialize BigQuery client
+        service_account_parsed = self._parse_service_account(connection_details)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_parsed
+        )
+        client = bigquery.Client(credentials=credentials, project=project_id)
+
+        try:
+            # Get all datasets
+            datasets_query = f"SELECT schema_name, location FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`;"
+            datasets_job = client.query(datasets_query)
+            bq_dataset_rows = datasets_job.result()
+
+            if not bq_dataset_rows:
+                return nodes
+
+            # Create dataset nodes and map dataset names to their node IDs
+            dataset_node_info_map: dict[str, dict[str, Any]] = {}
+
+            for ds_row in bq_dataset_rows:
+                schema_name = ds_row.schema_name
+                location = ds_row.location
+
+                # Get dataset metadata
+                description = f"Dataset: {schema_name}"
+                try:
+                    dataset = client.dataset(schema_name)
+                    metadata = dataset.get_metadata()
+                    description = (
+                        metadata.description
+                        or metadata.friendly_name
+                        or description
+                    )
+                except Exception:
+                    pass  # Use default description if metadata fetch fails
+
+                dataset_node_id = uuid.uuid4()
+                dataset_path = f"{project_path}/{schema_name}"
+                nodes.append(
+                    SchemaNode(
+                        id=dataset_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=project_node_id,
+                        path=dataset_path,
+                        type=SchemaNodeType.SCHEMA,
+                        name=schema_name,
+                        data_type=None,
+                        livedocs_type=None,
+                        description=description,
+                        level=1,
+                        metadata={"location": location},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                dataset_node_info_map[schema_name] = {
+                    "id": dataset_node_id,
+                    "path": dataset_path,
+                    "location": location,
+                }
+
+            # Group datasets by region for regional INFORMATION_SCHEMA calls
+            unique_regions = list(
+                set(
+                    ds_row.location
+                    for ds_row in client.query(
+                        f"SELECT DISTINCT location FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`;"
+                    ).result()
+                )
+            )
+
+            all_table_rows: list[dict[str, Any]] = []
+            all_column_rows: list[dict[str, Any]] = []
+
+            for region in unique_regions:
+                # Get datasets in this region
+                datasets_in_region_query = f"""
+                    SELECT schema_name
+                    FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`
+                    WHERE location = '{region}';
+                """
+                datasets_in_region = [
+                    row.schema_name
+                    for row in client.query(datasets_in_region_query).result()
+                ]
+
+                if not datasets_in_region:
+                    continue
+
+                dataset_filter = ", ".join(f"'{ds}'" for ds in datasets_in_region)
+
+                # Fetch TABLES for the region
+                tables_query = f"""
+                    SELECT table_catalog, table_schema, table_name, table_type
+                    FROM `region-{region}.INFORMATION_SCHEMA.TABLES`
+                    WHERE table_schema IN ({dataset_filter});
+                """
+                regional_table_rows = client.query(tables_query).result()
+                for row in regional_table_rows:
+                    all_table_rows.append(
+                        {
+                            "table_catalog": row.table_catalog,
+                            "table_schema": row.table_schema,
+                            "table_name": row.table_name,
+                            "table_type": row.table_type,
+                        }
+                    )
+
+                # Fetch COLUMNS for the region
+                columns_query = f"""
+                    SELECT table_catalog, table_schema, table_name, column_name, ordinal_position, data_type
+                    FROM `region-{region}.INFORMATION_SCHEMA.COLUMNS`
+                    WHERE table_schema IN ({dataset_filter})
+                    ORDER BY table_schema, table_name, ordinal_position;
+                """
+                regional_column_rows = client.query(columns_query).result()
+                for row in regional_column_rows:
+                    all_column_rows.append(
+                        {
+                            "table_catalog": row.table_catalog,
+                            "table_schema": row.table_schema,
+                            "table_name": row.table_name,
+                            "column_name": row.column_name,
+                            "ordinal_position": row.ordinal_position,
+                            "data_type": row.data_type,
+                        }
+                    )
+
+            # Process all fetched table and column rows
+            table_node_data_map: dict[str, dict[str, Any]] = {}
+
+            # Create Table/View Nodes (Level 2)
+            for table_row in all_table_rows:
+                dataset_info = dataset_node_info_map.get(table_row["table_schema"])
+                if not dataset_info:
+                    continue
+
+                table_node_id = uuid.uuid4()
+                table_path = f"{dataset_info['path']}/{table_row['table_name']}"
+                node_type = (
+                    SchemaNodeType.VIEW
+                    if table_row["table_type"] in ("VIEW", "MATERIALIZED VIEW")
+                    else SchemaNodeType.TABLE
+                )
+
+                nodes.append(
+                    SchemaNode(
+                        id=table_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=dataset_info["id"],
+                        path=table_path,
+                        type=node_type,
+                        name=table_row["table_name"],
+                        data_type=None,
+                        livedocs_type=None,
+                        description=f"{node_type.value}: {table_row['table_name']}",
+                        level=2,
+                        metadata={
+                            "table_type": table_row["table_type"],
+                            "location": dataset_info["location"],
+                            "database_type": "bigquery",
+                            "schema_name": table_row["table_schema"],
+                            "database_name": project_id,
+                        },
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                table_node_data_map[
+                    f"{table_row['table_schema']}.{table_row['table_name']}"
+                ] = {
+                    "id": table_node_id,
+                    "path": table_path,
+                    "parentId": dataset_info["id"],
+                }
+
+            # Create Column Nodes (Level 3)
+            for col_row in all_column_rows:
+                table_key = f"{col_row['table_schema']}.{col_row['table_name']}"
+                table_node_info = table_node_data_map.get(table_key)
+
+                if not table_node_info:
+                    continue
+
+                nodes.append(
+                    SchemaNode(
+                        id=uuid.uuid4(),
+                        connector_id=UUID(connector_id),
+                        parent_id=table_node_info["id"],
+                        path=f"{table_node_info['path']}/{col_row['column_name']}",
+                        type=SchemaNodeType.COLUMN,
+                        name=col_row["column_name"],
+                        data_type=col_row["data_type"],
+                        livedocs_type=self._get_livedocs_type(col_row["data_type"]),
+                        description=None,
+                        level=3,
+                        metadata={},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error fetching BigQuery schema: {e}")
+            )
+
+        return nodes
