@@ -6,6 +6,8 @@ from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlparse
+from uuid import UUID
 
 import polars as pl
 import psycopg
@@ -20,6 +22,8 @@ from livedocs.types import (
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
+    SchemaNode,
+    SchemaNodeType,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -795,7 +799,7 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
 
     def get_schema(
         self, connector_id: str, connection_details: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    ) -> list[SchemaNode]:
         """
         Fetch schema information from PostgreSQL database and return as list of schema nodes.
 
@@ -804,18 +808,19 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
             connection_details: Dictionary containing connection details (host, port, database, etc.)
 
         Returns:
-            List of schema node dictionaries matching SchemaNode structure
+            List of SchemaNode objects
         """
-        nodes: list[dict[str, Any]] = []
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
 
         # Get database name
         db_name: str | None = None
         if connection_details.get("connect_using") == "url":
-            from urllib.parse import urlparse
-
             connection_url = connection_details.get("connection_url", "")
             if not connection_url:
-                raise ValueError("Connection URL is required when using 'url' connection type")
+                raise ValueError(
+                    "Connection URL is required when using 'url' connection type"
+                )
             parsed_url = urlparse(connection_url)
             db_name = parsed_url.path.lstrip("/")
             if not db_name:
@@ -831,21 +836,25 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         connection_string = self._build_connection_string(connection_details)
 
         # Create database node (level 0)
-        db_node_id = str(uuid.uuid4())
+        db_node_id = uuid.uuid4()
         db_path = db_name
-        nodes.append({
-            "id": db_node_id,
-            "connector_id": connector_id,
-            "parent_id": None,
-            "path": db_path,
-            "type": "DATABASE",
-            "name": db_name,
-            "data_type": None,
-            "livedocs_type": None,
-            "description": None,
-            "level": 0,
-            "metadata": {},
-        })
+        nodes.append(
+            SchemaNode(
+                id=db_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=db_path,
+                type=SchemaNodeType.DATABASE,
+                name=db_name,
+                data_type=None,
+                livedocs_type=None,
+                description=None,
+                level=0,
+                metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
         # Query schema details
         schema_details_query = """
@@ -876,8 +885,8 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
                 c.table_schema, c.table_name, c.ordinal_position;
         """
 
-        schema_node_ids: dict[str, str] = {}  # "schemaName" -> nodeId
-        table_node_ids: dict[str, str] = {}  # "schemaName.tableName" -> nodeId
+        schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
+        table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
 
         try:
             with psycopg.connect(connection_string) as conn:
@@ -895,68 +904,94 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
                         table_description = row.get("table_description")
 
                         # Create or get schema node (level 1)
-                        schema_node_id = schema_node_ids.get(table_schema)
+                        schema_node_id = schema_node_ids.get(str(table_schema))
                         schema_path = f"{db_path}/{table_schema}"
                         if not schema_node_id:
-                            schema_node_id = str(uuid.uuid4())
-                            nodes.append({
-                                "id": schema_node_id,
-                                "connector_id": connector_id,
-                                "parent_id": db_node_id,
-                                "path": schema_path,
-                                "type": "SCHEMA",
-                                "name": table_schema,
-                                "data_type": None,
-                                "livedocs_type": None,
-                                "description": None,
-                                "level": 1,
-                                "metadata": {},
-                            })
-                            schema_node_ids[table_schema] = schema_node_id
+                            schema_node_id = uuid.uuid4()
+                            nodes.append(
+                                SchemaNode(
+                                    id=schema_node_id,
+                                    connector_id=UUID(connector_id),
+                                    parent_id=db_node_id,
+                                    path=schema_path,
+                                    type=SchemaNodeType.SCHEMA,
+                                    name=str(table_schema),
+                                    data_type=None,
+                                    livedocs_type=None,
+                                    description=None,
+                                    level=1,
+                                    metadata={},
+                                    created_at=now,
+                                    updated_at=now,
+                                )
+                            )
+                            schema_node_ids[str(table_schema)] = schema_node_id
 
                         # Create or get table/view node (level 2)
                         table_key = f"{table_schema}.{table_name}"
                         table_node_id = table_node_ids.get(table_key)
                         table_path = f"{schema_path}/{table_name}"
-                        node_type = "VIEW" if table_type == "VIEW" else "TABLE"
+                        node_type = (
+                            SchemaNodeType.VIEW
+                            if table_type == "VIEW"
+                            else SchemaNodeType.TABLE
+                        )
 
                         if not table_node_id:
-                            table_node_id = str(uuid.uuid4())
-                            nodes.append({
-                                "id": table_node_id,
-                                "connector_id": connector_id,
-                                "parent_id": schema_node_id,
-                                "path": table_path,
-                                "type": node_type,
-                                "name": table_name,
-                                "data_type": None,
-                                "livedocs_type": None,
-                                "description": table_description if table_description else None,
-                                "level": 2,
-                                "metadata": {
-                                    "database_type": "postgres",
-                                    "schema_name": table_schema,
-                                    "database_name": db_name,
-                                },
-                            })
+                            table_node_id = uuid.uuid4()
+                            nodes.append(
+                                SchemaNode(
+                                    id=table_node_id,
+                                    connector_id=UUID(connector_id),
+                                    parent_id=schema_node_id,
+                                    path=table_path,
+                                    type=node_type,
+                                    name=str(table_name),
+                                    data_type=None,
+                                    livedocs_type=None,
+                                    description=table_description
+                                    if table_description
+                                    else None,
+                                    level=2,
+                                    metadata={
+                                        "database_type": "postgres",
+                                        "schema_name": str(table_schema),
+                                        "database_name": db_name,
+                                    },
+                                    created_at=now,
+                                    updated_at=now,
+                                )
+                            )
                             table_node_ids[table_key] = table_node_id
 
                         # Create column node (level 3)
-                        column_node_id = str(uuid.uuid4())
+                        column_node_id = uuid.uuid4()
                         column_path = f"{table_path}/{column_name}"
-                        nodes.append({
-                            "id": column_node_id,
-                            "connector_id": connector_id,
-                            "parent_id": table_node_id,
-                            "path": column_path,
-                            "type": "COLUMN",
-                            "name": column_name,
-                            "data_type": data_type if data_type else None,
-                            "livedocs_type": self._get_livedocs_type(data_type) if data_type else None,
-                            "description": column_description if column_description else None,
-                            "level": 3,
-                            "metadata": {},
-                        })
+                        nodes.append(
+                            SchemaNode(
+                                id=column_node_id,
+                                connector_id=UUID(connector_id),
+                                parent_id=table_node_id,
+                                path=column_path,
+                                type=SchemaNodeType.COLUMN,
+                                name=str(column_name),
+                                data_type=str(data_type) if data_type else None,
+                                livedocs_type=(
+                                    self._get_livedocs_type(str(data_type))
+                                    if data_type
+                                    else None
+                                ),
+                                description=(
+                                    str(column_description)
+                                    if column_description
+                                    else None
+                                ),
+                                level=3,
+                                metadata={},
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
 
         except Exception as e:
             raise RuntimeError(

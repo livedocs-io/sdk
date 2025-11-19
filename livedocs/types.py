@@ -2,13 +2,15 @@ import base64
 import gzip
 import json
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, TypedDict
+from uuid import UUID
 
 import msgpack
 from IPython.core.display import DisplayObject
 from polars import DataFrame
-from pydantic import BaseModel, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
 class GCSBucketType(str, Enum):
@@ -341,6 +343,33 @@ class Schema(TypedDict):
     children: list["Schema"]
 
 
+class SchemaNodeType(str, Enum):
+    COLUMN = "COLUMN"
+    DATABASE = "DATABASE"
+    SCHEMA = "SCHEMA"
+    TABLE = "TABLE"
+    VIEW = "VIEW"
+
+
+class SchemaNode(BaseModel):
+    id: UUID
+    connector_id: UUID
+    parent_id: UUID | None = None
+    path: str
+    type: SchemaNodeType
+    name: str
+    data_type: str | None = None
+    livedocs_type: str | None = None
+    description: str | None = None
+    level: int
+    metadata: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
 class DBSaveConfig(TypedDict):
     dataframe_name: str
     dataframe_element_id: str
@@ -551,4 +580,6 @@ __all__ = [
     "Spec",
     "DBSaveConfig",
     "JsonDisplay",
+    "SchemaNode",
+    "SchemaNodeType",
 ]
