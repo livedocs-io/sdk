@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+from uuid import UUID
 
 import clickhouse_connect
 import polars as pl
@@ -15,6 +17,8 @@ from livedocs.types import (
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
+    SchemaNode,
+    SchemaNodeType,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -464,3 +468,238 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
             processed_schema[col_name] = col_type
 
         return processed_schema
+
+    def _get_livedocs_type(self, clickhouse_type: str) -> str:
+        """
+        Map ClickHouse type to LivedocsStandardType.
+        Returns: "NUMBER", "DATE", "BOOLEAN", or "STRING"
+        """
+        numeric_types = [
+            "UInt8",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+            "UInt128",
+            "UInt256",
+            "Int8",
+            "Int16",
+            "Int32",
+            "Int64",
+            "Int128",
+            "Int256",
+            "Float32",
+            "Float64",
+            "Decimal",
+            "Decimal32",
+            "Decimal64",
+            "Decimal128",
+            "Decimal256",
+        ]
+
+        date_types = [
+            "Date",
+            "Date32",
+            "DateTime",
+            "DateTime32",
+            "DateTime64",
+            "Time",
+            "Time32",
+            "Time64",
+        ]
+
+        boolean_types = ["Bool", "Boolean"]
+
+        # Remove Nullable() and LowCardinality() wrappers for base type detection
+        base_type = clickhouse_type.replace("Nullable(", "").replace(")", "")
+        base_type = base_type.replace("LowCardinality(", "").replace(")", "")
+
+        if base_type in numeric_types:
+            return "NUMBER"
+        elif any(dt in base_type for dt in date_types):
+            return "DATE"
+        elif base_type in boolean_types:
+            return "BOOLEAN"
+        else:
+            return "STRING"
+
+    def get_schema(
+        self, connector_id: str, connection_details: dict[str, Any]
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema information from ClickHouse database and return as list of schema nodes.
+
+        Args:
+            connector_id: The connector ID to use for schema nodes
+            connection_details: Dictionary containing connection details
+
+        Returns:
+            List of SchemaNode objects
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        # Get database server name (host)
+        db_server_name = connection_details.get("host", "")
+        if not db_server_name:
+            raise ValueError("Host is required in connection details")
+
+        # Create database node (level 0)
+        db_server_node_id = uuid.uuid4()
+        db_server_path = db_server_name
+        nodes.append(
+            SchemaNode(
+                id=db_server_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=db_server_path,
+                type=SchemaNodeType.DATABASE,
+                name=db_server_name,
+                data_type=None,
+                livedocs_type=None,
+                description=None,
+                level=0,
+                metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        # Build connection
+        client = None
+        try:
+            client = clickhouse_connect.get_client(
+                host=connection_details["host"],
+                port=connection_details["port"],
+                user=connection_details["user_name"],
+                password=connection_details["password"],
+                secure=True,
+            )
+
+            # Query schema details
+            schema_details_query = """
+                SELECT
+                    c.database AS schema_name,
+                    sdb.comment AS schema_comment,
+                    c.table AS table_name,
+                    t.engine AS table_engine,
+                    t.comment AS table_comment,
+                    c.name AS column_name,
+                    c.type AS column_data_type,
+                    c.comment AS column_comment,
+                    c.position AS column_position
+                FROM system.columns AS c
+                JOIN system.tables AS t ON c.database = t.database AND c.table = t.name
+                LEFT JOIN system.databases AS sdb ON c.database = sdb.name
+                WHERE c.database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
+                  AND t.database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
+                ORDER BY c.database, c.table, c.position;
+            """
+
+            result = client.query(schema_details_query)
+            result_rows = result.result_set
+
+            # NOTE: We assume the databases are schemas in ClickHouse
+            schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
+            table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
+
+            for row in result_rows:
+                schema_name = row[0]
+                schema_comment = row[1]
+                table_name = row[2]
+                table_engine = row[3]
+                table_comment = row[4]
+                column_name = row[5]
+                column_data_type = row[6]
+                column_comment = row[7]
+
+                # Create or get schema node (level 1)
+                schema_node_id = schema_node_ids.get(schema_name)
+                schema_path = f"{db_server_path}/{schema_name}"
+                if not schema_node_id:
+                    schema_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=schema_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=db_server_node_id,
+                            path=schema_path,
+                            type=SchemaNodeType.SCHEMA,
+                            name=schema_name,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=schema_comment if schema_comment else None,
+                            level=1,
+                            metadata={},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    schema_node_ids[schema_name] = schema_node_id
+
+                # Create or get table/view node (level 2)
+                table_key = f"{schema_name}.{table_name}"
+                table_node_id = table_node_ids.get(table_key)
+                table_path = f"{schema_path}/{table_name}"
+                is_view = table_engine in ("View", "MaterializedView", "LiveView")
+                node_type = SchemaNodeType.VIEW if is_view else SchemaNodeType.TABLE
+
+                if not table_node_id:
+                    table_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=table_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=schema_node_id,
+                            path=table_path,
+                            type=node_type,
+                            name=table_name,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=table_comment if table_comment else None,
+                            level=2,
+                            metadata={
+                                "engine": table_engine,
+                                "database_type": "clickhouse",
+                                "schema_name": schema_name,
+                                "database_name": db_server_name,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    table_node_ids[table_key] = table_node_id
+
+                # Create column node (level 3)
+                column_node_id = uuid.uuid4()
+                column_path = f"{table_path}/{column_name}"
+                nodes.append(
+                    SchemaNode(
+                        id=column_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=table_node_id,
+                        path=column_path,
+                        type=SchemaNodeType.COLUMN,
+                        name=column_name,
+                        data_type=column_data_type if column_data_type else None,
+                        livedocs_type=(
+                            self._get_livedocs_type(column_data_type)
+                            if column_data_type
+                            else None
+                        ),
+                        description=column_comment if column_comment else None,
+                        level=3,
+                        metadata={},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error fetching ClickHouse schema: {e}")
+            )
+        finally:
+            if client is not None:
+                client.close()
+
+        return nodes

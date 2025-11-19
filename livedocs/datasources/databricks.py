@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 import traceback
+import uuid
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Sequence
+from uuid import UUID
 
 import polars as pl
 import pyarrow as pa
@@ -18,6 +20,8 @@ from livedocs.types import (
     LivedocsResult,
     QueryResult,
     QueryResultMetadata,
+    SchemaNode,
+    SchemaNodeType,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -532,3 +536,224 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
             return f"X'{hex_str}'"
         escaped = str(value).replace("'", "''")
         return f"'{escaped}'"
+
+    def _get_livedocs_type(self, databricks_type: str) -> str:
+        """
+        Map Databricks type to LivedocsStandardType.
+        Returns: "NUMBER", "DATE", "BOOLEAN", or "STRING"
+        """
+        type_upper = (databricks_type or "").upper()
+
+        numeric_types = [
+            "TINYINT",
+            "BYTE",
+            "SMALLINT",
+            "SHORT",
+            "INT",
+            "INTEGER",
+            "BIGINT",
+            "LONG",
+            "FLOAT",
+            "REAL",
+            "FLOAT4",
+            "DOUBLE",
+            "FLOAT8",
+            "DECIMAL",
+            "NUMERIC",
+        ]
+
+        date_types = [
+            "DATE",
+            "TIMESTAMP",
+            "TIMESTAMP_NTZ",
+            "TIMESTAMP_LTZ",
+            "TIMESTAMP_TZ",
+            "TIME",
+        ]
+
+        boolean_types = ["BOOLEAN", "BOOL"]
+
+        if any(nt in type_upper for nt in numeric_types):
+            return "NUMBER"
+        elif any(dt in type_upper for dt in date_types):
+            return "DATE"
+        elif any(bt in type_upper for bt in boolean_types):
+            return "BOOLEAN"
+        else:
+            return "STRING"
+
+    def get_schema(
+        self, connector_id: str, connection_details: dict[str, Any]
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema information from Databricks and return as list of schema nodes.
+
+        Args:
+            connector_id: The connector ID to use for schema nodes
+            connection_details: Dictionary containing connection details
+
+        Returns:
+            List of SchemaNode objects
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        # Get connection details
+        connection, default_catalog = self._get_workspace_connection(connection_details)
+        catalog_name = default_catalog or "hive_metastore"
+
+        # Create catalog node (level 0) - Databricks uses catalogs as the top level
+        catalog_node_id = uuid.uuid4()
+        catalog_path = catalog_name
+        nodes.append(
+            SchemaNode(
+                id=catalog_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=catalog_path,
+                type=SchemaNodeType.DATABASE,
+                name=catalog_name,
+                data_type=None,
+                livedocs_type=None,
+                description=None,
+                level=0,
+                metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            if catalog_name:
+                cursor.execute(f"USE CATALOG `{catalog_name.replace('`', '``')}`")
+
+            # Query schema details from information_schema
+            # Databricks uses INFORMATION_SCHEMA similar to standard SQL
+            schema_details_query = """
+                SELECT 
+                    table_catalog,
+                    table_schema,
+                    table_name,
+                    column_name,
+                    data_type,
+                    table_type,
+                    ordinal_position
+                FROM 
+                    information_schema.columns
+                WHERE 
+                    table_catalog = ?
+                    AND table_schema NOT IN ('information_schema')
+                ORDER BY 
+                    table_schema, table_name, ordinal_position;
+            """
+
+            cursor.execute(schema_details_query, [catalog_name])
+            result_rows = cursor.fetchall()
+
+            schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
+            table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
+
+            for row in result_rows:
+                table_catalog = row[0]
+                table_schema = row[1]
+                table_name = row[2]
+                column_name = row[3]
+                data_type = row[4]
+                table_type = row[5]
+
+                # Create or get schema node (level 1)
+                schema_node_id = schema_node_ids.get(table_schema)
+                schema_path = f"{catalog_path}/{table_schema}"
+                if not schema_node_id:
+                    schema_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=schema_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=catalog_node_id,
+                            path=schema_path,
+                            type=SchemaNodeType.SCHEMA,
+                            name=table_schema,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=None,
+                            level=1,
+                            metadata={},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    schema_node_ids[table_schema] = schema_node_id
+
+                # Create or get table/view node (level 2)
+                table_key = f"{table_schema}.{table_name}"
+                table_node_id = table_node_ids.get(table_key)
+                table_path = f"{schema_path}/{table_name}"
+                node_type = (
+                    SchemaNodeType.VIEW
+                    if table_type == "VIEW"
+                    else SchemaNodeType.TABLE
+                )
+
+                if not table_node_id:
+                    table_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=table_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=schema_node_id,
+                            path=table_path,
+                            type=node_type,
+                            name=table_name,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=None,
+                            level=2,
+                            metadata={
+                                "table_type": table_type,
+                                "database_type": "databricks",
+                                "schema_name": table_schema,
+                                "database_name": catalog_name,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    table_node_ids[table_key] = table_node_id
+
+                # Create column node (level 3)
+                column_node_id = uuid.uuid4()
+                column_path = f"{table_path}/{column_name}"
+                nodes.append(
+                    SchemaNode(
+                        id=column_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=table_node_id,
+                        path=column_path,
+                        type=SchemaNodeType.COLUMN,
+                        name=column_name,
+                        data_type=data_type if data_type else None,
+                        livedocs_type=(
+                            self._get_livedocs_type(data_type) if data_type else None
+                        ),
+                        description=None,
+                        level=3,
+                        metadata={},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(f"Error fetching Databricks schema: {e}")
+            )
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
+
+        return nodes
