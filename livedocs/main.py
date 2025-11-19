@@ -636,7 +636,7 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="run table element"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
-            query = get_query_for_datasource(datasource)
+            query = get_query_for_datasource(datasource, None)
             if (
                 datasource["source_type"] == "database_table"
                 and DatabaseType(datasource["database_info"]["database_type"])
@@ -721,7 +721,7 @@ class Livedocs:
             datasource: ElementDataSource = json.loads(datasource_str)
 
             query_span = sentry_sdk.start_span(name="run query")
-            query = get_query_for_datasource(datasource)
+            query = get_query_for_datasource(datasource, None)
             if query is None:
                 raise ValueError("Query is required")
 
