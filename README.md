@@ -1,4 +1,4 @@
-# vm-lib
+# Livedocs SDK
 
 A Python SDK that enables Livedocs to run helper functions for various elements, such as charts, tables, SQL queries, and text.
 
@@ -19,20 +19,20 @@ Before installation, ensure your build system is set up with `setuptools`, `whee
 pip install --upgrade pip setuptools wheel
 ```
 
-### Install vm-lib in Development Mode
+### Install the SDK in Development Mode
 
-If you’ll be actively working with `vm-lib`, install it in *editable mode* so the kernel points to your latest changes. Make sure this command is run in the same environment where Middleman’s `VIRTUAL_ENV` is poined to:
+If you’ll be actively working with SDK, install it in *editable mode* so the kernel points to your latest changes. Make sure this command is run in the same environment where Middleman’s virtualenv is poined to:
 
 ```bash
 pip install -e .
 ```
 
-### Install vm-lib as a Standalone Package
+### Install SDK as a Standalone Package
 
-To install `vm-lib` as a standalone library, use the following command, replacing `username` and `password` with your GitHub credentials:
+To install SDK as a standalone library, use the following command:
 
 ```bash
-pip install git+https://username:password@github.com/livedocs-io/vm-lib.git
+pip install git+https://github.com/livedocs-io/sdk.git
 ```
 
 ---

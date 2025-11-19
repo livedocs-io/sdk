@@ -1,12 +1,13 @@
 [build-system]
-requires = ["setuptools>=80", "wheel"]
+requires = ["setuptools>=80", "wheel", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "livedocs"
-version = "1.0.0"
-description = "Python SDK for Livedocs"
+dynamic = ["version"]
+description = "SDK for Livedocs"
 authors = [{ name = "Livedocs" }]
+readme = "README.md"
 dependencies = [
     "requests>=2.32,<3",
     "jinja2>=3.1,<4",
@@ -36,7 +37,8 @@ classifiers = [
 ]
 
 [project.urls]
-homepage = "https://github.com/livedocs-io/vm-lib"
+homepage = "https://github.com/livedocs-io/sdk"
+repository = "https://github.com/livedocs-io/sdk"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -44,3 +46,6 @@ include = ["livedocs", "livedocs.*"]
 
 [project.optional-dependencies]
 test = ["flask", "flask-cors"]
+
+[tool.setuptools_scm]
+fallback_version = "1.0.0"

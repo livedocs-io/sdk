@@ -21,7 +21,7 @@ from livedocs.types import (
 
 def get_run_context() -> str:
     current_run_context = "edit_mode"
-    match os.getenv("RUN_CONTEXT"):
+    match os.getenv("LIVEDOCS_RUN_CONTEXT"):
         case "logic":
             current_run_context = "edit_mode"
         case "scheduled":
