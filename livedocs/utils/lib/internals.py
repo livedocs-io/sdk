@@ -65,9 +65,9 @@ def livedocs_internal_persist_built_in_vars(
     if report_id is None or token is None:
         raise ValueError("Report ID and token are required")
 
-    CORE_URL = os.getenv("CORE_BASE_URL")
+    CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
     if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
+        raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
 
     response = requests.post(
         f"{CORE_URL}/v1/vars/{report_id}",
@@ -84,9 +84,9 @@ def livedocs_internal_persist_built_in_vars(
 
 @livedocs_internal_instrument
 def livedocs_internal_fetch_credentials(report_id: str, token: str) -> dict[str, str]:
-    CORE_URL = os.getenv("CORE_BASE_URL")
+    CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
     if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
+        raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
 
     response = requests.get(
         f"{CORE_URL}/v1/credentials/{report_id}",
@@ -110,9 +110,9 @@ def livedocs_internal_fetch_file_manifest(
     file_id: str | None = None,
     file_name: str | None = None,
 ) -> FileManifest:
-    CORE_URL = os.getenv("CORE_BASE_URL")
+    CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
     if not CORE_URL:
-        raise ValueError("CORE_BASE_URL environment variable not set")
+        raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
 
     if not file_id and not file_name:
         raise ValueError(
@@ -209,16 +209,20 @@ def livedocs_internal_setup_sentry():
     """
     Initializes Sentry for error tracking and performance monitoring.
     """
-    dsn = os.getenv("VMLIB_SENTRY_DSN")
+    dsn = os.getenv("LIVEDOCS_PY_SDK_SENTRY_DSN")
     if not dsn:
         return
 
     try:
         sentry_sdk.init(
             dsn=dsn,
-            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            environment=os.getenv("APP_ENV"),
+            traces_sample_rate=1
+            if os.getenv("LIVEDOCS_APP_ENV") != "production"
+            else 0.2,
+            profiles_sample_rate=1
+            if os.getenv("LIVEDOCS_APP_ENV") != "production"
+            else 0.2,
+            environment=os.getenv("LIVEDOCS_APP_ENV"),
         )
     except Exception as e:
         raise RuntimeError("Failed to initialize Sentry") from e

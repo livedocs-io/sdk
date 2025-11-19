@@ -21,7 +21,7 @@ from livedocs.types import (
 
 def get_run_context() -> str:
     current_run_context = "edit_mode"
-    match os.getenv("RUN_CONTEXT"):
+    match os.getenv("LIVEDOCS_RUN_CONTEXT"):
         case "logic":
             current_run_context = "edit_mode"
         case "scheduled":
@@ -118,7 +118,7 @@ def get_query_for_datasource(
                 DatabaseType(datasource["database_info"]["database_type"])
                 == DatabaseType.Databricks
             ):
-                return f'SELECT * FROM {datasource["database_table_info"]["catalog_name"]}.{datasource["database_table_info"]["schema_name"]}.{datasource["database_table_info"]["table_name"]} LIMIT {limit};'
+                return f"SELECT * FROM {datasource['database_table_info']['catalog_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT {limit};"
             else:
                 return f'SELECT * FROM "{datasource["database_info"]["database_name"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT {limit};'
 

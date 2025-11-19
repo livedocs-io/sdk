@@ -14,25 +14,25 @@ from livedocs.utils.lib.cache import QueryCache
 from livedocs.manager.credentials import StaticCredentialStore
 from livedocs.types import Credentials, DatabaseConnection
 
-POSTGRES_URL_ENV = ""
+LIVEDOCS_TEST_POSTGRES_URL_ENV = ""
 
 
 @unittest.skipUnless(
-    os.getenv(POSTGRES_URL_ENV),
-    f"Set {POSTGRES_URL_ENV} to run PostgreSQL integration tests.",
+    os.getenv(LIVEDOCS_TEST_POSTGRES_URL_ENV),
+    f"Set {LIVEDOCS_TEST_POSTGRES_URL_ENV} to run PostgreSQL integration tests.",
 )
 class TestLivedocsPostgresIntegration(unittest.TestCase):
     def setUp(self):
-        self.connection_url = os.environ[POSTGRES_URL_ENV]
+        self.connection_url = os.environ[LIVEDOCS_TEST_POSTGRES_URL_ENV]
 
         self._prev_files_path = os.getenv("LIVEDOCS_FILES_PATH")
         self.temp_dir = tempfile.mkdtemp()
         os.environ["LIVEDOCS_FILES_PATH"] = self.temp_dir
 
-        self._prev_run_context = os.getenv("RUN_CONTEXT")
-        os.environ["RUN_CONTEXT"] = "logic"
+        self._prev_run_context = os.getenv("LIVEDOCS_RUN_CONTEXT")
+        os.environ["LIVEDOCS_RUN_CONTEXT"] = "logic"
 
-        os.environ.pop("VMLIB_SENTRY_DSN", None)
+        os.environ.pop("LIVEDOCS_PY_SDK_SENTRY_DSN", None)
 
         self.connector_id = f"pg-{uuid.uuid4().hex[:8]}"
 

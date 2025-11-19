@@ -6,12 +6,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable, cast
 
-import pandas as pd
 import polars as pl
 import sentry_sdk
 from jinja2 import Template
 
-from livedocs.utils.lib.cache import QueryCache
 from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.datasources import DatasourceManager
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -30,27 +28,30 @@ from livedocs.types import (
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
-    Schema,
     Spec,
     VegaSpec,
     WorkspaceSecret,
 )
-from livedocs.utils.cells.chart_helpers import apply_chart_filters
+from livedocs.utils.cells.chart_helpers import (
+    _LIVEDOCS_PROTECTED_VARS,
+    apply_chart_filters,
+)
+from livedocs.utils.cells.single_value_helpers import process_single_value
+from livedocs.utils.cells.table_helpers import apply_table_operations
 from livedocs.utils.common import (
     _download_file,
     _setup_dirs,
+    debug,
     get_query_for_datasource,
+    serializer,
 )
+from livedocs.utils.lib.cache import QueryCache
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
     livedocs_internal_instrument,
     livedocs_internal_persist_built_in_vars,
     livedocs_internal_setup_sentry,
 )
-from livedocs.utils.cells.chart_helpers import _LIVEDOCS_PROTECTED_VARS
-from livedocs.utils.common import debug, serializer
-from livedocs.utils.cells.single_value_helpers import process_single_value
-from livedocs.utils.cells.table_helpers import apply_table_operations
 from livedocs.utils.lib.vega import create_vega_spec
 
 
@@ -163,7 +164,7 @@ class Livedocs:
             str: The variable value.
         """
         if key == "run_context":
-            return os.getenv("RUN_CONTEXT")
+            return os.getenv("LIVEDOCS_RUN_CONTEXT")
 
         return self._built_in_vars.get(key, None)
 
