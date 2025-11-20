@@ -592,7 +592,7 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
                 LEFT JOIN system.databases AS sdb ON c.database = sdb.name
                 WHERE c.database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
                   AND t.database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')
-                ORDER BY c.database, c.table, c.position;
+                ORDER BY c.database, c.table, c.position
             """
 
             result = client.query(schema_details_query)
