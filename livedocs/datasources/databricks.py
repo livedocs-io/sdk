@@ -587,6 +587,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
     ) -> list[SchemaNode]:
         """
         Fetch schema information from Databricks and return as list of schema nodes.
+        Queries all accessible tables across all catalogs.
 
         Args:
             connector_id: The connector ID to use for schema nodes
@@ -599,61 +600,47 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         now = datetime.now(timezone.utc)
 
         # Get connection details
-        connection, default_catalog = self._get_workspace_connection(connection_details)
-        catalog_name = default_catalog or "hive_metastore"
-
-        # Create catalog node (level 0) - Databricks uses catalogs as the top level
-        catalog_node_id = uuid.uuid4()
-        catalog_path = catalog_name
-        nodes.append(
-            SchemaNode(
-                id=catalog_node_id,
-                connector_id=UUID(connector_id),
-                parent_id=None,
-                path=catalog_path,
-                type=SchemaNodeType.DATABASE,
-                name=catalog_name,
-                data_type=None,
-                livedocs_type=None,
-                description=None,
-                level=0,
-                metadata={},
-                created_at=now,
-                updated_at=now,
-            )
-        )
+        connection, _ = self._get_workspace_connection(connection_details)
 
         cursor = None
         try:
             cursor = connection.cursor()
-            if catalog_name:
-                cursor.execute(f"USE CATALOG `{catalog_name.replace('`', '``')}`")
 
-            # Query schema details from information_schema
-            # Databricks uses INFORMATION_SCHEMA similar to standard SQL
+            # Query all accessible tables across all catalogs using the global
+            # Unity Catalog information schema. `system.information_schema`
+            # exposes metadata for every catalog the current credentials can access.
             schema_details_query = """
                 SELECT 
-                    table_catalog,
-                    table_schema,
-                    table_name,
-                    column_name,
-                    data_type,
-                    table_type,
-                    ordinal_position
+                    c.table_catalog,
+                    c.table_schema,
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    t.table_type,
+                    c.ordinal_position
                 FROM 
-                    information_schema.columns
+                    system.information_schema.columns c
+                JOIN 
+                    system.information_schema.tables t
+                ON 
+                    c.table_catalog = t.table_catalog
+                    AND c.table_schema = t.table_schema
+                    AND c.table_name = t.table_name
                 WHERE 
-                    table_catalog = ?
-                    AND table_schema NOT IN ('information_schema')
+                    UPPER(c.table_schema) <> 'INFORMATION_SCHEMA'
                 ORDER BY 
-                    table_schema, table_name, ordinal_position;
+                    c.table_catalog, c.table_schema, c.table_name, c.ordinal_position;
             """
 
-            cursor.execute(schema_details_query, [catalog_name])
+            cursor.execute(schema_details_query)
             result_rows = cursor.fetchall()
 
-            schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
-            table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
+            # Track nodes by their keys to avoid duplicates
+            catalog_node_ids: dict[str, UUID] = {}  # "catalogName" -> nodeId
+            schema_node_ids: dict[str, UUID] = {}  # "catalogName.schemaName" -> nodeId
+            table_node_ids: dict[
+                str, UUID
+            ] = {}  # "catalogName.schemaName.tableName" -> nodeId
 
             for row in result_rows:
                 table_catalog = row[0]
@@ -663,8 +650,33 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
                 data_type = row[4]
                 table_type = row[5]
 
+                # Create or get catalog node (level 0)
+                catalog_node_id = catalog_node_ids.get(table_catalog)
+                catalog_path = table_catalog
+                if not catalog_node_id:
+                    catalog_node_id = uuid.uuid4()
+                    nodes.append(
+                        SchemaNode(
+                            id=catalog_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=None,
+                            path=catalog_path,
+                            type=SchemaNodeType.DATABASE,
+                            name=table_catalog,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=None,
+                            level=0,
+                            metadata={},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    catalog_node_ids[table_catalog] = catalog_node_id
+
                 # Create or get schema node (level 1)
-                schema_node_id = schema_node_ids.get(table_schema)
+                schema_key = f"{table_catalog}.{table_schema}"
+                schema_node_id = schema_node_ids.get(schema_key)
                 schema_path = f"{catalog_path}/{table_schema}"
                 if not schema_node_id:
                     schema_node_id = uuid.uuid4()
@@ -685,10 +697,10 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
                             updated_at=now,
                         )
                     )
-                    schema_node_ids[table_schema] = schema_node_id
+                    schema_node_ids[schema_key] = schema_node_id
 
                 # Create or get table/view node (level 2)
-                table_key = f"{table_schema}.{table_name}"
+                table_key = f"{table_catalog}.{table_schema}.{table_name}"
                 table_node_id = table_node_ids.get(table_key)
                 table_path = f"{schema_path}/{table_name}"
                 node_type = (
@@ -715,7 +727,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
                                 "table_type": table_type,
                                 "database_type": "databricks",
                                 "schema_name": table_schema,
-                                "database_name": catalog_name,
+                                "database_name": table_catalog,
                             },
                             created_at=now,
                             updated_at=now,
