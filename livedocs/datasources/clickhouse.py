@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from uuid import UUID
 
 import clickhouse_connect
 import polars as pl
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Literal
 
 from livedocs.datasources.base import BaseDatasourceConnector
@@ -23,6 +25,136 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+
+class ClickHouseConnectionDetails(BaseModel):
+    """
+    Pydantic model for ClickHouse connection details.
+    Matches the Zod schema validation from the client.
+
+    Expected structure (from form submission):
+    {
+        name: string,        // Required, non-empty string
+        host: string,       // Required, valid hostname or IP address (IPv4/IPv6)
+        port: number,       // Required, integer between 1 and 65535
+        user_name: string,  // Required, starts with letter/underscore, alphanumeric + underscores
+        password: string,   // Required, non-empty string
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    host: str = Field(
+        ...,
+        min_length=1,
+        description="Host (required, valid hostname or IP address)",
+    )
+    port: int = Field(
+        ...,
+        ge=1,
+        le=65535,
+        description="Port (required, integer between 1 and 65535)",
+    )
+    user_name: str = Field(
+        ...,
+        min_length=1,
+        description="Username (required, starts with letter/underscore, alphanumeric + underscores)",
+    )
+    password: str = Field(
+        ...,
+        min_length=1,
+        description="Password (required, non-empty string)",
+    )
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, v: str) -> str:
+        """
+        Validate host format: valid hostname or IP address (IPv4/IPv6), or "localhost".
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Host is required")
+
+        # Allow localhost
+        if v == "localhost":
+            return v
+
+        # Valid hostname pattern: alphanumeric, dots, hyphens, underscores
+        # Must start and end with alphanumeric
+        hostname_pattern = r"^[a-zA-Z0-9]([a-zA-Z0-9\-_.]{0,61}[a-zA-Z0-9])?$"
+
+        # IPv4 pattern
+        ipv4_pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
+
+        # IPv6 pattern - matches IPv6 addresses including compressed notation (::)
+        # This is a simplified pattern that covers most common IPv6 formats
+        ipv6_pattern = (
+            r"^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,7}:|"
+            r"([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|"
+            r"([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|"
+            r"([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|"
+            r"[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|"
+            r":((:[0-9a-fA-F]{1,4}){1,7}|:)|"
+            r"fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]+|"
+            r"::(ffff(:0{1,4}){0,1}:){0,1}((\d{1,3}\.){3}\d{1,3})|"
+            r"([0-9a-fA-F]{1,4}:){1,4}:((\d{1,3}\.){3}\d{1,3}))$"
+        )
+
+        if (
+            re.match(hostname_pattern, v)
+            or re.match(ipv4_pattern, v)
+            or re.match(ipv6_pattern, v, re.IGNORECASE)
+        ):
+            return v
+
+        raise ValueError("Host must be a valid hostname or IP address")
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """
+        Validate port: integer between 1 and 65535.
+        Matches Zod validation from the client.
+        Note: Type validation (int) and range (1-65535) are handled by Field constraints above.
+        """
+        # Additional validation for clearer error messages matching Zod
+        if v < 1 or v > 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        return v
+
+    @field_validator("user_name")
+    @classmethod
+    def validate_user_name(cls, v: str) -> str:
+        """
+        Validate username: must start with letter or underscore,
+        and contain only letters, numbers, and underscores.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Username is required")
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(
+                "Username must start with a letter or underscore and contain only letters, numbers, and underscores"
+            )
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """
+        Validate password: non-empty string.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Password is required")
+        return v
 
 
 class ClickHouseDatasourceConnector(BaseDatasourceConnector):
@@ -44,12 +176,23 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        # Validate connection details using Pydantic
+        try:
+            connection_details = ClickHouseConnectionDetails(**parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid ClickHouse connection details: {e}. "
+                f"Expected: name (non-empty string), host (valid hostname/IP), "
+                f"port (1-65535), user_name (starts with letter/underscore), "
+                f"password (non-empty string)"
+            )
+
         try:
             client = clickhouse_connect.get_client(
-                host=parsed_credentials["host"],
-                port=parsed_credentials["port"],
-                user=parsed_credentials["user_name"],
-                password=parsed_credentials["password"],
+                host=connection_details.host,
+                port=connection_details.port,
+                user=connection_details.user_name,
+                password=connection_details.password,
                 secure=True,
             )
             result = client.query(query)
@@ -78,15 +221,26 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        # Validate connection details using Pydantic
+        try:
+            connection_details = ClickHouseConnectionDetails(**parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid ClickHouse connection details: {e}. "
+                f"Expected: name (non-empty string), host (valid hostname/IP), "
+                f"port (1-65535), user_name (starts with letter/underscore), "
+                f"password (non-empty string)"
+            )
+
         try:
             qualified_table_name = (
                 f"{save_config['schema_name']}.{save_config['table_name']}"
             )
             client = clickhouse_connect.get_client(
-                host=parsed_credentials["host"],
-                port=parsed_credentials["port"],
-                user=parsed_credentials["user_name"],
-                password=parsed_credentials["password"],
+                host=connection_details.host,
+                port=connection_details.port,
+                user=connection_details.user_name,
+                password=connection_details.password,
                 secure=True,
             )
 
@@ -538,10 +692,21 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
         nodes: list[SchemaNode] = []
         now = datetime.now(timezone.utc)
 
+        # Validate connection details using Pydantic
+        try:
+            validated_connection_details = ClickHouseConnectionDetails(
+                **connection_details
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid ClickHouse connection details: {e}. "
+                f"Expected: name (non-empty string), host (valid hostname/IP), "
+                f"port (1-65535), user_name (starts with letter/underscore), "
+                f"password (non-empty string)"
+            )
+
         # Get database server name (host)
-        db_server_name = connection_details.get("host", "")
-        if not db_server_name:
-            raise ValueError("Host is required in connection details")
+        db_server_name = validated_connection_details.host
 
         # Create database node (level 0)
         db_server_node_id = uuid.uuid4()
@@ -568,10 +733,10 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
         client = None
         try:
             client = clickhouse_connect.get_client(
-                host=connection_details["host"],
-                port=connection_details["port"],
-                user=connection_details["user_name"],
-                password=connection_details["password"],
+                host=validated_connection_details.host,
+                port=validated_connection_details.port,
+                user=validated_connection_details.user_name,
+                password=validated_connection_details.password,
                 secure=True,
             )
 

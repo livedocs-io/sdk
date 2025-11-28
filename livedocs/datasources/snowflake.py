@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +12,8 @@ import polars as pl
 import snowflake.connector
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from typing_extensions import Literal
+from pydantic import BaseModel, Field, field_validator
+from typing_extensions import Literal, Union
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
@@ -25,6 +28,192 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+
+class SnowflakeConnectionUsernamePassword(BaseModel):
+    """
+    Pydantic model for Snowflake connection using username/password authentication.
+    Matches the Zod schema validation from the client.
+
+    Expected structure:
+    {
+        name: string,                    // Required, non-empty string
+        host: string,                    // Required, non-empty string
+        database: string,                // Required, non-empty string
+        auth_type: "username_password",  // Literal "username_password"
+        username: string,                // Required, starts with letter/underscore
+        password: string,                // Required, non-empty string
+        service_account_key?: string,     // Optional
+        service_account_username?: string; // Optional
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    host: str = Field(
+        ...,
+        min_length=1,
+        description="Host (required, non-empty string)",
+    )
+    database: str = Field(
+        ...,
+        min_length=1,
+        description="Database (required, non-empty string)",
+    )
+    auth_type: Literal["username_password"] = Field(
+        ..., description="Authentication type: 'username_password'"
+    )
+    username: str = Field(
+        ...,
+        min_length=1,
+        description="Username (required, starts with letter/underscore, alphanumeric + underscores)",
+    )
+    password: str = Field(
+        ...,
+        min_length=1,
+        description="Password (required, non-empty string)",
+    )
+    service_account_key: str | None = Field(
+        None, description="Service account key (optional)"
+    )
+    service_account_username: str | None = Field(
+        None, description="Service account username (optional)"
+    )
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        """
+        Validate username: must start with letter or underscore,
+        and contain only letters, numbers, and underscores.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Username is required")
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(
+                "Username must start with a letter or underscore and contain only letters, numbers, and underscores"
+            )
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """
+        Validate password: non-empty string.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Password is required")
+        return v
+
+
+class SnowflakeConnectionServiceAccount(BaseModel):
+    """
+    Pydantic model for Snowflake connection using service account key authentication.
+    Matches the Zod schema validation from the client.
+
+    Expected structure:
+    {
+        name: string,                    // Required, non-empty string
+        host: string,                    // Required, non-empty string
+        database: string,                // Required, non-empty string
+        auth_type: "service_account_key", // Literal "service_account_key"
+        service_account_key: string,      // Required, valid JSON with private_key field
+        service_account_username: string, // Required, starts with letter/underscore
+        username?: string,                // Optional
+        password?: string,                // Optional
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    host: str = Field(
+        ...,
+        min_length=1,
+        description="Host (required, non-empty string)",
+    )
+    database: str = Field(
+        ...,
+        min_length=1,
+        description="Database (required, non-empty string)",
+    )
+    auth_type: Literal["service_account_key"] = Field(
+        ..., description="Authentication type: 'service_account_key'"
+    )
+    service_account_key: str = Field(
+        ...,
+        min_length=1,
+        description="Service account key (required, valid JSON with private_key field)",
+    )
+    service_account_username: str = Field(
+        ...,
+        min_length=1,
+        description="Service account username (required, starts with letter/underscore, alphanumeric + underscores)",
+    )
+    username: str | None = Field(None, description="Username (optional)")
+    password: str | None = Field(None, description="Password (optional)")
+
+    @field_validator("service_account_key")
+    @classmethod
+    def validate_service_account_key(cls, v: str) -> str:
+        """
+        Validate service account key: must be valid JSON with private_key field.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Service account key is required")
+        try:
+            parsed = json.loads(v)
+        except json.JSONDecodeError:
+            raise ValueError(
+                "Service account key must be valid JSON with a private_key field"
+            )
+
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "Service account key must be valid JSON with a private_key field"
+            )
+
+        if "private_key" not in parsed:
+            raise ValueError(
+                "Service account key must be valid JSON with a private_key field"
+            )
+
+        if not isinstance(parsed["private_key"], str):
+            raise ValueError(
+                "Service account key must be valid JSON with a private_key field"
+            )
+
+        return v
+
+    @field_validator("service_account_username")
+    @classmethod
+    def validate_service_account_username(cls, v: str) -> str:
+        """
+        Validate service account username: must start with letter or underscore,
+        and contain only letters, numbers, and underscores.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Service account username is required")
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(
+                "Service account username must start with a letter or underscore and contain only letters, numbers, and underscores"
+            )
+        return v
+
+
+# Discriminated union type for Snowflake connection details
+SnowflakeConnectionDetails = Union[
+    SnowflakeConnectionUsernamePassword, SnowflakeConnectionServiceAccount
+]
 
 
 class SnowflakeDatasourceConnector(BaseDatasourceConnector):
@@ -46,9 +235,21 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        # Validate connection details using Pydantic
+        try:
+            connection_details = self._validate_connection_details(parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Snowflake connection details: {e}. "
+                f"Expected: auth_type ('username_password' or 'service_account_key'), "
+                f"name (non-empty string), host (non-empty string), database (non-empty string), "
+                f"and either username+password (for 'username_password') or "
+                f"service_account_key+service_account_username (for 'service_account_key')"
+            )
+
         connection = None
         try:
-            connection = self._create_connection(parsed_credentials)
+            connection = self._create_connection(connection_details)
             cursor = connection.cursor()
             cursor.execute(query)
             result = cursor.fetchall()
@@ -80,10 +281,22 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        # Validate connection details using Pydantic
+        try:
+            connection_details = self._validate_connection_details(parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Snowflake connection details: {e}. "
+                f"Expected: auth_type ('username_password' or 'service_account_key'), "
+                f"name (non-empty string), host (non-empty string), database (non-empty string), "
+                f"and either username+password (for 'username_password') or "
+                f"service_account_key+service_account_username (for 'service_account_key')"
+            )
+
         connection = None
         try:
-            qualified_table_name = f"{parsed_credentials['database']}.{save_config['schema_name']}.{save_config['table_name']}"
-            connection = self._create_connection(parsed_credentials)
+            qualified_table_name = f"{connection_details.database}.{save_config['schema_name']}.{save_config['table_name']}"
+            connection = self._create_connection(connection_details)
 
             result = self._write_df_to_snowflake(
                 df,
@@ -120,19 +333,52 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
     def teardown(self) -> None:
         pass
 
-    def _create_connection(self, parsed_credentials: dict[str, Any]) -> Any:
-        if parsed_credentials.get("auth_type") == "username_password":
+    def _validate_connection_details(
+        self, parsed_credentials: dict[str, Any]
+    ) -> SnowflakeConnectionUsernamePassword | SnowflakeConnectionServiceAccount:
+        """
+        Validate connection details using Pydantic models.
+        Returns the validated connection details model.
+        """
+        auth_type = parsed_credentials.get("auth_type")
+
+        if auth_type == "username_password":
+            return SnowflakeConnectionUsernamePassword(**parsed_credentials)
+        elif auth_type == "service_account_key":
+            return SnowflakeConnectionServiceAccount(**parsed_credentials)
+        else:
+            raise ValueError(
+                f"Invalid auth_type value: {auth_type}. "
+                f"Must be either 'username_password' or 'service_account_key'"
+            )
+
+    def _create_connection(
+        self,
+        connection_details: SnowflakeConnectionUsernamePassword
+        | SnowflakeConnectionServiceAccount,
+    ) -> Any:
+        """
+        Create Snowflake connection from validated Pydantic model.
+        Handles both username/password and service account key authentication.
+        """
+        if isinstance(connection_details, SnowflakeConnectionUsernamePassword):
+            # Username/password authentication
             return snowflake.connector.connect(
-                user=parsed_credentials["username"],
-                password=parsed_credentials["password"],
-                account=parsed_credentials["host"],
-                database=parsed_credentials["database"],
+                user=connection_details.username,
+                password=connection_details.password,
+                account=connection_details.host,
+                database=connection_details.database,
                 session_parameters={
                     "QUERY_TAG": "LivedocsQuery",
                 },
             )
-        if parsed_credentials.get("auth_type") == "service_account_key":
-            pem_key_from_ui = parsed_credentials["service_account_key"].strip()
+        else:
+            # Service account key authentication
+            # Parse the service account key JSON to get the private_key
+            service_account_key_json = json.loads(
+                connection_details.service_account_key
+            )
+            pem_key_from_ui = service_account_key_json["private_key"].strip()
 
             private_key = serialization.load_pem_private_key(
                 pem_key_from_ui.encode("utf-8"),
@@ -147,20 +393,17 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
             )
 
             account = (
-                parsed_credentials["host"]
-                .replace(".snowflakecomputing.com", "")
+                connection_details.host.replace(".snowflakecomputing.com", "")
                 .replace("https://", "")
                 .replace("http://", "")
             )
 
             return snowflake.connector.connect(
                 account=account,
-                user=parsed_credentials["service_account_username"],
+                user=connection_details.service_account_username,
                 private_key=private_key_der,
-                database=parsed_credentials["database"],
+                database=connection_details.database,
             )
-
-        raise ValueError("Unsupported authentication type")
 
     def _write_df_to_snowflake(
         self,
@@ -201,9 +444,9 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
             cursor = connection.cursor()
 
             # Check if table exists and get schema
+            db_schema_table = table_name.split(".")
             try:
                 # Split the fully qualified table name
-                db_schema_table = table_name.split(".")
                 if len(db_schema_table) == 3:
                     database, schema, table = db_schema_table
                     # Use the database and schema
@@ -609,8 +852,22 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
         nodes: list[SchemaNode] = []
         now = datetime.now(timezone.utc)
 
+        # Validate connection details using Pydantic
+        try:
+            validated_connection_details = self._validate_connection_details(
+                connection_details
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Snowflake connection details: {e}. "
+                f"Expected: auth_type ('username_password' or 'service_account_key'), "
+                f"name (non-empty string), host (non-empty string), database (non-empty string), "
+                f"and either username+password (for 'username_password') or "
+                f"service_account_key+service_account_username (for 'service_account_key')"
+            )
+
         # Get database name (Snowflake is case-insensitive for unquoted by default, but stores in upper)
-        database_name = connection_details.get("database", "").upper()
+        database_name = validated_connection_details.database.upper()
         if not database_name:
             raise ValueError("Database name is required in connection details")
 
@@ -638,7 +895,7 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
         # Build connection
         connection = None
         try:
-            connection = self._create_connection(connection_details)
+            connection = self._create_connection(validated_connection_details)
             cursor = connection.cursor()
 
             # Query schema details
@@ -708,7 +965,9 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
                 table_node_id = table_node_ids.get(table_key)
                 table_path = f"{schema_path}/{table_name}"
                 node_type = (
-                    SchemaNodeType.VIEW if table_type == "VIEW" else SchemaNodeType.TABLE
+                    SchemaNodeType.VIEW
+                    if table_type == "VIEW"
+                    else SchemaNodeType.TABLE
                 )
 
                 if not table_node_id:
