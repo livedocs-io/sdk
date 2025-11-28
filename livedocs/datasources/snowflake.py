@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import traceback
 import uuid
@@ -122,7 +121,7 @@ class SnowflakeConnectionServiceAccount(BaseModel):
         host: string,                    // Required, non-empty string
         database: string,                // Required, non-empty string
         auth_type: "service_account_key", // Literal "service_account_key"
-        service_account_key: string,      // Required, valid JSON with private_key field
+        service_account_key: string,      // Required, valid PEM key (.p8 format)
         service_account_username: string, // Required, starts with letter/underscore
         username?: string,                // Optional
         password?: string,                // Optional
@@ -150,7 +149,7 @@ class SnowflakeConnectionServiceAccount(BaseModel):
     service_account_key: str = Field(
         ...,
         min_length=1,
-        description="Service account key (required, valid JSON with private_key field)",
+        description="Service account key (required, valid PEM key)",
     )
     service_account_username: str = Field(
         ...,
@@ -164,31 +163,21 @@ class SnowflakeConnectionServiceAccount(BaseModel):
     @classmethod
     def validate_service_account_key(cls, v: str) -> str:
         """
-        Validate service account key: must be valid JSON with private_key field.
-        Matches Zod validation from the client.
+        Validate service account key: must be a valid PEM key format.
+        PEM keys start with "-----BEGIN PRIVATE KEY-----" and end with "-----END PRIVATE KEY-----".
         """
         if not v:
             raise ValueError("Service account key is required")
-        try:
-            parsed = json.loads(v)
-        except json.JSONDecodeError:
-            raise ValueError(
-                "Service account key must be valid JSON with a private_key field"
-            )
 
-        if not isinstance(parsed, dict):
+        # Check if it looks like a PEM key
+        stripped = v.strip()
+        if not stripped.startswith("-----BEGIN PRIVATE KEY-----"):
             raise ValueError(
-                "Service account key must be valid JSON with a private_key field"
+                "Service account key must be a valid PEM key (starts with '-----BEGIN PRIVATE KEY-----')"
             )
-
-        if "private_key" not in parsed:
+        if not stripped.endswith("-----END PRIVATE KEY-----"):
             raise ValueError(
-                "Service account key must be valid JSON with a private_key field"
-            )
-
-        if not isinstance(parsed["private_key"], str):
-            raise ValueError(
-                "Service account key must be valid JSON with a private_key field"
+                "Service account key must be a valid PEM key (ends with '-----END PRIVATE KEY-----')"
             )
 
         return v
@@ -374,11 +363,8 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
             )
         else:
             # Service account key authentication
-            # Parse the service account key JSON to get the private_key
-            service_account_key_json = json.loads(
-                connection_details.service_account_key
-            )
-            pem_key_from_ui = service_account_key_json["private_key"].strip()
+            # Service account key is a PEM key directly
+            pem_key_from_ui = connection_details.service_account_key.strip()
 
             private_key = serialization.load_pem_private_key(
                 pem_key_from_ui.encode("utf-8"),
