@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from uuid import UUID
 import polars as pl
 from google.cloud import bigquery
 from google.oauth2 import service_account
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Literal
 
 from livedocs.datasources.base import BaseDatasourceConnector
@@ -25,6 +27,156 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+
+class BigQueryServiceAccountKey(BaseModel):
+    """
+    Pydantic model for BigQuery service account key JSON structure.
+
+    Required fields:
+    - type: string
+    - project_id: string
+    - private_key_id: string
+    - private_key: string
+    - client_email: string
+    - client_id: string
+
+    Additional fields (auth_uri, token_uri, etc.) are allowed but not validated.
+    """
+
+    type: str = Field(
+        ..., description="Service account type, typically 'service_account'"
+    )
+    project_id: str = Field(..., description="GCP project ID")
+    private_key_id: str = Field(..., description="Private key ID")
+    private_key: str = Field(..., description="Private key in PEM format")
+    client_email: str = Field(..., description="Service account email")
+    client_id: str = Field(..., description="Client ID")
+
+    class Config:
+        extra = "allow"  # Allow additional fields like auth_uri, token_uri, etc.
+
+
+class BigQueryConnectionDetails(BaseModel):
+    """
+    Pydantic model for BigQuery connection details.
+    Matches the Zod schema validation from the client.
+
+    Expected structure (from form submission):
+    {
+        name: string,                    // Required, min length 1
+        project_id: string,              // Required, 6-30 chars, must start/end with alphanumeric
+        service_account_key: string,      // Required, valid JSON string containing service account key
+    }
+
+    The service_account_key JSON string must contain:
+    - type: string
+    - project_id: string
+    - private_key_id: string
+    - private_key: string
+    - client_email: string
+    - client_id: string
+    - Additional fields (auth_uri, token_uri, etc.) are allowed but optional.
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    project_id: str = Field(
+        ...,
+        min_length=6,
+        max_length=30,
+        description="GCP project ID (6-30 chars, must start and end with alphanumeric)",
+    )
+    service_account_key: str = Field(
+        ..., description="Service account key as JSON string"
+    )
+
+    @field_validator("project_id")
+    @classmethod
+    def validate_project_id(cls, v: str) -> str:
+        """
+        Validate project_id format: must start and end with lowercase letter or number,
+        and can only contain lowercase letters, numbers, and hyphens in the middle.
+        Matches Zod validation: /^[a-z0-9][a-z0-9\-]*[a-z0-9]$/
+        Note: Length validation (6-30 chars) is handled by Field constraints above.
+        """
+        if not v:
+            raise ValueError("Project ID is required")
+        if len(v) < 6:
+            raise ValueError("Project ID must be at least 6 characters")
+        if len(v) > 30:
+            raise ValueError("Project ID must be at most 30 characters")
+        if not re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", v):
+            raise ValueError(
+                "Project ID must start and end with a lowercase letter or number, "
+                "and can only contain lowercase letters, numbers, and hyphens"
+            )
+        return v
+
+    @field_validator("service_account_key")
+    @classmethod
+    def validate_service_account_key_json(cls, v: str) -> str:
+        """
+        Validate that service_account_key is valid JSON with required fields.
+        Matches Zod validation from the client.
+        """
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Service account key is required")
+
+        try:
+            parsed = json.loads(v)
+        except json.JSONDecodeError:
+            raise ValueError(
+                "Service account key must be valid JSON with required fields "
+                "(type, project_id, private_key_id, private_key, client_email, client_id)"
+            )
+
+        # Validate the parsed JSON matches the service account key structure
+        # This matches the Zod refine validation
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "Service account key must be valid JSON with required fields "
+                "(type, project_id, private_key_id, private_key, client_email, client_id)"
+            )
+
+        # Check all required fields are present and are strings (matching Zod validation)
+        required_fields = [
+            "type",
+            "project_id",
+            "private_key_id",
+            "private_key",
+            "client_email",
+            "client_id",
+        ]
+        for field_name in required_fields:
+            if field_name not in parsed:
+                raise ValueError(
+                    "Service account key must be valid JSON with required fields "
+                    "(type, project_id, private_key_id, private_key, client_email, client_id)"
+                )
+            if not isinstance(parsed[field_name], str):
+                raise ValueError(
+                    "Service account key must be valid JSON with required fields "
+                    "(type, project_id, private_key_id, private_key, client_email, client_id)"
+                )
+
+        # Additional validation using Pydantic model for type safety
+        try:
+            BigQueryServiceAccountKey(**parsed)
+        except Exception:
+            # If Pydantic validation fails, we've already checked the basic structure above
+            # so this is just for additional type safety
+            pass
+
+        return v
+
+    def get_parsed_service_account_key(self) -> BigQueryServiceAccountKey:
+        """Parse and return the service account key as a validated model"""
+        parsed = json.loads(self.service_account_key)
+        return BigQueryServiceAccountKey(**parsed)
 
 
 class BigQueryDatasourceConnector(BaseDatasourceConnector):
@@ -46,14 +198,25 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
-        service_account_parsed = self._parse_service_account(outer_parsed)
+        # Validate connection details using Pydantic
+        try:
+            connection_details = BigQueryConnectionDetails(**outer_parsed)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid BigQuery connection details: {e}. "
+                f"Expected: project_id (6-30 chars, lowercase alphanumeric with hyphens), "
+                f"service_account_key (valid JSON string with type, project_id, private_key_id, "
+                f"private_key, client_email, client_id)"
+            )
+
+        service_account_key = connection_details.get_parsed_service_account_key()
 
         try:
             credentials = service_account.Credentials.from_service_account_info(
-                service_account_parsed
+                service_account_key.model_dump()
             )
             client = bigquery.Client(
-                credentials=credentials, project=outer_parsed["project_id"]
+                credentials=credentials, project=connection_details.project_id
             )
 
             query_job = client.query(query)
@@ -77,16 +240,27 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
-        service_account_parsed = self._parse_service_account(outer_parsed)
+        # Validate connection details using Pydantic
+        try:
+            connection_details = BigQueryConnectionDetails(**outer_parsed)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid BigQuery connection details: {e}. "
+                f"Expected: project_id (6-30 chars, lowercase alphanumeric with hyphens), "
+                f"service_account_key (valid JSON string with type, project_id, private_key_id, "
+                f"private_key, client_email, client_id)"
+            )
+
+        service_account_key = connection_details.get_parsed_service_account_key()
 
         try:
-            qualified_table_name = f"{outer_parsed['project_id']}.{save_config['schema_name']}.{save_config['table_name']}"
+            qualified_table_name = f"{connection_details.project_id}.{save_config['schema_name']}.{save_config['table_name']}"
 
             credentials = service_account.Credentials.from_service_account_info(
-                service_account_parsed
+                service_account_key.model_dump()
             )
             client = bigquery.Client(
-                credentials=credentials, project=outer_parsed["project_id"]
+                credentials=credentials, project=connection_details.project_id
             )
 
             result = self._write_df_to_bigquery(
@@ -120,12 +294,6 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
 
     def teardown(self) -> None:
         pass
-
-    def _parse_service_account(self, outer_parsed: dict[str, Any]) -> dict[str, Any]:
-        try:
-            return json.loads(outer_parsed["service_account_key"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
 
     def _write_df_to_bigquery(
         self,
@@ -441,9 +609,20 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         nodes: list[SchemaNode] = []
         now = datetime.now(timezone.utc)
 
-        project_id = connection_details.get("project_id")
-        if not project_id:
-            raise ValueError("project_id is required in connection details")
+        # Validate connection details using Pydantic
+        try:
+            validated_connection_details = BigQueryConnectionDetails(
+                **connection_details
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid BigQuery connection details: {e}. "
+                f"Expected: project_id (6-30 chars, lowercase alphanumeric with hyphens), "
+                f"service_account_key (valid JSON string with type, project_id, private_key_id, "
+                f"private_key, client_email, client_id)"
+            )
+
+        project_id = validated_connection_details.project_id
 
         # Create project node (level 0) - BigQuery uses projects as the top level
         project_node_id = uuid.uuid4()
@@ -467,9 +646,11 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         )
 
         # Initialize BigQuery client
-        service_account_parsed = self._parse_service_account(connection_details)
+        service_account_key = (
+            validated_connection_details.get_parsed_service_account_key()
+        )
         credentials = service_account.Credentials.from_service_account_info(
-            service_account_parsed
+            service_account_key.model_dump()
         )
         client = bigquery.Client(credentials=credentials, project=project_id)
 
@@ -495,9 +676,7 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                     dataset = client.dataset(schema_name)
                     metadata = dataset.get_metadata()
                     description = (
-                        metadata.description
-                        or metadata.friendly_name
-                        or description
+                        metadata.description or metadata.friendly_name or description
                     )
                 except Exception:
                     pass  # Use default description if metadata fetch fails

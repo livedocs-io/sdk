@@ -8,6 +8,7 @@ from uuid import UUID
 
 import duckdb
 import polars as pl
+from pydantic import BaseModel, Field, field_validator
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
@@ -22,6 +23,47 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+
+class MotherduckConnectionDetails(BaseModel):
+    """
+    Pydantic model for Motherduck connection details.
+    Matches the Zod schema validation from the client.
+
+    Expected structure (from form submission):
+    {
+        name: string,   // Required, non-empty string
+        token: string,  // Required, non-empty string (MotherDuck token)
+    }
+
+    Note: Additional fields like 'database' and 'default_schema' may be present
+    but are not validated as they're not part of the form payload.
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    token: str = Field(
+        ...,
+        min_length=1,
+        description="MotherDuck token (required, non-empty string)",
+    )
+
+    class Config:
+        extra = "allow"  # Allow additional fields like 'database' and 'default_schema'
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, v: str) -> str:
+        """
+        Validate token: non-empty string.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Token is required")
+        return v
 
 
 class MotherduckDatasourceConnector(BaseDatasourceConnector):
@@ -45,7 +87,16 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
-        details = self._extract_details(parsed_credentials)
+        # Validate connection details using Pydantic
+        try:
+            connection_details = MotherduckConnectionDetails(**parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Motherduck connection details: {e}. "
+                f"Expected: name (non-empty string), token (non-empty string)"
+            )
+
+        details = self._extract_details(connection_details.model_dump())
 
         conn = None
         try:
@@ -86,7 +137,16 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
-        details = self._extract_details(parsed_credentials)
+        # Validate connection details using Pydantic
+        try:
+            connection_details = MotherduckConnectionDetails(**parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Motherduck connection details: {e}. "
+                f"Expected: name (non-empty string), token (non-empty string)"
+            )
+
+        details = self._extract_details(connection_details.model_dump())
 
         write_mode = save_config["write_mode"]
         if write_mode not in {"append", "overwrite"}:
@@ -347,7 +407,18 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
         nodes: list[SchemaNode] = []
         now = datetime.now(timezone.utc)
 
-        details = self._extract_details(connection_details)
+        # Validate connection details using Pydantic
+        try:
+            validated_connection_details = MotherduckConnectionDetails(
+                **connection_details
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Motherduck connection details: {e}. "
+                f"Expected: name (non-empty string), token (non-empty string)"
+            )
+
+        details = self._extract_details(validated_connection_details.model_dump())
         database_name = details.get("database") or "main"
 
         # Create database node (level 0)
@@ -438,7 +509,9 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
                 table_node_id = table_node_ids.get(table_key)
                 table_path = f"{schema_path}/{table_name}"
                 node_type = (
-                    SchemaNodeType.VIEW if table_type == "VIEW" else SchemaNodeType.TABLE
+                    SchemaNodeType.VIEW
+                    if table_type == "VIEW"
+                    else SchemaNodeType.TABLE
                 )
 
                 if not table_node_id:

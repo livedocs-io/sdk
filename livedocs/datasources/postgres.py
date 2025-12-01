@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import traceback
 import uuid
 from collections import OrderedDict
@@ -13,7 +14,8 @@ import polars as pl
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
-from typing_extensions import Literal
+from pydantic import BaseModel, Field, field_validator
+from typing_extensions import Literal, Union
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
@@ -28,6 +30,225 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+
+class PostgresConnectionUrl(BaseModel):
+    """
+    Pydantic model for PostgreSQL connection using connection URL.
+    Matches the Zod schema validation from the client.
+
+    Expected structure:
+    {
+        name: string,                    // Required, non-empty string
+        connect_using: "url",            // Literal "url"
+        connection_url: string,          // Required, valid PostgreSQL URL
+        host?: string,                   // Optional
+        port?: number,                   // Optional
+        database?: string,                // Optional
+        user_name?: string,              // Optional
+        password?: string,               // Optional
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    connect_using: Literal["url"] = Field(..., description="Connection method: 'url'")
+    connection_url: str = Field(
+        ...,
+        min_length=1,
+        description="PostgreSQL connection URL (required, must start with postgres:// or postgresql://)",
+    )
+    host: str | None = Field(None, description="Host (optional)")
+    port: int | None = Field(None, description="Port (optional)")
+    database: str | None = Field(None, description="Database (optional)")
+    user_name: str | None = Field(None, description="Username (optional)")
+    password: str | None = Field(None, description="Password (optional)")
+
+    @field_validator("connection_url")
+    @classmethod
+    def validate_connection_url(cls, v: str) -> str:
+        """
+        Validate connection URL: must be a valid PostgreSQL URL.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Connection URL is required")
+        try:
+            parsed = urlparse(v)
+            if parsed.scheme not in ("postgres", "postgresql"):
+                raise ValueError(
+                    "Connection URL must be a valid PostgreSQL URL "
+                    "(postgres:// or postgresql://)"
+                )
+        except Exception:
+            raise ValueError(
+                "Connection URL must be a valid PostgreSQL URL "
+                "(postgres:// or postgresql://)"
+            )
+        return v
+
+
+class PostgresConnectionCredentials(BaseModel):
+    """
+    Pydantic model for PostgreSQL connection using individual credentials.
+    Matches the Zod schema validation from the client.
+
+    Expected structure:
+    {
+        name: string,                    // Required, non-empty string
+        connect_using: "credentials",    // Literal "credentials"
+        host: string,                    // Required, valid hostname or IP address
+        port: number,                    // Required, integer between 1 and 65535
+        database: string,                // Required, starts with letter/underscore
+        user_name: string,               // Required, starts with letter/underscore
+        password: string,                // Required, non-empty string
+        connection_url?: string,         // Optional
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    connect_using: Literal["credentials"] = Field(
+        ..., description="Connection method: 'credentials'"
+    )
+    host: str = Field(
+        ...,
+        min_length=1,
+        description="Host (required, valid hostname or IP address)",
+    )
+    port: int = Field(
+        ...,
+        ge=1,
+        le=65535,
+        description="Port (required, integer between 1 and 65535)",
+    )
+    database: str = Field(
+        ...,
+        min_length=1,
+        description="Database name (required, starts with letter/underscore, alphanumeric + underscores)",
+    )
+    user_name: str = Field(
+        ...,
+        min_length=1,
+        description="Username (required, starts with letter/underscore, alphanumeric + underscores)",
+    )
+    password: str = Field(
+        ...,
+        min_length=1,
+        description="Password (required, non-empty string)",
+    )
+    connection_url: str | None = Field(None, description="Connection URL (optional)")
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, v: str) -> str:
+        """
+        Validate host format: valid hostname or IP address (IPv4/IPv6), or "localhost".
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Host is required")
+
+        # Allow localhost
+        if v == "localhost":
+            return v
+
+        # Valid hostname pattern: alphanumeric, dots, hyphens, underscores
+        # Must start and end with alphanumeric
+        hostname_pattern = r"^[a-zA-Z0-9]([a-zA-Z0-9\-_.]{0,61}[a-zA-Z0-9])?$"
+
+        # IPv4 pattern
+        ipv4_pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
+
+        # IPv6 pattern - matches IPv6 addresses including compressed notation (::)
+        ipv6_pattern = (
+            r"^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,7}:|"
+            r"([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|"
+            r"([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|"
+            r"([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|"
+            r"[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|"
+            r":((:[0-9a-fA-F]{1,4}){1,7}|:)|"
+            r"fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]+|"
+            r"::(ffff(:0{1,4}){0,1}:){0,1}((\d{1,3}\.){3}\d{1,3})|"
+            r"([0-9a-fA-F]{1,4}:){1,4}:((\d{1,3}\.){3}\d{1,3}))$"
+        )
+
+        if (
+            re.match(hostname_pattern, v)
+            or re.match(ipv4_pattern, v)
+            or re.match(ipv6_pattern, v, re.IGNORECASE)
+        ):
+            return v
+
+        raise ValueError("Host must be a valid hostname or IP address")
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """
+        Validate port: integer between 1 and 65535.
+        Matches Zod validation from the client.
+        Note: Range validation (1-65535) is handled by Field constraints above.
+        """
+        if v < 1 or v > 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        return v
+
+    @field_validator("database")
+    @classmethod
+    def validate_database(cls, v: str) -> str:
+        """
+        Validate database name: must start with letter or underscore,
+        and contain only letters, numbers, and underscores.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Database name is required")
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(
+                "Database name must start with a letter or underscore and contain only letters, numbers, and underscores"
+            )
+        return v
+
+    @field_validator("user_name")
+    @classmethod
+    def validate_user_name(cls, v: str) -> str:
+        """
+        Validate username: must start with letter or underscore,
+        and contain only letters, numbers, and underscores.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Username is required")
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(
+                "Username must start with a letter or underscore and contain only letters, numbers, and underscores"
+            )
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """
+        Validate password: non-empty string.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Password is required")
+        return v
+
+
+# Discriminated union type for PostgreSQL connection details
+PostgresConnectionDetails = Union[PostgresConnectionUrl, PostgresConnectionCredentials]
 
 
 class PostgresDatasourceConnector(BaseDatasourceConnector):
@@ -49,8 +270,19 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        # Validate connection details using Pydantic
         try:
-            connection_string = self._build_connection_string(parsed_credentials)
+            connection_details = self._validate_connection_details(parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid PostgreSQL connection details: {e}. "
+                f"Expected: connect_using ('url' or 'credentials'), "
+                f"name (non-empty string), and either connection_url (for 'url') "
+                f"or host, port, database, user_name, password (for 'credentials')"
+            )
+
+        try:
+            connection_string = self._build_connection_string(connection_details)
         except ValueError as e:
             raise RuntimeError(
                 sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
@@ -101,8 +333,19 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information: {e}")
 
+        # Validate connection details using Pydantic
         try:
-            connection_string = self._build_connection_string(parsed_credentials)
+            connection_details = self._validate_connection_details(parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid PostgreSQL connection details: {e}. "
+                f"Expected: connect_using ('url' or 'credentials'), "
+                f"name (non-empty string), and either connection_url (for 'url') "
+                f"or host, port, database, user_name, password (for 'credentials')"
+            )
+
+        try:
+            connection_string = self._build_connection_string(connection_details)
         except ValueError as e:
             raise RuntimeError(
                 sanitize_sensitive_data(f"Error building PostgreSQL connection: {e}")
@@ -144,21 +387,54 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
     def teardown(self) -> None:
         pass
 
-    def _build_connection_string(self, parsed_credentials: dict[str, Any]) -> str:
-        try:
-            if parsed_credentials.get("connect_using") == "url":
-                return parsed_credentials["connection_url"]
-            return self._create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
+    def _validate_connection_details(
+        self, parsed_credentials: dict[str, Any]
+    ) -> PostgresConnectionUrl | PostgresConnectionCredentials:
+        """
+        Validate connection details using Pydantic models.
+        Returns the validated connection details model.
+        """
+        connect_using = parsed_credentials.get("connect_using")
 
-    def _create_postgres_connection_url(self, details: dict[str, Any]) -> str:
-        user = details.get("user_name", "")
-        password = details.get("password", "")
-        host = details.get("host", "")
-        port = details.get("port", 5432)
-        database = details.get("database", "")
+        if connect_using == "url":
+            return PostgresConnectionUrl(**parsed_credentials)
+        elif connect_using == "credentials":
+            return PostgresConnectionCredentials(**parsed_credentials)
+        else:
+            raise ValueError(
+                f"Invalid connect_using value: {connect_using}. "
+                f"Must be either 'url' or 'credentials'"
+            )
 
+    def _build_connection_string(
+        self,
+        connection_details: PostgresConnectionUrl | PostgresConnectionCredentials,
+    ) -> str:
+        """
+        Build PostgreSQL connection string from validated Pydantic model.
+        Handles both URL-based and credentials-based connections.
+        """
+        if isinstance(connection_details, PostgresConnectionUrl):
+            # Use connection URL directly
+            return connection_details.connection_url
+        else:
+            # Build connection URL from individual credentials
+            return self._create_postgres_connection_url(connection_details)
+
+    def _create_postgres_connection_url(
+        self, details: PostgresConnectionCredentials
+    ) -> str:
+        """
+        Create PostgreSQL connection URL from credentials.
+        All fields are required in PostgresConnectionCredentials, so they're never None.
+        """
+        user = details.user_name
+        password = details.password
+        host = details.host
+        port = details.port
+        database = details.database
+
+        # All fields are required in PostgresConnectionCredentials
         if password:
             return f"postgresql://{user}:{password}@{host}:{port}/{database}"
         else:
@@ -813,27 +1089,36 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         nodes: list[SchemaNode] = []
         now = datetime.now(timezone.utc)
 
+        # Validate connection details using Pydantic
+        try:
+            validated_connection_details = self._validate_connection_details(
+                connection_details
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid PostgreSQL connection details: {e}. "
+                f"Expected: connect_using ('url' or 'credentials'), "
+                f"name (non-empty string), and either connection_url (for 'url') "
+                f"or host, port, database, user_name, password (for 'credentials')"
+            )
+
         # Get database name
         db_name: str | None = None
-        if connection_details.get("connect_using") == "url":
-            connection_url = connection_details.get("connection_url", "")
-            if not connection_url:
-                raise ValueError(
-                    "Connection URL is required when using 'url' connection type"
-                )
+        if isinstance(validated_connection_details, PostgresConnectionUrl):
+            connection_url = validated_connection_details.connection_url
             parsed_url = urlparse(connection_url)
             db_name = parsed_url.path.lstrip("/")
             if not db_name:
                 raise ValueError("Invalid connection URL: database is required")
         else:
-            db_name = connection_details.get("database")
+            db_name = validated_connection_details.database
             if not db_name:
                 raise ValueError(
                     "Database name is not available in connection parameters, cannot build schema."
                 )
 
         # Build connection string
-        connection_string = self._build_connection_string(connection_details)
+        connection_string = self._build_connection_string(validated_connection_details)
 
         # Create database node (level 0)
         db_node_id = uuid.uuid4()

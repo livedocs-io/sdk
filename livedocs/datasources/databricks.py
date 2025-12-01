@@ -11,7 +11,8 @@ from uuid import UUID
 import polars as pl
 import pyarrow as pa
 from databricks import sql as databricks_sql
-from typing_extensions import Literal
+from pydantic import BaseModel, Field, field_validator
+from typing_extensions import Literal, Union
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
@@ -26,6 +27,210 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+
+class DatabricksConnectionUrl(BaseModel):
+    """
+    Pydantic model for Databricks connection using JDBC URL.
+    Matches the Zod schema validation from the client.
+
+    Expected structure:
+    {
+        name: string,                    // Required, non-empty string
+        connect_using: "url",            // Literal "url"
+        connection_url: string,          // Required, valid JDBC URL
+        token: string,                   // Required, non-empty string
+        host?: string,                   // Optional
+        port?: number,                   // Optional
+        httpPath?: string,               // Optional
+        default_catalog?: string,        // Optional
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    connect_using: Literal["url"] = Field(..., description="Connection method: 'url'")
+    connection_url: str = Field(
+        ...,
+        min_length=1,
+        description="JDBC connection URL (required, must start with jdbc:databricks:// or jdbc:spark://)",
+    )
+    token: str = Field(
+        ...,
+        min_length=1,
+        description="Personal Access Token (required, non-empty string)",
+    )
+    host: str | None = Field(None, description="Host (optional)")
+    port: int | None = Field(None, description="Port (optional)")
+    httpPath: str | None = Field(None, description="HTTP Path (optional)")
+    default_catalog: str | None = Field(None, description="Default catalog (optional)")
+
+    @field_validator("connection_url")
+    @classmethod
+    def validate_connection_url(cls, v: str) -> str:
+        """
+        Validate connection URL: must be a valid Databricks JDBC URL.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Connection URL is required")
+        if not (v.startswith("jdbc:databricks://") or v.startswith("jdbc:spark://")):
+            raise ValueError(
+                "Connection URL must be a valid Databricks JDBC URL "
+                "(jdbc:databricks:// or jdbc:spark://)"
+            )
+        return v
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, v: str) -> str:
+        """Validate token: non-empty string"""
+        if not v:
+            raise ValueError("Personal Access Token is required")
+        return v
+
+
+class DatabricksConnectionCredentials(BaseModel):
+    """
+    Pydantic model for Databricks connection using individual credentials.
+    Matches the Zod schema validation from the client.
+
+    Expected structure:
+    {
+        name: string,                    // Required, non-empty string
+        connect_using: "credentials",    // Literal "credentials"
+        host: string,                    // Required, valid hostname or IP address
+        httpPath: string,                // Required, starts with "/", no spaces
+        token: string,                   // Required, non-empty string
+        port?: number,                   // Optional, integer 1-65535
+        default_catalog?: string,        // Optional
+        connection_url?: string,          // Optional
+    }
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Connector name (required, non-empty string)",
+    )
+    connect_using: Literal["credentials"] = Field(
+        ..., description="Connection method: 'credentials'"
+    )
+    host: str = Field(
+        ...,
+        min_length=1,
+        description="Host (required, valid hostname or IP address)",
+    )
+    httpPath: str = Field(
+        ...,
+        min_length=1,
+        description="HTTP Path (required, starts with '/', no spaces)",
+    )
+    token: str = Field(
+        ...,
+        min_length=1,
+        description="Personal Access Token (required, non-empty string)",
+    )
+    port: int | None = Field(
+        None,
+        ge=1,
+        le=65535,
+        description="Port (optional, integer between 1 and 65535)",
+    )
+    default_catalog: str | None = Field(None, description="Default catalog (optional)")
+    connection_url: str | None = Field(None, description="Connection URL (optional)")
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, v: str) -> str:
+        """
+        Validate host format: valid hostname or IP address (IPv4/IPv6), or "localhost".
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("Host is required")
+
+        # Allow localhost
+        if v == "localhost":
+            return v
+
+        # Valid hostname pattern: alphanumeric, dots, hyphens, underscores
+        # Must start and end with alphanumeric
+        hostname_pattern = r"^[a-zA-Z0-9]([a-zA-Z0-9\-_.]{0,61}[a-zA-Z0-9])?$"
+
+        # IPv4 pattern
+        ipv4_pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
+
+        # IPv6 pattern - matches IPv6 addresses including compressed notation (::)
+        ipv6_pattern = (
+            r"^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,7}:|"
+            r"([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|"
+            r"([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|"
+            r"([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|"
+            r"([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|"
+            r"[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|"
+            r":((:[0-9a-fA-F]{1,4}){1,7}|:)|"
+            r"fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]+|"
+            r"::(ffff(:0{1,4}){0,1}:){0,1}((\d{1,3}\.){3}\d{1,3})|"
+            r"([0-9a-fA-F]{1,4}:){1,4}:((\d{1,3}\.){3}\d{1,3}))$"
+        )
+
+        if (
+            re.match(hostname_pattern, v)
+            or re.match(ipv4_pattern, v)
+            or re.match(ipv6_pattern, v, re.IGNORECASE)
+        ):
+            return v
+
+        raise ValueError("Host must be a valid hostname or IP address")
+
+    @field_validator("httpPath")
+    @classmethod
+    def validate_http_path(cls, v: str) -> str:
+        """
+        Validate HTTP Path: must start with "/" and contain no spaces.
+        Matches Zod validation from the client.
+        """
+        if not v:
+            raise ValueError("HTTP Path is required")
+        if not v.startswith("/"):
+            raise ValueError(
+                "HTTP Path must start with '/' (e.g. /sql/1.0/warehouses/...)"
+            )
+        if re.search(r"\s", v):
+            raise ValueError("HTTP Path must not contain spaces")
+        return v
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, v: int | None) -> int | None:
+        """
+        Validate port: integer between 1 and 65535.
+        Matches Zod validation from the client.
+        Note: Range validation (1-65535) is handled by Field constraints above.
+        """
+        if v is not None and (v < 1 or v > 65535):
+            raise ValueError("Port must be between 1 and 65535")
+        return v
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, v: str) -> str:
+        """Validate token: non-empty string"""
+        if not v:
+            raise ValueError("Personal Access Token is required")
+        return v
+
+
+# Discriminated union type for Databricks connection details
+DatabricksConnectionDetails = Union[
+    DatabricksConnectionUrl, DatabricksConnectionCredentials
+]
 
 
 class DatabricksDatasourceConnector(BaseDatasourceConnector):
@@ -49,11 +254,22 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         except KeyError as error:
             raise ValueError(f"Missing required information: {error}")
 
+        # Validate connection details using Pydantic
+        try:
+            connection_details = self._validate_connection_details(parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Databricks connection details: {e}. "
+                f"Expected: connect_using ('url' or 'credentials'), "
+                f"name (non-empty string), token (non-empty string), "
+                f"and either connection_url (for 'url') or host + httpPath (for 'credentials')"
+            )
+
         connection = None
         cursor = None
         try:
             connection, default_catalog = self._get_workspace_connection(
-                parsed_credentials
+                connection_details
             )
             catalog = default_catalog
 
@@ -108,10 +324,21 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         except KeyError as error:
             raise ValueError(f"Missing required information: {error}")
 
+        # Validate connection details using Pydantic
+        try:
+            connection_details = self._validate_connection_details(parsed_credentials)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Databricks connection details: {e}. "
+                f"Expected: connect_using ('url' or 'credentials'), "
+                f"name (non-empty string), token (non-empty string), "
+                f"and either connection_url (for 'url') or host + httpPath (for 'credentials')"
+            )
+
         connection = None
         try:
             connection, default_catalog = self._get_workspace_connection(
-                parsed_credentials
+                connection_details
             )
             catalog = default_catalog
 
@@ -163,11 +390,31 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
     def teardown(self) -> None:
         pass
 
-    def _get_workspace_connection(
+    def _validate_connection_details(
         self, parsed_credentials: dict[str, Any]
+    ) -> DatabricksConnectionUrl | DatabricksConnectionCredentials:
+        """
+        Validate connection details using Pydantic models.
+        Returns the validated connection details model.
+        """
+        connect_using = parsed_credentials.get("connect_using")
+
+        if connect_using == "url":
+            return DatabricksConnectionUrl(**parsed_credentials)
+        elif connect_using == "credentials":
+            return DatabricksConnectionCredentials(**parsed_credentials)
+        else:
+            raise ValueError(
+                f"Invalid connect_using value: {connect_using}. "
+                f"Must be either 'url' or 'credentials'"
+            )
+
+    def _get_workspace_connection(
+        self,
+        connection_details: DatabricksConnectionUrl | DatabricksConnectionCredentials,
     ) -> tuple[databricks_sql.Connection, str | None]:
         token, host, port, http_path, default_catalog = (
-            self._extract_connection_details(parsed_credentials)
+            self._extract_connection_details(connection_details)
         )
         connection = databricks_sql.connect(
             server_hostname=host,
@@ -178,17 +425,36 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         return connection, default_catalog
 
     def _extract_connection_details(
-        self, parsed_credentials: dict[str, Any]
+        self,
+        connection_details: DatabricksConnectionUrl | DatabricksConnectionCredentials,
     ) -> tuple[str, str, int, str, str | None]:
-        token = parsed_credentials.get("token")
-        jdbc_url = parsed_credentials.get("jdbc_url")
+        """
+        Extract connection details from validated Pydantic model.
+        Handles both URL-based and credentials-based connections.
+        """
+        token = connection_details.token
 
-        if not token:
-            raise ValueError("Missing Databricks token in connector credentials")
-        if not jdbc_url:
-            raise ValueError("Missing Databricks jdbc_url in connector credentials")
+        if isinstance(connection_details, DatabricksConnectionUrl):
+            # Use JDBC URL to extract connection details
+            jdbc_url = connection_details.connection_url
+            # connection_url is required in DatabricksConnectionUrl, so it's never None
+            host, port, http_path, default_catalog = self._parse_jdbc_url(jdbc_url)
+            # Override with explicit values if provided
+            if connection_details.host:
+                host = connection_details.host
+            if connection_details.port is not None:
+                port = connection_details.port
+            if connection_details.httpPath:
+                http_path = connection_details.httpPath
+            if connection_details.default_catalog:
+                default_catalog = connection_details.default_catalog
+        else:
+            # Use individual credentials (DatabricksConnectionCredentials)
+            host = connection_details.host
+            http_path = connection_details.httpPath
+            port = connection_details.port or 443
+            default_catalog = connection_details.default_catalog
 
-        host, port, http_path, default_catalog = self._parse_jdbc_url(jdbc_url)
         return token, host, port, http_path, default_catalog
 
     def _parse_jdbc_url(self, jdbc_url: str) -> tuple[str, int, str, str | None]:
@@ -599,8 +865,21 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         nodes: list[SchemaNode] = []
         now = datetime.now(timezone.utc)
 
+        # Validate connection details using Pydantic
+        try:
+            validated_connection_details = self._validate_connection_details(
+                connection_details
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid Databricks connection details: {e}. "
+                f"Expected: connect_using ('url' or 'credentials'), "
+                f"name (non-empty string), token (non-empty string), "
+                f"and either connection_url (for 'url') or host + httpPath (for 'credentials')"
+            )
+
         # Get connection details
-        connection, _ = self._get_workspace_connection(connection_details)
+        connection, _ = self._get_workspace_connection(validated_connection_details)
 
         cursor = None
         try:
