@@ -266,6 +266,13 @@ class VegaSpec(BaseModel):
         return values
 
 
+class FileConnectorType(str, Enum):
+    s3bucket = "s3bucket"
+    runtime = "runtime"
+    googlesheets = "googlesheets"
+    googledrive = "googledrive"
+
+
 class DatabaseType(Enum):
     Bigquery = "bigquery"
     Clickhouse = "clickhouse"
@@ -302,12 +309,19 @@ class DataframeInfo(TypedDict):
     df_name: str
 
 
+class FileConnectorInfo(TypedDict):
+    connector_id: str
+    connector_name: str
+    connector_type: FileConnectorType
+
+
 class FileInfo(TypedDict):
     file_id: str
     file_name: str
     file_type: str
     file_has_layers: bool
     layer_name: str | None
+    connector_info: FileConnectorInfo | None
 
 
 class ElementDataSource(TypedDict):
@@ -349,6 +363,40 @@ class SchemaNodeType(str, Enum):
     SCHEMA = "SCHEMA"
     TABLE = "TABLE"
     VIEW = "VIEW"
+
+
+class MountHealthStatus(str, Enum):
+    connected = "connected"
+    reconnecting = "reconnecting"
+    auth_expired = "auth_expired"
+    error = "error"
+
+
+class MountHealth(TypedDict):
+    status: MountHealthStatus
+    last_checked: datetime
+    error_message: str | None
+
+
+class FileNodeType(str, Enum):
+    root = "root"
+    directory = "directory"
+    file = "file"
+
+
+class FileNode(BaseModel):
+    id: UUID
+    name: str
+    type: FileNodeType
+    mount_type: FileConnectorType
+    connector_id: UUID
+    path: str
+    parent_id: UUID | None = None
+    size: int | None = None
+    mime_type: str | None = None
+    modified_at: datetime | None = None
+    created_at: datetime | None = None
+    health: MountHealth
 
 
 class SchemaNode(BaseModel):
