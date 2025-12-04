@@ -344,10 +344,36 @@ class DatabaseConnection(BaseModel):
     connection_details: SecretStr
 
 
+class S3ConnectorInfo(TypedDict):
+    connector_id: str
+    name: str
+    endpoint_url: str
+    region: str
+    provider: str
+    access_key: str
+    secret_key: str
+    bucket_name: str
+    path_prefix: str
+    is_virtual_hosted_style: bool
+
+
+class GoogleDriveConnectorInfo(TypedDict):
+    connector_id: str
+    name: str
+    provider: str
+    email: str
+    access_token: str
+    refresh_token: str
+    token_expiry: datetime
+    scopes: str
+
+
 class Credentials(BaseModel):
     workspace_id: str
     workspace_secrets: dict[str, WorkspaceSecret]
     databases: dict[str, DatabaseConnection]
+    s3_connectors: dict[str, S3ConnectorInfo]
+    google_drive_connectors: dict[str, GoogleDriveConnectorInfo]
     built_in_vars: dict[str, Any | None]
 
 
@@ -416,6 +442,32 @@ class SchemaNode(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ListPathRequest(BaseModel):
+    node_id: str | None = None
+    schema_node_type: SchemaNodeType | None = None
+    search_string: str | None = None
+
+
+class FileResult(BaseModel):
+    id: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    deleted_at: datetime | None = None
+    workspace_id: str
+    created_by_id: str | None = None
+    size: int
+    encoded_name: str
+    display_name: str
+    url: str
+    type: str
+    indexed_at: datetime | None = None
+
+
+class ListPathResponse(BaseModel):
+    files: list[FileResult]
+    schema_nodes: list[SchemaNode]
 
 
 class DBSaveConfig(TypedDict):
@@ -630,4 +682,7 @@ __all__ = [
     "JsonDisplay",
     "SchemaNode",
     "SchemaNodeType",
+    "ListPathRequest",
+    "FileResult",
+    "ListPathResponse",
 ]

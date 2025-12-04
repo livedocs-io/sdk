@@ -6,7 +6,13 @@ from typing import Any
 import requests
 import sentry_sdk
 
-from livedocs.types import FileManifest, FileManifestAction, GCSBucketType
+from livedocs.types import (
+    FileManifest,
+    FileManifestAction,
+    GCSBucketType,
+    ListPathResponse,
+    SchemaNodeType,
+)
 
 
 # Regex patterns for sanitizing sensitive data
@@ -205,6 +211,42 @@ def livedocs_internal_fetch_file_manifest(
         )
 
 
+@livedocs_internal_instrument
+def livedocs_internal_list_files(
+    report_id: str,
+    token: str,
+    warehouse_node_id: str | None = None,
+    warehouse_node_type: SchemaNodeType | None = None,
+    search_string: str | None = None,
+) -> ListPathResponse:
+    CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
+    if not CORE_URL:
+        raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
+
+    # Build request payload with optional parameters
+    payload: dict[str, Any] = {}
+    if warehouse_node_id:
+        payload["node_id"] = warehouse_node_id
+    if warehouse_node_type:
+        payload["schema_node_type"] = warehouse_node_type
+    if search_string:
+        payload["search_string"] = search_string
+
+    # Make POST request with report_id in query string
+    api_url = f"{CORE_URL}/v1/list-path?report_id={report_id}"
+    response = requests.post(
+        api_url,
+        json=payload,
+        headers={"authorization": token, "Content-Type": "application/json"},
+    )
+
+    if response.status_code == 200:
+        response_data = response.json()
+        return ListPathResponse(**response_data)
+    else:
+        raise Exception(f"Failed to list path. Status code: {response.status_code}")
+
+
 def livedocs_internal_setup_sentry():
     """
     Initializes Sentry for error tracking and performance monitoring.
@@ -234,5 +276,6 @@ __all__ = [
     "livedocs_internal_fetch_credentials",
     "livedocs_internal_sanitize_sensitive_data",
     "livedocs_internal_fetch_file_manifest",
+    "livedocs_internal_list_files",
     "livedocs_internal_setup_sentry",
 ]

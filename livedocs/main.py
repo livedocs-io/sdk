@@ -22,12 +22,14 @@ from livedocs.types import (
     DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
+    FileConnectorType,
     GCSBucketType,
     JsonDisplay,
     LivedocsResult,
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
+    SchemaNodeType,
     Spec,
     VegaSpec,
     WorkspaceSecret,
@@ -49,6 +51,7 @@ from livedocs.utils.lib.cache import QueryCache
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
     livedocs_internal_instrument,
+    livedocs_internal_list_files,
     livedocs_internal_persist_built_in_vars,
     livedocs_internal_setup_sentry,
 )
@@ -111,7 +114,7 @@ class Livedocs:
             token (str): The session token.
             client_id_token (str, optional): The client ID token.
         """
-        with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
+        with sentry_sdk.start_transaction(op="task", name="initialize sdk"):
             if not client_id_token:
                 sentry_sdk.set_tag("report_id", report_id)
                 self._report_id = report_id
@@ -794,6 +797,68 @@ class Livedocs:
         """
         result = process_single_value(config, context)
         return JsonDisplay(result)
+
+    @livedocs_internal_instrument
+    def list_files(
+        self,
+        path: str | None = None,
+        connector_type: FileConnectorType | None = None,
+        connector_id: str | None = None,
+        warehouse_node_id: str | None = None,
+        warehouse_node_type: SchemaNodeType | None = None,
+        search_string: str | None = None,
+    ):
+        if not self._report_id or not self._token:
+            raise ValueError(
+                "Livedocs is not initialized with report_id and token. Call initialize() with report_id and token first."
+            )
+
+        warehouses_and_files = livedocs_internal_list_files(
+            self._report_id,
+            self._token,
+            warehouse_node_id,
+            warehouse_node_type,
+            search_string,
+        )
+
+        pass
+
+    @livedocs_internal_instrument
+    def get_file(
+        self,
+        connector_type: FileConnectorType,
+        file_id: str | None = None,
+        path: str | None = None,
+    ):
+        pass
+
+    @livedocs_internal_instrument
+    def save_file(
+        self,
+        file_path: str,
+        connector_type: FileConnectorType,
+        connector_id: str | None = None,
+    ):
+        pass
+
+    @livedocs_internal_instrument
+    def delete_file(
+        self,
+        file_path: str,
+        connector_type: FileConnectorType,
+        connector_id: str | None = None,
+    ):
+        pass
+
+    @livedocs_internal_instrument
+    def rename_file(
+        self,
+        file_path: str,
+        new_name: str,
+        connector_type: FileConnectorType,
+        connector_id: str | None = None,
+    ):
+        pass
 
     """
     #########################################################

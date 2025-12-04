@@ -623,7 +623,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         Returns
         -------
         dict
-            Structure compatible with the other datasource write helpers used in vm-lib.
+            Structure compatible with the other datasource write helpers used in Livedocs SDK.
         """
         output = {
             "result": pl.DataFrame(),
