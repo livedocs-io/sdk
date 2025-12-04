@@ -3,13 +3,16 @@ import gzip
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Callable, cast
+from uuid import UUID
 
 import polars as pl
 import sentry_sdk
 from jinja2 import Template
 
+from livedocs.datasources.s3 import S3DatasourceConnector
 from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.datasources import DatasourceManager
 from livedocs.manager.duckdb import DuckDBSingleton
@@ -23,9 +26,13 @@ from livedocs.types import (
     ElementDataSource,
     ElementDatasourceType,
     FileConnectorType,
+    FileNode,
+    FileNodeType,
     GCSBucketType,
     JsonDisplay,
     LivedocsResult,
+    MountHealth,
+    MountHealthStatus,
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
@@ -821,7 +828,101 @@ class Livedocs:
             search_string,
         )
 
-        pass
+        file_nodes = []
+        google_drive_file_nodes = []
+
+        if not connector_id:
+            file_nodes: list[FileNode] = []
+            # return a filenode for each credential of type s3bucket and googledrive
+            if self._credential_store:
+                # Add S3 connectors
+                for connector_info in self._credential_store.get_all_s3_connectors():
+                    now = datetime.now(timezone.utc)
+                    file_nodes.append(
+                        FileNode(
+                            id=UUID(connector_info["connector_id"]),
+                            name=connector_info["name"],
+                            type=FileNodeType.directory,
+                            mount_type=FileConnectorType.s3bucket,
+                            connector_id=UUID(connector_info["connector_id"]),
+                            path=connector_info.get("path_prefix", ""),
+                            parent_id=None,
+                            size=None,
+                            mime_type=None,
+                            modified_at=None,
+                            created_at=None,
+                            health=MountHealth(
+                                status=MountHealthStatus.connected,
+                                last_checked=now,
+                                error_message=None,
+                            ),
+                        )
+                    )
+                # Add Google Drive connectors
+                for (
+                    connector_info
+                ) in self._credential_store.get_all_google_drive_connectors():
+                    now = datetime.now(timezone.utc)
+                    file_nodes.append(
+                        FileNode(
+                            id=UUID(connector_info["connector_id"]),
+                            name=connector_info["name"],
+                            type=FileNodeType.directory,
+                            mount_type=FileConnectorType.googledrive,
+                            connector_id=UUID(connector_info["connector_id"]),
+                            path="",  # Google Drive root
+                            parent_id=None,
+                            size=None,
+                            mime_type=None,
+                            modified_at=None,
+                            created_at=None,
+                            health=MountHealth(
+                                status=MountHealthStatus.connected,
+                                last_checked=now,
+                                error_message=None,
+                            ),
+                        )
+                    )
+        else:
+            # Determine connector type and list files
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            if connector_type == FileConnectorType.s3bucket:
+                # Try S3 first
+                connector_info = self._credential_store.get_s3_connector(connector_id)
+                if connector_info:
+                    s3_connector = S3DatasourceConnector()
+                    file_nodes = s3_connector.list(
+                        path=path,
+                        connector_id=connector_id,
+                        get_connection_details=self.helper_get_s3_connection_details,
+                    )
+                else:
+                    file_nodes = []
+            elif connector_type == FileConnectorType.googledrive:
+                # Try Google Drive
+                connector_info = self._credential_store.get_google_drive_connector(
+                    connector_id
+                )
+                if not connector_info:
+                    raise ValueError(
+                        f"Connector '{connector_id}' not found (checked S3 and Google Drive)"
+                    )
+
+                google_drive_connector = self._get_google_drive_connector()
+                google_drive_file_nodes = google_drive_connector.list(
+                    path=path,
+                    connector_id=connector_id,
+                    get_connection_details=self.helper_get_google_drive_connection_details,
+                )
+
+        return {
+            "s3buckets": file_nodes,
+            "googledrive": google_drive_file_nodes,
+            "databases": warehouses_and_files.schema_nodes,
+            "files": warehouses_and_files.files,
+        }
 
     @livedocs_internal_instrument
     def get_file(
@@ -829,8 +930,74 @@ class Livedocs:
         connector_type: FileConnectorType,
         file_id: str | None = None,
         path: str | None = None,
+        connector_id: str | None = None,
     ):
-        pass
+        """
+        Get a file from the specified connector.
+
+        If file_id is provided, downloads the file using download_file() and returns the local path.
+        Otherwise, returns a download URL (signed URL for S3, download link for Google Drive).
+
+        Args:
+            connector_type: Type of file connector (runtime, s3bucket, or googledrive)
+            file_id: File ID (if provided, file will be downloaded and path returned, ignoring other params)
+            path: Path to the file (required when file_id is not provided)
+            connector_id: Connector ID (required for s3bucket and googledrive when getting URLs)
+
+        Returns:
+            Local file path (if file_id provided) or download URL (if path provided)
+        """
+        # If file_id is provided, use download_file and return the path (ignore everything else)
+        if file_id is not None:
+            return self.download_file(file_id=file_id)
+
+        # If no file_id, return download URL/link based on connector_type
+        if connector_type == FileConnectorType.runtime:
+            # For runtime, file is already local - just return the path
+            if not path:
+                raise ValueError("path is required for runtime connector type")
+            import os
+
+            if not os.path.exists(path):
+                raise ValueError(f"File not found: {path}")
+            return path
+
+        # For S3 and Google Drive, we need connector_id and path
+        if not connector_id:
+            raise ValueError(
+                "connector_id is required for S3 and Google Drive operations"
+            )
+        if not path:
+            raise ValueError("path is required when file_id is not provided")
+        if not self._credential_store:
+            raise ValueError("Credential store not initialized")
+
+        if connector_type == FileConnectorType.s3bucket:
+            s3_connector = S3DatasourceConnector()
+            signed_url = s3_connector.get_signed_url(
+                file_path=path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+            if signed_url is None:
+                raise ValueError(f"Failed to generate signed URL for path: {path}")
+            return signed_url
+
+        elif connector_type == FileConnectorType.googledrive:
+            google_drive_connector = self._get_google_drive_connector()
+            download_url = google_drive_connector.get_signed_url(
+                file_path=path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+            )
+            if download_url is None:
+                raise ValueError(f"Failed to get download URL for path: {path}")
+            return download_url
+
+        else:
+            raise ValueError(f"Unsupported connector type: {connector_type}")
 
     @livedocs_internal_instrument
     def save_file(
@@ -838,8 +1005,60 @@ class Livedocs:
         file_path: str,
         connector_type: FileConnectorType,
         connector_id: str | None = None,
+        destination_path: str | None = None,
     ):
-        pass
+        """
+        Upload a local file to the specified connector (S3 or Google Drive).
+
+        Args:
+            file_path: Local file path to upload (must exist on filesystem)
+            connector_type: Type of file connector (s3bucket or googledrive)
+            connector_id: Connector ID (required)
+            destination_path: Destination path in the connector. For S3, relative to path_prefix.
+                              For Google Drive, folder path. If None, uses filename and uploads to root.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        import os
+
+        if not os.path.exists(file_path):
+            raise ValueError(f"Local file not found: {file_path}")
+
+        if connector_type == FileConnectorType.s3bucket:
+            if not connector_id:
+                raise ValueError("connector_id is required for S3 operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            s3_connector = S3DatasourceConnector()
+            return s3_connector.save_file(
+                file_path=file_path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                s3_path=destination_path,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+
+        elif connector_type == FileConnectorType.googledrive:
+            if not connector_id:
+                raise ValueError("connector_id is required for Google Drive operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            google_drive_connector = self._get_google_drive_connector()
+            return google_drive_connector.save_file(
+                file_path=file_path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                drive_path=destination_path,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported connector type: {connector_type}. Only s3bucket and googledrive are supported for save_file."
+            )
 
     @livedocs_internal_instrument
     def delete_file(
@@ -848,7 +1067,59 @@ class Livedocs:
         connector_type: FileConnectorType,
         connector_id: str | None = None,
     ):
-        pass
+        """
+        Delete a file from the specified connector.
+
+        Args:
+            file_path: Path to the file to delete
+            connector_type: Type of file connector (s3bucket, googledrive, or runtime)
+            connector_id: Connector ID (required for s3bucket and googledrive)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if connector_type == FileConnectorType.runtime:
+            # Local file system operation
+            import os
+
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    return True
+                return False
+            except Exception:
+                return False
+
+        elif connector_type == FileConnectorType.s3bucket:
+            if not connector_id:
+                raise ValueError("connector_id is required for S3 operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            s3_connector = S3DatasourceConnector()
+            return s3_connector.delete_file(
+                file_path=file_path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+
+        elif connector_type == FileConnectorType.googledrive:
+            if not connector_id:
+                raise ValueError("connector_id is required for Google Drive operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            google_drive_connector = self._get_google_drive_connector()
+            return google_drive_connector.delete_file(
+                file_path=file_path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+            )
+
+        else:
+            raise ValueError(f"Unsupported connector type: {connector_type}")
 
     @livedocs_internal_instrument
     def rename_file(
@@ -858,7 +1129,69 @@ class Livedocs:
         connector_type: FileConnectorType,
         connector_id: str | None = None,
     ):
-        pass
+        """
+        Rename a file in the specified connector.
+
+        Args:
+            file_path: Current path to the file
+            new_name: New name for the file (just the filename, not full path)
+            connector_type: Type of file connector (s3bucket, googledrive, or runtime)
+            connector_id: Connector ID (required for s3bucket and googledrive)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if connector_type == FileConnectorType.runtime:
+            # Local file system operation
+            import os
+
+            try:
+                # Construct new path by replacing the filename
+                parent_path = os.path.dirname(file_path)
+                if parent_path:
+                    new_path = os.path.join(parent_path, new_name)
+                else:
+                    new_path = new_name
+
+                if os.path.exists(file_path):
+                    os.rename(file_path, new_path)
+                    return True
+                return False
+            except Exception:
+                return False
+
+        elif connector_type == FileConnectorType.s3bucket:
+            if not connector_id:
+                raise ValueError("connector_id is required for S3 operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            s3_connector = S3DatasourceConnector()
+            return s3_connector.rename_file(
+                file_path=file_path,
+                new_name=new_name,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+
+        elif connector_type == FileConnectorType.googledrive:
+            if not connector_id:
+                raise ValueError("connector_id is required for Google Drive operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            google_drive_connector = self._get_google_drive_connector()
+            return google_drive_connector.rename_file(
+                file_path=file_path,
+                new_name=new_name,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+            )
+
+        else:
+            raise ValueError(f"Unsupported connector type: {connector_type}")
 
     """
     #########################################################
@@ -893,6 +1226,48 @@ class Livedocs:
         except json.JSONDecodeError as e:
             raise ValueError(f"Error parsing connection details: {e}")
         return model, parsed
+
+    def helper_get_s3_connection_details(
+        self, connector_id: str
+    ) -> tuple[object, dict[str, Any]]:
+        """Get S3 connector details for use with S3DatasourceConnector."""
+        store = self.helper_get_initialized_credentials()
+        connector_info = store.get_s3_connector(connector_id)
+        if connector_info is None:
+            connector_info = store.refresh().s3_connectors.get(connector_id)
+        if connector_info is None:
+            raise ValueError(f"S3 connector '{connector_id}' not found")
+        # Return tuple matching the expected format: (object, dict)
+        # Convert TypedDict to regular dict for the second element
+        return connector_info, dict(connector_info)
+
+    def _get_google_drive_connector(self):
+        """Lazy import of GoogleDriveDatasourceConnector to avoid dependency issues at import time."""
+        try:
+            from livedocs.datasources.googledrive import GoogleDriveDatasourceConnector
+
+            return GoogleDriveDatasourceConnector()
+        except (ImportError, AttributeError) as e:
+            raise ImportError(
+                "Google Drive connector dependencies are not available or incompatible. "
+                "This is often caused by a version mismatch between pyOpenSSL and the system OpenSSL library. "
+                "Please ensure pyOpenSSL>=22.0.0,<23.2.0 is installed and compatible with your system. "
+                f"Original error: {e}"
+            ) from e
+
+    def helper_get_google_drive_connection_details(
+        self, connector_id: str
+    ) -> tuple[object, dict[str, Any]]:
+        """Get Google Drive connector details for use with GoogleDriveDatasourceConnector."""
+        store = self.helper_get_initialized_credentials()
+        connector_info = store.get_google_drive_connector(connector_id)
+        if connector_info is None:
+            connector_info = store.refresh().google_drive_connectors.get(connector_id)
+        if connector_info is None:
+            raise ValueError(f"Google Drive connector '{connector_id}' not found")
+        # Return tuple matching the expected format: (object, dict)
+        # Convert TypedDict to regular dict for the second element
+        return connector_info, dict(connector_info)
 
     def helper_render_jinja_template(self, text: str, context: dict[str, str]) -> str:
         """

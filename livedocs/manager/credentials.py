@@ -57,6 +57,14 @@ class CredentialStore:
         bundle = self.load()
         return bundle.s3_connectors.get(connector_id)
 
+    def get_all_s3_connectors(self) -> list[S3ConnectorInfo]:
+        bundle = self.load()
+        return list[S3ConnectorInfo](bundle.s3_connectors.values())
+
+    def get_all_google_drive_connectors(self) -> list[GoogleDriveConnectorInfo]:
+        bundle = self.load()
+        return list[GoogleDriveConnectorInfo](bundle.google_drive_connectors.values())
+
     def get_google_drive_connector(
         self, connector_id: str
     ) -> GoogleDriveConnectorInfo | None:
