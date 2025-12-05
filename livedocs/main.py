@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Callable, cast
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import polars as pl
 import sentry_sdk
@@ -29,6 +29,7 @@ from livedocs.types import (
     FileNode,
     FileNodeType,
     GCSBucketType,
+    GoogleDriveConnectorInfo,
     JsonDisplay,
     LivedocsResult,
     MountHealth,
@@ -830,6 +831,7 @@ class Livedocs:
 
         file_nodes = []
         google_drive_file_nodes = []
+        runtime_file_nodes = []
 
         if not connector_id:
             file_nodes: list[FileNode] = []
@@ -915,11 +917,130 @@ class Livedocs:
                     path=path,
                     connector_id=connector_id,
                     get_connection_details=self.helper_get_google_drive_connection_details,
+                    refresh_token_callback=self.refresh_google_drive_token,
                 )
+            elif connector_type == FileConnectorType.runtime:
+                # Runtime connector - list files/folders from local filesystem
+                from pathlib import Path
+
+                # Use provided path or root (current directory)
+                list_path = path if path else "."
+                list_path_obj = Path(list_path)
+
+                # Check if path exists
+                if not list_path_obj.exists():
+                    raise ValueError(f"Path not found: {list_path}")
+
+                # Ensure it's a directory
+                if not list_path_obj.is_dir():
+                    raise ValueError(f"Path is not a directory: {list_path}")
+
+                now = datetime.now(timezone.utc)
+                nodes: list[FileNode] = []
+
+                # Helper function to generate deterministic UUID
+                def _generate_file_id(connector_id: str, file_path: str) -> UUID:
+                    namespace = UUID(connector_id)
+                    return uuid5(namespace, file_path)
+
+                # Helper function to get parent path
+                def _get_parent_path(file_path: str) -> str | None:
+                    """Extract parent directory path."""
+                    file_path = file_path.rstrip("/")
+                    if not file_path or file_path == "/":
+                        return None
+                    parent = "/".join(file_path.split("/")[:-1])
+                    return parent if parent else None
+
+                # List all items in the directory
+                try:
+                    items = list_path_obj.iterdir()
+                    for item in items:
+                        # Determine if it's a directory or file
+                        is_directory = item.is_dir()
+                        name = item.name
+
+                        # Calculate relative path: if path was provided, prepend it to the item name
+                        if path:
+                            # Normalize the base path
+                            base_path = path.strip("/")
+                            relative_path = f"{base_path}/{name}" if base_path else name
+                        else:
+                            # If no path provided, use just the name (root level)
+                            relative_path = name
+
+                        # Normalize path separators
+                        relative_path = relative_path.replace("\\", "/")
+
+                        # Generate IDs
+                        file_id = _generate_file_id(connector_id, relative_path)
+                        parent_path = _get_parent_path(relative_path)
+                        parent_id = (
+                            _generate_file_id(connector_id, parent_path)
+                            if parent_path
+                            else None
+                        )
+
+                        # Get file metadata
+                        size = None
+                        modified_at = None
+                        created_at = None
+
+                        if item.is_file():
+                            try:
+                                stat = item.stat()
+                                size = stat.st_size
+                                modified_at = datetime.fromtimestamp(
+                                    stat.st_mtime, tz=timezone.utc
+                                )
+                                created_at = datetime.fromtimestamp(
+                                    stat.st_ctime, tz=timezone.utc
+                                )
+                            except (OSError, ValueError):
+                                pass
+                        elif item.is_dir():
+                            try:
+                                stat = item.stat()
+                                modified_at = datetime.fromtimestamp(
+                                    stat.st_mtime, tz=timezone.utc
+                                )
+                                created_at = datetime.fromtimestamp(
+                                    stat.st_ctime, tz=timezone.utc
+                                )
+                            except (OSError, ValueError):
+                                pass
+
+                        nodes.append(
+                            FileNode(
+                                id=file_id,
+                                name=name,
+                                type=FileNodeType.directory
+                                if is_directory
+                                else FileNodeType.file,
+                                mount_type=FileConnectorType.runtime,
+                                connector_id=UUID(connector_id),
+                                path=relative_path,
+                                parent_id=parent_id,
+                                size=size,
+                                mime_type=None,
+                                modified_at=modified_at,
+                                created_at=created_at,
+                                health=MountHealth(
+                                    status=MountHealthStatus.connected,
+                                    last_checked=now,
+                                    error_message=None,
+                                ),
+                            )
+                        )
+                except (OSError, PermissionError) as e:
+                    raise ValueError(f"Error listing directory '{list_path}': {str(e)}")
+
+                runtime_file_nodes = nodes
 
         return {
             "s3buckets": file_nodes,
             "googledrive": google_drive_file_nodes,
+            "runtime": runtime_file_nodes,
             "databases": warehouses_and_files.schema_nodes,
             "workspace_files": warehouses_and_files.files,
         }
@@ -991,6 +1112,7 @@ class Livedocs:
                 connector_type=connector_type,
                 connector_id=connector_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=self.refresh_google_drive_token,
             )
             if download_url is None:
                 raise ValueError(f"Failed to get download URL for path: {path}")
@@ -1053,6 +1175,7 @@ class Livedocs:
                 connector_id=connector_id,
                 drive_path=destination_path,
                 get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=self.refresh_google_drive_token,
             )
 
         else:
@@ -1116,6 +1239,7 @@ class Livedocs:
                 connector_type=connector_type,
                 connector_id=connector_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=self.refresh_google_drive_token,
             )
 
         else:
@@ -1188,6 +1312,7 @@ class Livedocs:
                 connector_type=connector_type,
                 connector_id=connector_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=self.refresh_google_drive_token,
             )
 
         else:
@@ -1254,6 +1379,23 @@ class Livedocs:
                 "Please ensure pyOpenSSL>=22.0.0,<23.2.0 is installed and compatible with your system. "
                 f"Original error: {e}"
             ) from e
+
+    def refresh_google_drive_token(
+        self, connector_info: GoogleDriveConnectorInfo
+    ) -> GoogleDriveConnectorInfo:
+        """
+        Refresh Google Drive token callback.
+
+        Currently just returns the connector_info as-is.
+        In the future, this can be extended to actually refresh expired tokens.
+
+        Args:
+            connector_info: The Google Drive connector info dictionary
+
+        Returns:
+            The same connector_info dictionary (or updated one if token refresh is implemented)
+        """
+        return connector_info
 
     def helper_get_google_drive_connection_details(
         self, connector_id: str
