@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Callable, cast
 from uuid import UUID, uuid5
 
@@ -13,6 +14,7 @@ import requests
 import sentry_sdk
 from jinja2 import Template
 
+from livedocs.datasources.googledrive import GoogleDriveDatasourceConnector
 from livedocs.datasources.s3 import S3DatasourceConnector
 from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.datasources import DatasourceManager
@@ -917,7 +919,7 @@ class Livedocs:
                         f"Connector '{connector_id}' not found (checked S3 and Google Drive)"
                     )
 
-                google_drive_connector = self._get_google_drive_connector()
+                google_drive_connector = GoogleDriveDatasourceConnector()
                 refresh_callback = (
                     refresh_google_drive_token
                     if refresh_google_drive_token
@@ -931,8 +933,6 @@ class Livedocs:
                 )
             elif connector_type == FileConnectorType.runtime:
                 # Runtime connector - list files/folders from local filesystem
-                from pathlib import Path
-
                 # Use provided path or root (current directory)
                 list_path = path if path else "."
                 list_path_obj = Path(list_path)
@@ -1091,7 +1091,6 @@ class Livedocs:
             # For runtime, file is already local - just return the path
             if not path:
                 raise ValueError("path is required for runtime connector type")
-            import os
 
             if not os.path.exists(path):
                 raise ValueError(f"File not found: {path}")
@@ -1120,7 +1119,7 @@ class Livedocs:
             return signed_url
 
         elif connector_type == FileConnectorType.googledrive:
-            google_drive_connector = self._get_google_drive_connector()
+            google_drive_connector = GoogleDriveDatasourceConnector()
             refresh_callback = (
                 refresh_google_drive_token
                 if refresh_google_drive_token
@@ -1165,8 +1164,6 @@ class Livedocs:
         Returns:
             True if successful, False otherwise
         """
-        import os
-
         if not os.path.exists(file_path):
             raise ValueError(f"Local file not found: {file_path}")
 
@@ -1191,7 +1188,7 @@ class Livedocs:
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
-            google_drive_connector = self._get_google_drive_connector()
+            google_drive_connector = GoogleDriveDatasourceConnector()
             refresh_callback = (
                 refresh_google_drive_token
                 if refresh_google_drive_token
@@ -1235,8 +1232,6 @@ class Livedocs:
         """
         if connector_type == FileConnectorType.runtime:
             # Local file system operation
-            import os
-
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
@@ -1265,7 +1260,7 @@ class Livedocs:
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
-            google_drive_connector = self._get_google_drive_connector()
+            google_drive_connector = GoogleDriveDatasourceConnector()
             refresh_callback = (
                 refresh_google_drive_token
                 if refresh_google_drive_token
@@ -1308,8 +1303,6 @@ class Livedocs:
         """
         if connector_type == FileConnectorType.runtime:
             # Local file system operation
-            import os
-
             try:
                 # Construct new path by replacing the filename
                 parent_path = os.path.dirname(file_path)
@@ -1346,7 +1339,7 @@ class Livedocs:
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
-            google_drive_connector = self._get_google_drive_connector()
+            google_drive_connector = GoogleDriveDatasourceConnector()
             refresh_callback = (
                 refresh_google_drive_token
                 if refresh_google_drive_token
@@ -1411,20 +1404,6 @@ class Livedocs:
         # Return tuple matching the expected format: (object, dict)
         # Convert TypedDict to regular dict for the second element
         return connector_info, dict(connector_info)
-
-    def _get_google_drive_connector(self):
-        """Lazy import of GoogleDriveDatasourceConnector to avoid dependency issues at import time."""
-        try:
-            from livedocs.datasources.googledrive import GoogleDriveDatasourceConnector
-
-            return GoogleDriveDatasourceConnector()
-        except (ImportError, AttributeError) as e:
-            raise ImportError(
-                "Google Drive connector dependencies are not available or incompatible. "
-                "This is often caused by a version mismatch between pyOpenSSL and the system OpenSSL library. "
-                "Please ensure pyOpenSSL>=22.0.0,<23.2.0 is installed and compatible with your system. "
-                f"Original error: {e}"
-            ) from e
 
     def refresh_google_drive_token(
         self, connector_info: GoogleDriveConnectorInfo
