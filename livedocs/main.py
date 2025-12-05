@@ -806,7 +806,7 @@ class Livedocs:
         return JsonDisplay(result)
 
     @livedocs_internal_instrument
-    def list_files(
+    def list_nodes(
         self,
         path: str | None = None,
         connector_type: FileConnectorType | None = None,
@@ -921,7 +921,7 @@ class Livedocs:
             "s3buckets": file_nodes,
             "googledrive": google_drive_file_nodes,
             "databases": warehouses_and_files.schema_nodes,
-            "files": warehouses_and_files.files,
+            "workspace_files": warehouses_and_files.files,
         }
 
     @livedocs_internal_instrument

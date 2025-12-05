@@ -31,10 +31,9 @@ dependencies = [
     "databricks-sql-connector>=4.1.4",
     "boto3>=1.40.76",
     "s3fs>=0.4.2",
-    "pydrive2>=1.17.0,<2",
-    "google-auth>=2.0.0,<3",
-    "oauth2client>=4.0.0,<5",
-    "pyOpenSSL>=23.2.0,<25",
+    "google-api-python-client>=2.0.0,<3",
+    "google-auth-httplib2>=0.2.0,<1",
+    "google-auth-oauthlib>=1.0.0,<2",
 ]
 requires-python = ">=3.12"
 classifiers = [
