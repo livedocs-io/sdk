@@ -9,6 +9,7 @@ from typing import Any, Callable, cast
 from uuid import UUID, uuid5
 
 import polars as pl
+import requests
 import sentry_sdk
 from jinja2 import Template
 
@@ -815,6 +816,10 @@ class Livedocs:
         warehouse_node_id: str | None = None,
         warehouse_node_type: SchemaNodeType | None = None,
         search_string: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
     ):
         if not self._report_id or not self._token:
             raise ValueError(
@@ -913,11 +918,16 @@ class Livedocs:
                     )
 
                 google_drive_connector = self._get_google_drive_connector()
+                refresh_callback = (
+                    refresh_google_drive_token
+                    if refresh_google_drive_token
+                    else self.refresh_google_drive_token
+                )
                 google_drive_file_nodes = google_drive_connector.list(
                     path=path,
                     connector_id=connector_id,
                     get_connection_details=self.helper_get_google_drive_connection_details,
-                    refresh_token_callback=self.refresh_google_drive_token,
+                    refresh_token_callback=refresh_callback,
                 )
             elif connector_type == FileConnectorType.runtime:
                 # Runtime connector - list files/folders from local filesystem
@@ -1052,6 +1062,10 @@ class Livedocs:
         file_id: str | None = None,
         path: str | None = None,
         connector_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
     ):
         """
         Get a file from the specified connector.
@@ -1107,12 +1121,17 @@ class Livedocs:
 
         elif connector_type == FileConnectorType.googledrive:
             google_drive_connector = self._get_google_drive_connector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
             download_url = google_drive_connector.get_signed_url(
                 file_path=path,
                 connector_type=connector_type,
                 connector_id=connector_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
-                refresh_token_callback=self.refresh_google_drive_token,
+                refresh_token_callback=refresh_callback,
             )
             if download_url is None:
                 raise ValueError(f"Failed to get download URL for path: {path}")
@@ -1128,6 +1147,10 @@ class Livedocs:
         connector_type: FileConnectorType,
         connector_id: str | None = None,
         destination_path: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
     ):
         """
         Upload a local file to the specified connector (S3 or Google Drive).
@@ -1169,13 +1192,18 @@ class Livedocs:
                 raise ValueError("Credential store not initialized")
 
             google_drive_connector = self._get_google_drive_connector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
             return google_drive_connector.save_file(
                 file_path=file_path,
                 connector_type=connector_type,
                 connector_id=connector_id,
                 drive_path=destination_path,
                 get_connection_details=self.helper_get_google_drive_connection_details,
-                refresh_token_callback=self.refresh_google_drive_token,
+                refresh_token_callback=refresh_callback,
             )
 
         else:
@@ -1189,6 +1217,10 @@ class Livedocs:
         file_path: str,
         connector_type: FileConnectorType,
         connector_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
     ):
         """
         Delete a file from the specified connector.
@@ -1234,12 +1266,17 @@ class Livedocs:
                 raise ValueError("Credential store not initialized")
 
             google_drive_connector = self._get_google_drive_connector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
             return google_drive_connector.delete_file(
                 file_path=file_path,
                 connector_type=connector_type,
                 connector_id=connector_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
-                refresh_token_callback=self.refresh_google_drive_token,
+                refresh_token_callback=refresh_callback,
             )
 
         else:
@@ -1252,6 +1289,10 @@ class Livedocs:
         new_name: str,
         connector_type: FileConnectorType,
         connector_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
     ):
         """
         Rename a file in the specified connector.
@@ -1306,13 +1347,18 @@ class Livedocs:
                 raise ValueError("Credential store not initialized")
 
             google_drive_connector = self._get_google_drive_connector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
             return google_drive_connector.rename_file(
                 file_path=file_path,
                 new_name=new_name,
                 connector_type=connector_type,
                 connector_id=connector_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
-                refresh_token_callback=self.refresh_google_drive_token,
+                refresh_token_callback=refresh_callback,
             )
 
         else:
@@ -1386,16 +1432,83 @@ class Livedocs:
         """
         Refresh Google Drive token callback.
 
-        Currently just returns the connector_info as-is.
-        In the future, this can be extended to actually refresh expired tokens.
+        Calls the backend API to refresh the Google Drive token and updates
+        the credential store with the new credentials.
 
         Args:
             connector_info: The Google Drive connector info dictionary
 
         Returns:
-            The same connector_info dictionary (or updated one if token refresh is implemented)
+            The updated connector_info dictionary with refreshed tokens
         """
-        return connector_info
+        if not self._report_id or not self._token:
+            raise RuntimeError(
+                "Livedocs is not initialized with report_id and token. Call initialize() with report_id and token first."
+            )
+
+        if not self._credential_store:
+            raise RuntimeError("Credential store not initialized")
+
+        CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
+        if not CORE_URL:
+            raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
+
+        connector_id = connector_info["connector_id"]
+
+        # Call the refresh endpoint
+        response = requests.post(
+            f"{CORE_URL}/v1/drive-connectors/refresh/{self._report_id}",
+            json={"connector_id": connector_id},
+            headers={"authorization": self._token, "Content-Type": "application/json"},
+        )
+
+        if response.status_code != 200:
+            error_text = response.text
+            raise Exception(
+                f"Failed to refresh Google Drive token. Status code: {response.status_code}, Error: {error_text}"
+            )
+
+        # Parse the response
+        response_data = response.json()
+
+        # Parse token_expiry from ISO string to datetime
+        token_expiry_str = response_data.get("token_expiry")
+        if isinstance(token_expiry_str, str):
+            # Parse ISO format datetime string (handles both 'Z' and timezone offsets)
+            try:
+                # Replace 'Z' with '+00:00' for compatibility with older Python versions
+                token_expiry = datetime.fromisoformat(
+                    token_expiry_str.replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError) as e:
+                raise ValueError(
+                    f"Invalid token_expiry format: {token_expiry_str}"
+                ) from e
+        elif isinstance(token_expiry_str, datetime):
+            token_expiry = token_expiry_str
+        else:
+            raise ValueError(f"Invalid token_expiry format: {token_expiry_str}")
+
+        # Create updated connector info
+        updated_connector_info: GoogleDriveConnectorInfo = {
+            "connector_id": response_data["connector_id"],
+            "name": response_data["name"],
+            "provider": response_data["provider"],
+            "email": response_data["email"],
+            "access_token": response_data["access_token"],
+            "refresh_token": response_data["refresh_token"],
+            "token_expiry": token_expiry,
+            "scopes": response_data["scopes"],
+        }
+
+        # Update the credential store's bundle
+        with self._credential_store._lock:
+            if self._credential_store._bundle:
+                self._credential_store._bundle.google_drive_connectors[connector_id] = (
+                    updated_connector_info
+                )
+
+        return updated_connector_info
 
     def helper_get_google_drive_connection_details(
         self, connector_id: str
