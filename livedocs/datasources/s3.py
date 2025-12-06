@@ -336,6 +336,9 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         """
         Get a file from S3, downloading it to a local path.
 
+        Only downloads files smaller than 100MB. Files are saved to the directory
+        specified by the LIVEDOCS_FILES_PATH environment variable (defaults to /tmp/livedocs_files).
+
         Args:
             connector_type: Type of file connector (should be FileConnectorType.s3bucket)
             file_id: File ID (not used for S3, path is required)
@@ -344,7 +347,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             get_connection_details: Callable to retrieve connection details
 
         Returns:
-            Local file path if downloaded successfully, or None on error
+            Local file path if downloaded successfully (file must be < 100MB), or None on error or if file is too large
         """
         if connector_type != FileConnectorType.s3bucket:
             return None
@@ -364,6 +367,16 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
             # Check if file exists
             if not s3_fs.exists(s3_path):
+                return None
+
+            # Get file size
+            file_info = s3_fs.info(s3_path)
+            file_size_raw = file_info.get("Size") or file_info.get("size", 0)
+            file_size_bytes = int(file_size_raw) if file_size_raw else 0
+
+            # Check if file is less than 100MB (100 * 1024 * 1024 bytes)
+            MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
+            if file_size_bytes >= MAX_FILE_SIZE_BYTES:
                 return None
 
             # Get download path from environment variable
@@ -415,7 +428,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
         try:
             _, connector_info_dict = get_connection_details(connector_id)
-            connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
+            connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
         except (KeyError, TypeError, ValueError):
             return False
 

@@ -284,11 +284,21 @@ class VegaSpec(BaseModel):
         return values
 
 
+class SourceType(str, Enum):
+    workspace = "workspace"
+    s3bucket = "s3bucket"
+    runtime = "runtime"
+    googlesheets = "googlesheets"
+    googledrive = "googledrive"
+    database = "database"
+
+
 class FileConnectorType(str, Enum):
     s3bucket = "s3bucket"
     runtime = "runtime"
     googlesheets = "googlesheets"
     googledrive = "googledrive"
+    workspace = "workspace"
 
 
 class DatabaseType(Enum):

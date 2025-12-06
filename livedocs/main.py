@@ -716,7 +716,6 @@ class Livedocs:
             post_span.finish()
             return payload
 
-    # DOOMED: when web-client hits relay server in standalone mode
     @livedocs_internal_instrument
     @sentry_sdk.trace
     def _get_chart_schema(
@@ -808,6 +807,12 @@ class Livedocs:
         """
         result = process_single_value(config, context)
         return JsonDisplay(result)
+
+    """
+    #########################################################
+    #              FILE MANAGEMENT FUNCTIONS
+    #########################################################
+    """
 
     @livedocs_internal_instrument
     def list_nodes(
@@ -1139,6 +1144,97 @@ class Livedocs:
             raise ValueError(f"Unsupported connector type: {connector_type}")
 
     @livedocs_internal_instrument
+    def preview_file(
+        self,
+        connector_type: FileConnectorType | None = None,
+        connector_id: str | None = None,
+        path: str | None = None,
+        file_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+    ) -> str:
+        """
+        Preview a file by downloading it locally (if needed) and returning the local path.
+
+        Either provide file_id, or provide connector_type, connector_id, and path.
+
+        Args:
+            connector_type: Type of file connector (runtime, s3bucket, or googledrive)
+            connector_id: Connector ID (required for s3bucket and googledrive)
+            path: Path to the file (required when file_id is not provided)
+            file_id: File ID (if provided, file will be downloaded using download_file, ignoring other params)
+            refresh_google_drive_token: Optional callback to refresh Google Drive tokens
+
+        Returns:
+            Local file path
+
+        Raises:
+            ValueError: If parameters are invalid or file is not found
+        """
+        # If file_id is provided, use download_file and return the path (ignore everything else)
+        if file_id is not None:
+            return self.download_file(file_id=file_id)
+
+        # Validate parameters
+        if not connector_type:
+            raise ValueError("connector_type is required when file_id is not provided")
+        if not path:
+            raise ValueError("path is required when file_id is not provided")
+
+        if connector_type == FileConnectorType.runtime:
+            # For runtime, file is already local - just check if it exists
+            if not os.path.exists(path):
+                raise ValueError(f"File not found: {path}")
+            return path
+
+        # For S3 and Google Drive, we need connector_id
+        if not connector_id:
+            raise ValueError(
+                "connector_id is required for S3 and Google Drive operations"
+            )
+        if not self._credential_store:
+            raise ValueError("Credential store not initialized")
+
+        if connector_type == FileConnectorType.s3bucket:
+            s3_connector = S3DatasourceConnector()
+            local_path = s3_connector.get_file(
+                connector_type=connector_type,
+                path=path,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+            if local_path is None:
+                raise ValueError(
+                    f"Failed to download file from S3 at path: {path}. File may not exist or may be larger than 100MB."
+                )
+            return local_path
+
+        elif connector_type == FileConnectorType.googledrive:
+            google_drive_connector = GoogleDriveDatasourceConnector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
+            local_path = google_drive_connector.download_file(
+                file_path=path,
+                connector_type=connector_type,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=refresh_callback,
+            )
+            if local_path is None:
+                raise ValueError(
+                    f"Failed to download file from Google Drive at path: {path}. File may not exist or may be larger than 100MB."
+                )
+            return local_path
+
+        else:
+            raise ValueError(f"Unsupported connector type: {connector_type}")
+
+    @livedocs_internal_instrument
     def save_file(
         self,
         file_path: str,
@@ -1358,7 +1454,7 @@ class Livedocs:
 
     """
     #########################################################
-    # DOOMED TOP LEVEL FUNCTIONS
+    # HELPER TOP LEVEL FUNCTIONS
     #########################################################
     """
 

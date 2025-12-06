@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import UUID, uuid5
@@ -8,7 +10,7 @@ import polars as pl
 from google.oauth2.credentials import Credentials as GoogleCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
@@ -760,6 +762,118 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                     )  # Limit to first 500 chars
             print(traceback.format_exc())
             return False
+
+    def download_file(
+        self,
+        file_path: str,
+        connector_type: FileConnectorType,
+        connector_id: str | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        refresh_token_callback: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+    ) -> str | None:
+        """
+        Download a file from Google Drive and save it locally if it's less than 100MB.
+
+        Args:
+            file_path: Google Drive file path to download
+            connector_type: Type of file connector (should be FileConnectorType.googledrive)
+            connector_id: Google Drive connector ID
+            get_connection_details: Callable to retrieve connection details
+            refresh_token_callback: Optional callback to refresh tokens if expired.
+                Receives GoogleDriveConnectorInfo and returns updated one.
+
+        Returns:
+            Local file path if successful, None otherwise
+        """
+        if connector_type != FileConnectorType.googledrive:
+            return None
+
+        if connector_id is None or get_connection_details is None:
+            return None
+
+        # Get the directory path from environment variable
+        files_path = os.getenv("LIVEDOCS_FILES_PATH")
+        if not files_path:
+            print("ERROR: LIVEDOCS_FILES_PATH environment variable not set")
+            return None
+
+        # Ensure the directory exists
+        os.makedirs(files_path, exist_ok=True)
+
+        connector_info = self._get_connector_info_with_refresh(
+            connector_id, get_connection_details, refresh_token_callback
+        )
+        if connector_info is None:
+            return None
+
+        try:
+            service = self._create_google_drive_service(connector_info)
+            file_id = self._get_file_id_from_path(service, file_path)
+
+            if file_id is None:
+                print(f"ERROR: File not found at path: {file_path}")
+                return None
+
+            # Get file metadata to check size
+            file_metadata = (
+                service.files().get(fileId=file_id, fields="name, size").execute()
+            )
+
+            file_name = file_metadata.get("name", os.path.basename(file_path))
+            size_str = file_metadata.get("size")
+
+            # Check if file size is available and less than 100MB
+            if size_str:
+                try:
+                    file_size = int(size_str)
+                    # 100MB in bytes
+                    max_size = 100 * 1024 * 1024
+                    if file_size >= max_size:
+                        print(
+                            f"ERROR: File size ({file_size} bytes) exceeds 100MB limit"
+                        )
+                        return None
+                except (ValueError, TypeError):
+                    print(
+                        "WARNING: Could not parse file size, proceeding with download"
+                    )
+
+            # Download the file
+            request = service.files().get_media(fileId=file_id)
+            file_content = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_content, request)
+
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            # Save to local directory
+            local_file_path = os.path.join(files_path, file_name)
+            with open(local_file_path, "wb") as f:
+                _ = f.write(file_content.getvalue())
+
+            return local_file_path
+
+        except Exception as e:
+            import traceback
+
+            error_msg = f"ERROR in download_file: {type(e).__name__}: {str(e)}"
+            print(error_msg)
+            if isinstance(e, HttpError):
+                if hasattr(e, "resp"):
+                    status = getattr(e.resp, "status", None)
+                    print(f"  HTTP Status: {status}")
+                if hasattr(e, "content"):
+                    content_str = str(e.content)
+                    print(
+                        f"  Error Content: {content_str[:500]}"
+                    )  # Limit to first 500 chars
+            print(traceback.format_exc())
+            return None
 
     def get_signed_url(
         self,
