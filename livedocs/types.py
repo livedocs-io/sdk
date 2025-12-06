@@ -195,8 +195,26 @@ class JsonDisplay(DisplayObject):
 
     def __init__(self, data, metadata: dict[str, Any] | None = None):
         super().__init__(data, metadata=metadata)
-        self.data = data
+        self.data = self._to_json_serializable(data)
         self.metadata = metadata or {}
+
+    def _to_json_serializable(self, obj: Any) -> Any:
+        """Recursively convert objects to JSON-serializable format."""
+        if obj is None:
+            return None
+        if isinstance(obj, BaseModel):
+            return obj.model_dump(mode="json")
+        if isinstance(obj, UUID):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, dict):
+            return {k: self._to_json_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._to_json_serializable(item) for item in obj]
+        return obj
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """

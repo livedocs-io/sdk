@@ -35,9 +35,7 @@ class CredentialStore:
                 return self._bundle
 
             raw = livedocs_internal_fetch_credentials(self._report_id, self._token)
-
             bundle = Credentials.model_validate(raw)
-
             self._bundle = bundle
             self._loaded_at = now
             return bundle

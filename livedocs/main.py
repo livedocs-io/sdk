@@ -836,18 +836,17 @@ class Livedocs:
             search_string,
         )
 
-        file_nodes = []
+        s3_nodes = []
         google_drive_file_nodes = []
         runtime_file_nodes = []
 
         if not connector_id:
-            file_nodes: list[FileNode] = []
             # return a filenode for each credential of type s3bucket and googledrive
             if self._credential_store:
-                # Add S3 connectors
+                # Add S3 connectors to s3_nodes
                 for connector_info in self._credential_store.get_all_s3_connectors():
                     now = datetime.now(timezone.utc)
-                    file_nodes.append(
+                    s3_nodes.append(
                         FileNode(
                             id=UUID(connector_info["connector_id"]),
                             name=connector_info["name"],
@@ -867,12 +866,12 @@ class Livedocs:
                             ),
                         )
                     )
-                # Add Google Drive connectors
+                # Add Google Drive connectors to google_drive_file_nodes
                 for (
                     connector_info
                 ) in self._credential_store.get_all_google_drive_connectors():
                     now = datetime.now(timezone.utc)
-                    file_nodes.append(
+                    google_drive_file_nodes.append(
                         FileNode(
                             id=UUID(connector_info["connector_id"]),
                             name=connector_info["name"],
@@ -902,13 +901,13 @@ class Livedocs:
                 connector_info = self._credential_store.get_s3_connector(connector_id)
                 if connector_info:
                     s3_connector = S3DatasourceConnector()
-                    file_nodes = s3_connector.list(
+                    s3_nodes = s3_connector.list(
                         path=path,
                         connector_id=connector_id,
                         get_connection_details=self.helper_get_s3_connection_details,
                     )
                 else:
-                    file_nodes = []
+                    s3_nodes = []
             elif connector_type == FileConnectorType.googledrive:
                 # Try Google Drive
                 connector_info = self._credential_store.get_google_drive_connector(
@@ -1048,7 +1047,7 @@ class Livedocs:
                 runtime_file_nodes = nodes
 
         return {
-            "s3buckets": file_nodes,
+            "s3buckets": s3_nodes,
             "googledrive": google_drive_file_nodes,
             "runtime": runtime_file_nodes,
             "databases": warehouses_and_files.schema_nodes,
