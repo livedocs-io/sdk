@@ -395,10 +395,9 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         except Exception:
             return None
 
-    def save_file(
+    def upload_file_to_s3(
         self,
         file_path: str,
-        connector_type: FileConnectorType,
         connector_id: str | None = None,
         s3_path: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
@@ -417,9 +416,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         Returns:
             True if successful, False otherwise
         """
-        if connector_type != FileConnectorType.s3bucket:
-            return False
-
         if connector_id is None or get_connection_details is None:
             return False
 
@@ -553,7 +549,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
     def get_signed_url(
         self,
         file_path: str,
-        connector_type: FileConnectorType,
         connector_id: str | None = None,
         expiration_seconds: int = 3600,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
@@ -572,9 +567,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         Returns:
             Presigned URL string if successful, None otherwise
         """
-        if connector_type != FileConnectorType.s3bucket:
-            return None
-
         if connector_id is None or get_connection_details is None:
             return None
 

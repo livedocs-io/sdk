@@ -662,10 +662,9 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             print(traceback.format_exc())
             return False
 
-    def save_file(
+    def upload_file_to_googledrive(
         self,
         file_path: str,
-        connector_type: FileConnectorType,
         connector_id: str | None = None,
         drive_path: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
@@ -690,9 +689,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         Returns:
             True if successful, False otherwise
         """
-        if connector_type != FileConnectorType.googledrive:
-            return False
-
         if connector_id is None or get_connection_details is None:
             return False
 
@@ -870,9 +866,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
     def get_signed_url(
         self,
         file_path: str,
-        connector_type: FileConnectorType,
         connector_id: str | None = None,
-        expiration_seconds: int = 3600,  # noqa: ARG002
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
         refresh_token_callback: Callable[
@@ -900,9 +894,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         Returns:
             Download URL string if successful, None otherwise
         """
-        if connector_type != FileConnectorType.googledrive:
-            return None
-
         if connector_id is None or get_connection_details is None:
             return None
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 from uuid import UUID, uuid5
 
 import polars as pl
@@ -1069,13 +1069,14 @@ class Livedocs:
     @livedocs_internal_instrument
     def get_file_url(
         self,
-        connector_type: FileConnectorType,
-        file_id: str | None = None,
+        source_type: SourceType,
+        source_id: str | None = None,
         path: str | None = None,
-        connector_id: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
+        | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
     ):
         """
@@ -1094,11 +1095,34 @@ class Livedocs:
             Local file path (if file_id provided) or download URL (if path provided)
         """
         # If file_id is provided, use download_file and return the path (ignore everything else)
-        if file_id is not None:
-            return self.download_file(file_id=file_id)
+        if source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace file operations")
 
+            if not self._credential_store or not self._report_id or not self._token:
+                raise ValueError("Credential store not initialized")
+
+            if self.sdk_context == SDKContext.IPYTHON:
+                manifest_data = livedocs_internal_fetch_file_manifest(
+                    report_id=self._report_id,
+                    token=self._token,
+                    action="read",
+                    bucket=GCSBucketType.USER_FILES,
+                    file_id=source_id,
+                )
+
+                return manifest_data.signed_url
+            else:
+                raise ValueError(
+                    "RelayImplementationError: Get file URL in workspace is not supported in relay context"
+                )
         # If no file_id, return download URL/link based on connector_type
-        if connector_type == FileConnectorType.runtime:
+        if source_type == SourceType.runtime:
+            if self.sdk_context == SDKContext.RELAY:
+                raise ValueError(
+                    "RelayImplementationError: Get file URL in runtime is not supported in relay context"
+                )
+
             # For runtime, file is already local - just return the path
             if not path:
                 raise ValueError("path is required for runtime connector type")
@@ -1108,62 +1132,67 @@ class Livedocs:
             return path
 
         # For S3 and Google Drive, we need connector_id and path
-        if not connector_id:
-            raise ValueError(
-                "connector_id is required for S3 and Google Drive operations"
-            )
+        if not source_id:
+            raise ValueError("connector_id is required for S3 operations")
         if not path:
-            raise ValueError("path is required when file_id is not provided")
-        if not self._credential_store:
-            raise ValueError("Credential store not initialized")
+            raise ValueError("path is required for S3 operations")
 
-        if connector_type == FileConnectorType.s3bucket:
+        if source_type == SourceType.s3bucket:
+            if self.sdk_context == SDKContext.IPYTHON and not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
             s3_connector = S3DatasourceConnector()
             signed_url = s3_connector.get_signed_url(
                 file_path=path,
-                connector_type=connector_type,
-                connector_id=connector_id,
-                get_connection_details=self.helper_get_s3_connection_details,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_s3_connection_details
+                if self.sdk_context == SDKContext.IPYTHON
+                else get_connection_details,
             )
             if signed_url is None:
                 raise ValueError(f"Failed to generate signed URL for path: {path}")
             return signed_url
 
-        elif connector_type == FileConnectorType.googledrive:
+        elif source_type == SourceType.googledrive:
+            if self.sdk_context == SDKContext.IPYTHON and not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
             google_drive_connector = GoogleDriveDatasourceConnector()
             refresh_callback = (
                 refresh_google_drive_token
                 if refresh_google_drive_token
                 else self.refresh_google_drive_token
             )
+
             download_url = google_drive_connector.get_signed_url(
                 file_path=path,
-                connector_type=connector_type,
-                connector_id=connector_id,
-                get_connection_details=self.helper_get_google_drive_connection_details,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_google_drive_connection_details
+                if self.sdk_context == SDKContext.IPYTHON
+                else get_connection_details,
                 refresh_token_callback=refresh_callback,
             )
+
             if download_url is None:
                 raise ValueError(f"Failed to get download URL for path: {path}")
             return download_url
 
         else:
-            raise ValueError(f"Unsupported connector type: {connector_type}")
+            raise ValueError(f"Unsupported source type: {source_type}")
 
     @livedocs_internal_instrument
-    def preview_file(
+    def preview(
         self,
-        connector_type: FileConnectorType | None = None,
-        connector_id: str | None = None,
-        path: str | None = None,
-        file_id: str | None = None,
+        source_type: SourceType,
+        source_id: str | None = None,
+        path_or_parent_id: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
     ) -> str:
         """
-        Preview a file by downloading it locally (if needed) and returning the local path.
+        Preview a file or table by downloading it locally (if needed) and returning the local path.
 
         Either provide file_id, or provide connector_type, connector_id, and path.
 
@@ -1180,6 +1209,12 @@ class Livedocs:
         Raises:
             ValueError: If parameters are invalid or file is not found
         """
+        if source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace operations")
+
+            materialized_file_path = self.download_file(file_id=source_id)
+
         # If file_id is provided, use download_file and return the path (ignore everything else)
         if file_id is not None:
             return self.download_file(file_id=file_id)
@@ -1242,15 +1277,19 @@ class Livedocs:
             raise ValueError(f"Unsupported connector type: {connector_type}")
 
     @livedocs_internal_instrument
-    def save_file(
+    def upload_runtime_file(
         self,
-        file_path: str,
-        connector_type: FileConnectorType,
-        connector_id: str | None = None,
+        path: str,
+        destination_type: Literal[
+            SourceType.googledrive, SourceType.s3bucket, SourceType.workspace
+        ],
+        destination_id: str | None = None,
         destination_path: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
+        | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
     ):
         """
@@ -1266,49 +1305,59 @@ class Livedocs:
         Returns:
             True if successful, False otherwise
         """
-        if not os.path.exists(file_path):
-            raise ValueError(f"Local file not found: {file_path}")
+        if not os.path.exists(path):
+            raise ValueError(f"Local file not found: {path}")
 
-        if connector_type == FileConnectorType.s3bucket:
-            if not connector_id:
-                raise ValueError("connector_id is required for S3 operations")
-            if not self._credential_store:
-                raise ValueError("Credential store not initialized")
+        match destination_type:
+            case SourceType.s3bucket:
+                if not destination_id:
+                    raise ValueError("destination_id is required for S3 operations")
 
-            s3_connector = S3DatasourceConnector()
-            return s3_connector.save_file(
-                file_path=file_path,
-                connector_type=connector_type,
-                connector_id=connector_id,
-                s3_path=destination_path,
-                get_connection_details=self.helper_get_s3_connection_details,
-            )
+                if (
+                    self.sdk_context == SDKContext.IPYTHON
+                    and not self._credential_store
+                ):
+                    raise ValueError("Credential store not initialized")
 
-        elif connector_type == FileConnectorType.googledrive:
-            if not connector_id:
-                raise ValueError("connector_id is required for Google Drive operations")
-            if not self._credential_store:
-                raise ValueError("Credential store not initialized")
+                s3_connector = S3DatasourceConnector()
+                return s3_connector.upload_file_to_s3(
+                    file_path=path,
+                    connector_id=destination_id,
+                    s3_path=destination_path,
+                    get_connection_details=self.helper_get_s3_connection_details
+                    if self.sdk_context == SDKContext.IPYTHON
+                    else get_connection_details,
+                )
+            case SourceType.googledrive:
+                if not destination_id:
+                    raise ValueError(
+                        "destination_id is required for Google Drive operations"
+                    )
+                if (
+                    self.sdk_context == SDKContext.IPYTHON
+                    and not self._credential_store
+                ):
+                    raise ValueError("Credential store not initialized")
 
-            google_drive_connector = GoogleDriveDatasourceConnector()
-            refresh_callback = (
-                refresh_google_drive_token
-                if refresh_google_drive_token
-                else self.refresh_google_drive_token
-            )
-            return google_drive_connector.save_file(
-                file_path=file_path,
-                connector_type=connector_type,
-                connector_id=connector_id,
-                drive_path=destination_path,
-                get_connection_details=self.helper_get_google_drive_connection_details,
-                refresh_token_callback=refresh_callback,
-            )
-
-        else:
-            raise ValueError(
-                f"Unsupported connector type: {connector_type}. Only s3bucket and googledrive are supported for save_file."
-            )
+                google_drive_connector = GoogleDriveDatasourceConnector()
+                refresh_callback = (
+                    refresh_google_drive_token
+                    if refresh_google_drive_token
+                    else self.refresh_google_drive_token
+                )
+                return google_drive_connector.upload_file_to_googledrive(
+                    file_path=path,
+                    connector_id=destination_id,
+                    drive_path=destination_path,
+                    get_connection_details=self.helper_get_google_drive_connection_details
+                    if self.sdk_context == SDKContext.IPYTHON
+                    else get_connection_details,
+                    refresh_token_callback=refresh_callback,
+                )
+            case SourceType.workspace:
+                raise ValueError(
+                    "RelayImplementationError: Upload runtime file to workspace is not supported in relay context"
+                )
 
     @livedocs_internal_instrument
     def delete_file(
