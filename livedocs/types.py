@@ -488,23 +488,8 @@ class ListPathRequest(BaseModel):
     search_string: str | None = None
 
 
-class FileResult(BaseModel):
-    id: str
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    deleted_at: datetime | None = None
-    workspace_id: str
-    created_by_id: str | None = None
-    size: int
-    encoded_name: str
-    display_name: str
-    url: str
-    type: str
-    indexed_at: datetime | None = None
-
-
 class ListPathResponse(BaseModel):
-    files: list[FileResult]
+    files: list[FileNode]
     schema_nodes: list[SchemaNode]
 
 
@@ -721,6 +706,6 @@ __all__ = [
     "SchemaNode",
     "SchemaNodeType",
     "ListPathRequest",
-    "FileResult",
     "ListPathResponse",
+    "SDKContext",
 ]

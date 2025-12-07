@@ -820,6 +820,7 @@ class Livedocs:
     #########################################################
     """
 
+    # TODO: change fn signature
     @livedocs_internal_instrument
     def list_nodes(
         self,
@@ -1066,7 +1067,7 @@ class Livedocs:
         }
 
     @livedocs_internal_instrument
-    def get_file(
+    def get_file_url(
         self,
         connector_type: FileConnectorType,
         file_id: str | None = None,
