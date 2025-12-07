@@ -12,6 +12,7 @@ from livedocs.types import (
     GCSBucketType,
     ListPathResponse,
     SchemaNodeType,
+    FileAction,
 )
 
 
@@ -105,6 +106,33 @@ def livedocs_internal_fetch_credentials(report_id: str, token: str) -> dict[str,
         raise Exception(
             f"Failed to fetch credentials. Status code: {response.status_code}"
         )
+
+
+@livedocs_internal_instrument
+def livedocs_internal_file_operation(
+    report_id: str,
+    token: str,
+    file_id: str,
+    action: FileAction,
+    new_name: str | None = None,
+) -> bool:
+    CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
+    if not CORE_URL:
+        raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
+    response = requests.post(
+        f"{CORE_URL}/v1/files/{report_id}",
+        json={
+            "file_id": file_id,
+            "action": action,
+            "new_name": new_name if new_name else None,
+        },
+        headers={"authorization": token, "Content-Type": "application/json"},
+    )
+
+    if response.status_code == 200:
+        return True
+    else:
+        raise Exception(f"Failed to {action} file. Status code: {response.status_code}")
 
 
 @lru_cache(maxsize=128)

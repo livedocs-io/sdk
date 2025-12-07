@@ -28,6 +28,7 @@ from livedocs.types import (
     DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
+    FileAction,
     FileConnectorType,
     FileNode,
     FileNodeType,
@@ -40,7 +41,9 @@ from livedocs.types import (
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
+    SDKContext,
     SchemaNodeType,
+    SourceType,
     Spec,
     VegaSpec,
     WorkspaceSecret,
@@ -61,6 +64,7 @@ from livedocs.utils.common import (
 from livedocs.utils.lib.cache import QueryCache
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
+    livedocs_internal_file_operation,
     livedocs_internal_instrument,
     livedocs_internal_list_files,
     livedocs_internal_persist_built_in_vars,
@@ -111,6 +115,7 @@ class Livedocs:
         )(Template)
         self._query_cache: QueryCache | None = None
         self.is_initialized: bool = False
+        self.sdk_context: SDKContext = SDKContext.IPYTHON
 
     def initialize(
         self, report_id: str, token: str, client_id_token: str | None = None
@@ -145,6 +150,7 @@ class Livedocs:
                 self._query_cache = self._config.query_cache_factory(report_id, token)
             else:
                 self.is_initialized = True
+                self.sdk_context = SDKContext.RELAY
 
     """
     #########################################################
@@ -1306,9 +1312,9 @@ class Livedocs:
     @livedocs_internal_instrument
     def delete_file(
         self,
-        file_path: str,
-        connector_type: FileConnectorType,
-        connector_id: str | None = None,
+        source_type: SourceType,
+        path: str | None = None,
+        source_id: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
@@ -1325,33 +1331,37 @@ class Livedocs:
         Returns:
             True if successful, False otherwise
         """
-        if connector_type == FileConnectorType.runtime:
+        if source_type == SourceType.runtime:
             # Local file system operation
+            if not path:
+                raise ValueError("path is required for runtime connector type")
+
             try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                if os.path.exists(path):
+                    os.remove(path)
                     return True
                 return False
             except Exception:
                 return False
 
-        elif connector_type == FileConnectorType.s3bucket:
-            if not connector_id:
-                raise ValueError("connector_id is required for S3 operations")
+        elif source_type == SourceType.s3bucket:
+            if not source_id or not path:
+                raise ValueError("connector_id and path are required for S3 operations")
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
             s3_connector = S3DatasourceConnector()
             return s3_connector.delete_file(
-                file_path=file_path,
-                connector_type=connector_type,
-                connector_id=connector_id,
+                file_path=path,
+                connector_id=source_type,
                 get_connection_details=self.helper_get_s3_connection_details,
             )
 
-        elif connector_type == FileConnectorType.googledrive:
-            if not connector_id:
-                raise ValueError("connector_id is required for Google Drive operations")
+        elif source_type == SourceType.googledrive:
+            if not source_id or not path:
+                raise ValueError(
+                    "connector_id and path are required for Google Drive operations"
+                )
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
@@ -1362,23 +1372,41 @@ class Livedocs:
                 else self.refresh_google_drive_token
             )
             return google_drive_connector.delete_file(
-                file_path=file_path,
-                connector_type=connector_type,
-                connector_id=connector_id,
+                file_path=path,
+                connector_id=source_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
                 refresh_token_callback=refresh_callback,
             )
 
+        elif source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace file operations")
+
+            if self.sdk_context == SDKContext.IPYTHON:
+                if not self._credential_store or not self._report_id or not self._token:
+                    raise ValueError("Credential store not initialized")
+
+                return livedocs_internal_file_operation(
+                    report_id=self._report_id,
+                    token=self._token,
+                    file_id=source_id,
+                    action=FileAction.DELETE,
+                )
+            else:
+                raise ValueError(
+                    "RelayImplementationError: Delete file in workspace is not supported in relay context"
+                )
+
         else:
-            raise ValueError(f"Unsupported connector type: {connector_type}")
+            raise ValueError(f"Unsupported source type: {source_type}")
 
     @livedocs_internal_instrument
     def rename_file(
         self,
-        file_path: str,
+        source_type: SourceType,
         new_name: str,
-        connector_type: FileConnectorType,
-        connector_id: str | None = None,
+        path: str | None = None,
+        source_id: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
@@ -1396,41 +1424,45 @@ class Livedocs:
         Returns:
             True if successful, False otherwise
         """
-        if connector_type == FileConnectorType.runtime:
+        if source_type == FileConnectorType.runtime:
             # Local file system operation
+            if not path:
+                raise ValueError("path is required for runtime connector type")
+
             try:
                 # Construct new path by replacing the filename
-                parent_path = os.path.dirname(file_path)
+                parent_path = os.path.dirname(path)
                 if parent_path:
                     new_path = os.path.join(parent_path, new_name)
                 else:
                     new_path = new_name
 
-                if os.path.exists(file_path):
-                    os.rename(file_path, new_path)
+                if os.path.exists(path):
+                    os.rename(path, new_path)
                     return True
                 return False
             except Exception:
                 return False
 
-        elif connector_type == FileConnectorType.s3bucket:
-            if not connector_id:
-                raise ValueError("connector_id is required for S3 operations")
+        elif source_type == FileConnectorType.s3bucket:
+            if not source_id or not path:
+                raise ValueError("connector_id and path are required for S3 operations")
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
             s3_connector = S3DatasourceConnector()
             return s3_connector.rename_file(
-                file_path=file_path,
+                file_path=path,
                 new_name=new_name,
-                connector_type=connector_type,
-                connector_id=connector_id,
+                connector_id=source_id,
                 get_connection_details=self.helper_get_s3_connection_details,
             )
 
-        elif connector_type == FileConnectorType.googledrive:
-            if not connector_id:
-                raise ValueError("connector_id is required for Google Drive operations")
+        elif source_type == FileConnectorType.googledrive:
+            if not source_id or not path:
+                raise ValueError(
+                    "connector_id and path are required for Google Drive operations"
+                )
             if not self._credential_store:
                 raise ValueError("Credential store not initialized")
 
@@ -1441,16 +1473,34 @@ class Livedocs:
                 else self.refresh_google_drive_token
             )
             return google_drive_connector.rename_file(
-                file_path=file_path,
+                file_path=path,
                 new_name=new_name,
-                connector_type=connector_type,
-                connector_id=connector_id,
+                connector_id=source_id,
                 get_connection_details=self.helper_get_google_drive_connection_details,
                 refresh_token_callback=refresh_callback,
             )
 
+        elif source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace file operations")
+
+            if self.sdk_context == SDKContext.IPYTHON:
+                if not self._credential_store or not self._report_id or not self._token:
+                    raise ValueError("Credential store not initialized")
+
+                return livedocs_internal_file_operation(
+                    report_id=self._report_id,
+                    token=self._token,
+                    file_id=source_id,
+                    action=FileAction.RENAME,
+                    new_name=new_name,
+                )
+            else:
+                raise ValueError(
+                    "RelayImplementationError: Rename file in workspace is not supported in relay context"
+                )
         else:
-            raise ValueError(f"Unsupported connector type: {connector_type}")
+            raise ValueError(f"Unsupported source type: {source_type}")
 
     """
     #########################################################

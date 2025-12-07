@@ -555,7 +555,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
     def delete_file(
         self,
         file_path: str,
-        connector_type: FileConnectorType,
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
@@ -578,9 +577,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         Returns:
             True if successful, False otherwise
         """
-        if connector_type != FileConnectorType.googledrive:
-            return False
-
         if connector_id is None or get_connection_details is None:
             return False
 
@@ -613,7 +609,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         self,
         file_path: str,
         new_name: str,
-        connector_type: FileConnectorType,
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
@@ -637,9 +632,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         Returns:
             True if successful, False otherwise
         """
-        if connector_type != FileConnectorType.googledrive:
-            return False
-
         if connector_id is None or get_connection_details is None:
             return False
 

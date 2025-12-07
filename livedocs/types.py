@@ -405,6 +405,16 @@ class Credentials(BaseModel):
     built_in_vars: dict[str, Any | None]
 
 
+class FileAction(str, Enum):
+    RENAME = "rename"
+    DELETE = "delete"
+
+
+class SDKContext(str, Enum):
+    RELAY = "relay"
+    IPYTHON = "ipython"
+
+
 class Schema(TypedDict):
     name: str
     type: str
