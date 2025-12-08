@@ -518,6 +518,84 @@ class Livedocs:
                     ) from e
         return ctx
 
+    def _prepare_file_for_query(
+        self,
+        datasource: ElementDataSource,
+    ) -> str | None:
+        """
+        Prepare file for query generation by downloading it if needed.
+        This is used for preview scenarios where we need the file path
+        before generating the query.
+
+        Args:
+            datasource: The datasource configuration
+
+        Returns:
+            Local file path if file was downloaded, None otherwise
+        """
+        source_type = ElementDatasourceType(datasource["source_type"])
+
+        if source_type != ElementDatasourceType.file:
+            return None
+
+        file_info = datasource.get("file_info")
+        if file_info is None:
+            return None
+
+        connector_info = file_info.get("connector_info")
+
+        # Handle regular file (no connector_info means it's a file hosted on livedocs servers)
+        if connector_info is None:
+            file_id = file_info.get("file_id")
+            if file_id is None:
+                return None
+            # Download using the main download_file method
+            try:
+                local_path = self.download_file(file_id=file_id)
+                return local_path
+            except Exception:
+                return None
+
+        connector_type = connector_info.get("connector_type")
+        connector_id = connector_info.get("connector_id")
+        connector_name = connector_info.get("connector_name")
+        file_name = file_info.get("file_name")
+
+        if connector_id is None or file_name is None:
+            return None
+
+        # Handle S3 files
+        if connector_type == FileConnectorType.s3bucket:
+            s3_connector = S3DatasourceConnector()
+            try:
+                local_path = s3_connector.download_file(
+                    path=file_name,
+                    connector_id=connector_id,
+                    get_connection_details=self.helper_get_database_details,
+                    preview=False,  # Download full file for query generation
+                    connector_name=connector_name,
+                )
+                return local_path
+            except Exception:
+                return None
+
+        # Handle Google Drive files
+        if connector_type == FileConnectorType.googledrive:
+            gdrive_connector = GoogleDriveDatasourceConnector()
+            try:
+                local_path = gdrive_connector.download_file(
+                    file_path=file_name,
+                    connector_id=connector_id,
+                    get_connection_details=self.helper_get_database_details,
+                    preview=False,  # Download full file for query generation
+                    connector_name=connector_name,
+                )
+                return local_path
+            except Exception:
+                return None
+
+        return None
+
     @livedocs_internal_instrument
     @sentry_sdk.trace
     def _get_vega_spec(
@@ -545,24 +623,17 @@ class Livedocs:
 
             # Run actual span
             query_span = sentry_sdk.start_span(name="run query")
-            query = get_query_for_datasource(datasource, 50000)
 
-            if (
-                datasource["source_type"] == "database_table"
-                and DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Snowflake
-            ):
-                try:
-                    db_connector_id = datasource["database_info"][
-                        "database_connector_id"
-                    ]
-                    _, parsed_credentials = self.helper_get_database_details(
-                        db_connector_id
-                    )
-                except KeyError as e:
-                    raise ValueError(f"Missing required information: {e}")
+            # Download file if needed for preview
+            file_path = self._prepare_file_for_query(datasource)
 
-                query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}" LIMIT 500000;'
+            # Generate query with file_path and get_database_details for Snowflake
+            query = get_query_for_datasource(
+                datasource,
+                50000,
+                file_path=file_path,
+                get_database_details=self.helper_get_database_details,
+            )
 
             # Prepare kwargs for DatasourceManager
             source_type = ElementDatasourceType(datasource["source_type"])
@@ -570,6 +641,9 @@ class Livedocs:
             if source_type == ElementDatasourceType.file:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["download_file"] = self.download_file
+                # Pass file_path if it was already downloaded (Case 2: preview scenario)
+                if file_path is not None:
+                    kwargs["file_path"] = file_path
             elif source_type == ElementDatasourceType.dataframe:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["dataframe"] = dataframe
@@ -666,23 +740,16 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="run table element"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
-            query = get_query_for_datasource(datasource, None)
-            if (
-                datasource["source_type"] == "database_table"
-                and DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Snowflake
-            ):
-                try:
-                    db_connector_id = datasource["database_info"][
-                        "database_connector_id"
-                    ]
-                    _, parsed_credentials = self.helper_get_database_details(
-                        db_connector_id
-                    )
-                except KeyError as e:
-                    raise ValueError(f"Missing required information: {e}")
+            # Download file if needed for preview
+            file_path = self._prepare_file_for_query(datasource)
 
-                query = f'SELECT * FROM "{parsed_credentials["database"]}"."{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"'
+            # Generate query with file_path and get_database_details for Snowflake
+            query = get_query_for_datasource(
+                datasource,
+                None,
+                file_path=file_path,
+                get_database_details=self.helper_get_database_details,
+            )
 
             query_span = sentry_sdk.start_span(name="run query")
             # Prepare kwargs for DatasourceManager
@@ -691,6 +758,9 @@ class Livedocs:
             if source_type == ElementDatasourceType.file:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["download_file"] = self.download_file
+                # Pass file_path if it was already downloaded (Case 2: preview scenario)
+                if file_path is not None:
+                    kwargs["file_path"] = file_path
             elif source_type == ElementDatasourceType.dataframe:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["dataframe"] = dataframe
@@ -750,7 +820,17 @@ class Livedocs:
             datasource: ElementDataSource = json.loads(datasource_str)
 
             query_span = sentry_sdk.start_span(name="run query")
-            query = get_query_for_datasource(datasource, None)
+
+            # Download file if needed for preview
+            file_path = self._prepare_file_for_query(datasource)
+
+            # Generate query with file_path and get_database_details for Snowflake
+            query = get_query_for_datasource(
+                datasource,
+                None,
+                file_path=file_path,
+                get_database_details=self.helper_get_database_details,
+            )
             if query is None:
                 raise ValueError("Query is required")
 
@@ -761,6 +841,9 @@ class Livedocs:
             if source_type == ElementDatasourceType.file:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["download_file"] = self.download_file
+                # Pass file_path if it was already downloaded (Case 2: preview scenario)
+                if file_path is not None:
+                    kwargs["file_path"] = file_path
             elif source_type == ElementDatasourceType.dataframe:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 if dataframe is not None and datasource is not None:

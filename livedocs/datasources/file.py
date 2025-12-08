@@ -53,8 +53,11 @@ class FileDatasourceConnector(BaseDatasourceConnector):
             if file_info is None:
                 raise ValueError("Missing required information: 'file_info'")
 
-            file_id = file_info["file_id"]
-            download_file(file_id=file_id)
+            # Check if file_path was already provided in kwargs (Case 2: preview scenario)
+            # If so, skip download as file was already downloaded
+            if kwargs.get("file_path") is None:
+                file_id = file_info["file_id"]
+                download_file(file_id=file_id)
 
             result = duckdb_conn.sql(query).pl()
             schema = _get_dataframe_schema(result)

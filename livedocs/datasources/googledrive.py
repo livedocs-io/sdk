@@ -332,20 +332,25 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             connector_name = connector_info.get("connector_name")
             file_name = file_info["file_name"]
 
-            # Use file_name as the Google Drive path
-            # Download the file using download_file with preview=False to download full file
-            local_file_path = self.download_file(
-                file_path=file_name,
-                connector_id=connector_id,
-                get_connection_details=get_database_details,
-                preview=False,
-                connector_name=connector_name,
-            )
+            # Check if file_path was already provided in kwargs (Case 2: preview scenario)
+            local_file_path = kwargs.get("file_path")
 
+            # Only download if file_path wasn't already provided
             if local_file_path is None:
-                raise ValueError(
-                    f"Failed to download file from Google Drive. File may not exist at path: {file_name}"
+                # Use file_name as the Google Drive path
+                # Download the file using download_file with preview=False to download full file
+                local_file_path = self.download_file(
+                    file_path=file_name,
+                    connector_id=connector_id,
+                    get_connection_details=get_database_details,
+                    preview=False,
+                    connector_name=connector_name,
                 )
+
+                if local_file_path is None:
+                    raise ValueError(
+                        f"Failed to download file from Google Drive. File may not exist at path: {file_name}"
+                    )
 
             # Execute query using DuckDB
             result = duckdb_conn.sql(query).pl()

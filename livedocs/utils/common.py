@@ -1,5 +1,6 @@
 import os
 from datetime import date, datetime, time
+from typing import Any, Callable
 
 
 import polars as pl
@@ -84,6 +85,7 @@ def get_query_for_datasource(
     datasource: ElementDataSource,
     limit: int | None = 10,
     file_path: str | None = None,
+    get_database_details: Callable[[str], tuple[object, dict[str, Any]]] | None = None,
 ) -> str | None:
     """
     Prepares the DuckDB query for each datasource
@@ -95,6 +97,8 @@ def get_query_for_datasource(
                    direct file querying syntax (SELECT * FROM <filepath>).
                    Supported extensions: .csv, .tsv, .txt, .gz, .parquet, .json,
                    .duckdb, .ddb, .xls, .xlsx, .sqlite
+        get_database_details: Optional callable to retrieve database credentials.
+                             Required for Snowflake datasources to get database name.
 
     Returns:
         SQL query string or None
@@ -127,25 +131,43 @@ def get_query_for_datasource(
             if datasource["database_table_info"] is None:
                 raise ValueError("Database table info is required")
 
-            if (
-                DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Bigquery
-            ):
+            database_type = DatabaseType(datasource["database_info"]["database_type"])
+
+            # Handle Snowflake special case - needs database name from credentials
+            if database_type == DatabaseType.Snowflake:
+                if get_database_details is None:
+                    raise ValueError(
+                        "get_database_details is required for Snowflake datasources"
+                    )
+                try:
+                    db_connector_id = datasource["database_info"][
+                        "database_connector_id"
+                    ]
+                    _, parsed_credentials = get_database_details(db_connector_id)
+                    database_name = parsed_credentials.get("database")
+                    if database_name is None:
+                        raise ValueError(
+                            "Database name not found in Snowflake credentials"
+                        )
+                    return (
+                        f'SELECT * FROM "{database_name}".'
+                        f'"{datasource["database_table_info"]["schema_name"]}".'
+                        f'"{datasource["database_table_info"]["table_name"]}"'
+                        f"{limit_clause};"
+                    )
+                except KeyError as e:
+                    raise ValueError(f"Missing required information: {e}")
+
+            if database_type == DatabaseType.Bigquery:
                 return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}{limit_clause};"
-            elif (
-                DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Clickhouse
-            ):
+            elif database_type == DatabaseType.Clickhouse:
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
             elif datasource["database_info"]["database_type"] in {
                 DatabaseType.Postgres.value,
                 DatabaseType.Motherduck.value,
             }:
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
-            elif (
-                DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Databricks
-            ):
+            elif database_type == DatabaseType.Databricks:
                 return (
                     "SELECT * FROM "
                     f"{datasource['database_table_info']['catalog_name']}."
