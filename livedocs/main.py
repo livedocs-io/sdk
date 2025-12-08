@@ -1055,12 +1055,15 @@ class Livedocs:
                         )
                     raise ValueError("Credential store not initialized")
 
-        # SECOND CASE: All three params provided
-        elif (
-            path_or_parent_id is not None
-            and source_type is not None
-            and source_id is not None
-        ):
+        # SECOND CASE: path_or_parent_id and source_type provided
+        # source_id is optional for workspace/database (built-in sources)
+        # source_id is required for s3bucket/googledrive (connector-based sources)
+        elif path_or_parent_id is not None and source_type is not None:
+            # Normalize path_or_parent_id: "/" means root level (None for database_parent_id)
+            effective_parent_id = (
+                None if path_or_parent_id == "/" else path_or_parent_id
+            )
+
             # Split into 5 categories based on source_type
             if (
                 source_type == SourceType.workspace
@@ -1075,7 +1078,7 @@ class Livedocs:
                     warehouses_and_files = livedocs_internal_list_files(
                         self._report_id,
                         self._token,
-                        database_parent_id=path_or_parent_id,
+                        database_parent_id=effective_parent_id,
                         search_string=search_string,
                     )
                     workspace_file_nodes = warehouses_and_files.files
@@ -1100,23 +1103,35 @@ class Livedocs:
                     and self._token
                     and self.sdk_context == SDKContext.IPYTHON
                 ):
-                    connector_info = self._credential_store.get_s3_connector(source_id)
-                    if connector_info:
-                        s3_connector = S3DatasourceConnector()
-                        s3_nodes = s3_connector.list(
-                            path=path_or_parent_id,
-                            connector_id=source_id,
-                            get_connection_details=self.helper_get_s3_connection_details,
-                        )
-                        # Filter by search_string if provided
-                        if search_string:
-                            s3_nodes = [
-                                node
-                                for node in s3_nodes
-                                if search_string.lower() in node.name.lower()
-                            ]
+                    if source_id is None:
+                        # No source_id: list all S3 connectors as root nodes
+                        for (
+                            connector_info
+                        ) in self._credential_store.get_all_s3_connectors():
+                            s3_nodes.append(
+                                S3DatasourceConnector.connector_info_to_file_node(
+                                    connector_info
+                                )
+                            )
                     else:
-                        s3_nodes = []
+                        # source_id provided: list files in that connector
+                        connector_info = self._credential_store.get_s3_connector(source_id)
+                        if connector_info:
+                            s3_connector = S3DatasourceConnector()
+                            s3_nodes = s3_connector.list(
+                                path=path_or_parent_id,
+                                connector_id=source_id,
+                                get_connection_details=self.helper_get_s3_connection_details,
+                            )
+                            # Filter by search_string if provided
+                            if search_string:
+                                s3_nodes = [
+                                    node
+                                    for node in s3_nodes
+                                    if search_string.lower() in node.name.lower()
+                                ]
+                        else:
+                            s3_nodes = []
                 else:
                     if self.sdk_context == SDKContext.RELAY:
                         raise ValueError(
@@ -1130,26 +1145,38 @@ class Livedocs:
                     and self._token
                     and self.sdk_context == SDKContext.IPYTHON
                 ):
-                    connector_info = self._credential_store.get_google_drive_connector(
-                        source_id
-                    )
-                    if not connector_info:
-                        raise ValueError(f"Connector '{source_id}' not found")
+                    if source_id is None:
+                        # No source_id: list all Google Drive connectors as root nodes
+                        for (
+                            connector_info
+                        ) in self._credential_store.get_all_google_drive_connectors():
+                            google_drive_file_nodes.append(
+                                GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                                    connector_info
+                                )
+                            )
+                    else:
+                        # source_id provided: list files in that connector
+                        connector_info = self._credential_store.get_google_drive_connector(
+                            source_id
+                        )
+                        if not connector_info:
+                            raise ValueError(f"Connector '{source_id}' not found")
 
-                    google_drive_connector = GoogleDriveDatasourceConnector()
-                    google_drive_file_nodes = google_drive_connector.list(
-                        path=path_or_parent_id,
-                        connector_id=source_id,
-                        get_connection_details=self.helper_get_google_drive_connection_details,
-                        refresh_token_callback=self.refresh_google_drive_token,
-                    )
-                    # Filter by search_string if provided
-                    if search_string:
-                        google_drive_file_nodes = [
-                            node
-                            for node in google_drive_file_nodes
-                            if search_string.lower() in node.name.lower()
-                        ]
+                        google_drive_connector = GoogleDriveDatasourceConnector()
+                        google_drive_file_nodes = google_drive_connector.list(
+                            path=path_or_parent_id,
+                            connector_id=source_id,
+                            get_connection_details=self.helper_get_google_drive_connection_details,
+                            refresh_token_callback=self.refresh_google_drive_token,
+                        )
+                        # Filter by search_string if provided
+                        if search_string:
+                            google_drive_file_nodes = [
+                                node
+                                for node in google_drive_file_nodes
+                                if search_string.lower() in node.name.lower()
+                            ]
                 else:
                     if self.sdk_context == SDKContext.RELAY:
                         raise ValueError(
@@ -1169,7 +1196,7 @@ class Livedocs:
 
         else:
             raise ValueError(
-                "Invalid parameters: path_or_parent_id, source_type, and source_id must be provided together"
+                "Invalid parameters: path_or_parent_id and source_type are required."
             )
 
     @livedocs_internal_instrument
