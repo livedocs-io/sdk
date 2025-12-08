@@ -965,17 +965,10 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             if file_id is None:
                 return None
 
-            # Get file metadata to get webContentLink
-            file_metadata = (
-                service.files().get(fileId=file_id, fields="webContentLink").execute()
-            )
-
-            # Get the webContentLink (download URL)
-            # This URL requires OAuth authentication to access
-            download_url = file_metadata.get("webContentLink")
-
-            if not download_url:
-                return None
+            # Build direct download URL using file ID
+            # Don't use webContentLink as it includes authuser=0 which may not work
+            # for users logged into multiple Google accounts
+            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
             return download_url
 
