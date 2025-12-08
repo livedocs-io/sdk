@@ -672,3 +672,34 @@ class S3DatasourceConnector(BaseDatasourceConnector):
     def teardown(self) -> None:
         """No cleanup needed for S3 datasources."""
         pass
+
+    @staticmethod
+    def connector_info_to_file_node(connector_info: S3ConnectorInfo) -> FileNode:
+        """
+        Convert S3 connector info to a FileNode representing the root bucket.
+
+        Args:
+            connector_info: S3ConnectorInfo containing connector information
+
+        Returns:
+            FileNode: FileNode representing the S3 bucket root
+        """
+        now = datetime.now(timezone.utc)
+        return FileNode(
+            id=UUID(connector_info["connector_id"]),
+            name=connector_info["name"],
+            type=FileNodeType.directory,
+            mount_type=FileConnectorType.s3bucket,
+            connector_id=UUID(connector_info["connector_id"]),
+            path=connector_info.get("path_prefix", ""),
+            parent_id=None,
+            size=None,
+            mime_type=None,
+            modified_at=None,
+            created_at=None,
+            health=MountHealth(
+                status=MountHealthStatus.connected,
+                last_checked=now,
+                error_message=None,
+            ),
+        )

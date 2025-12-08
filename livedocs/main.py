@@ -14,7 +14,9 @@ import requests
 import sentry_sdk
 from jinja2 import Template
 
-from livedocs.datasources.googledrive import GoogleDriveDatasourceConnector
+from livedocs.datasources.googledrive import (
+    GoogleDriveDatasourceConnector,
+)
 from livedocs.datasources.s3 import S3DatasourceConnector
 from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.datasources import DatasourceManager
@@ -60,6 +62,10 @@ from livedocs.utils.common import (
     _setup_dirs,
     get_query_for_datasource,
     serializer,
+)
+from livedocs.utils.runtime_fs import (
+    list_runtime_files_in_path,
+    list_runtime_files_top_level,
 )
 from livedocs.utils.lib.cache import QueryCache
 from livedocs.utils.lib.internals import (
@@ -823,251 +829,265 @@ class Livedocs:
     #########################################################
     """
 
-    # TODO: change fn signature
     @livedocs_internal_instrument
     def list_nodes(
         self,
-        path: str | None = None,
-        connector_type: FileConnectorType | None = None,
-        connector_id: str | None = None,
-        warehouse_node_id: str | None = None,
-        warehouse_node_type: SchemaNodeType | None = None,
+        path_or_parent_id: str | None = None,
+        source_type: SourceType | None = None,
+        source_id: str | None = None,
         search_string: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
     ):
-        if not self._report_id or not self._token:
-            raise ValueError(
-                "Livedocs is not initialized with report_id and token. Call initialize() with report_id and token first."
-            )
-
-        warehouses_and_files = livedocs_internal_list_files(
-            self._report_id,
-            self._token,
-            warehouse_node_id,
-            warehouse_node_type,
-            search_string,
-        )
-
+        # Initialize result containers
         s3_nodes = []
         google_drive_file_nodes = []
         runtime_file_nodes = []
+        database_nodes = []
+        workspace_file_nodes = []
 
-        if not connector_id:
-            # return a filenode for each credential of type s3bucket and googledrive
-            if self._credential_store:
-                # Add S3 connectors to s3_nodes
-                for connector_info in self._credential_store.get_all_s3_connectors():
-                    now = datetime.now(timezone.utc)
-                    s3_nodes.append(
-                        FileNode(
-                            id=UUID(connector_info["connector_id"]),
-                            name=connector_info["name"],
-                            type=FileNodeType.directory,
-                            mount_type=FileConnectorType.s3bucket,
-                            connector_id=UUID(connector_info["connector_id"]),
-                            path=connector_info.get("path_prefix", ""),
-                            parent_id=None,
-                            size=None,
-                            mime_type=None,
-                            modified_at=None,
-                            created_at=None,
-                            health=MountHealth(
-                                status=MountHealthStatus.connected,
-                                last_checked=now,
-                                error_message=None,
-                            ),
+        # FIRST CASE: No params given (all three are None)
+        if path_or_parent_id is None and source_type is None and source_id is None:
+            if search_string:
+                # Search case: search across all sources (runtime, workspace, databases, s3, google drive)
+                if (
+                    self._credential_store
+                    and self._report_id
+                    and self._token
+                    and self.sdk_context == SDKContext.IPYTHON
+                ):
+                    # Search S3: list files from each connector root and filter
+                    for (
+                        connector_info
+                    ) in self._credential_store.get_all_s3_connectors():
+                        s3_connector = S3DatasourceConnector()
+                        connector_nodes = s3_connector.list(
+                            path=None,
+                            connector_id=connector_info["connector_id"],
+                            get_connection_details=self.helper_get_s3_connection_details,
                         )
-                    )
-                # Add Google Drive connectors to google_drive_file_nodes
-                for (
-                    connector_info
-                ) in self._credential_store.get_all_google_drive_connectors():
-                    now = datetime.now(timezone.utc)
-                    google_drive_file_nodes.append(
-                        FileNode(
-                            id=UUID(connector_info["connector_id"]),
-                            name=connector_info["name"],
-                            type=FileNodeType.directory,
-                            mount_type=FileConnectorType.googledrive,
-                            connector_id=UUID(connector_info["connector_id"]),
-                            path="",  # Google Drive root
-                            parent_id=None,
-                            size=None,
-                            mime_type=None,
-                            modified_at=None,
-                            created_at=None,
-                            health=MountHealth(
-                                status=MountHealthStatus.connected,
-                                last_checked=now,
-                                error_message=None,
-                            ),
-                        )
-                    )
-        else:
-            # Determine connector type and list files
-            if not self._credential_store:
-                raise ValueError("Credential store not initialized")
+                        # Filter by search_string
+                        filtered_nodes = [
+                            node
+                            for node in connector_nodes
+                            if search_string.lower() in node.name.lower()
+                        ]
+                        s3_nodes.extend(filtered_nodes)
 
-            if connector_type == FileConnectorType.s3bucket:
-                # Try S3 first
-                connector_info = self._credential_store.get_s3_connector(connector_id)
-                if connector_info:
-                    s3_connector = S3DatasourceConnector()
-                    s3_nodes = s3_connector.list(
-                        path=path,
-                        connector_id=connector_id,
-                        get_connection_details=self.helper_get_s3_connection_details,
+                    # Search Google Drive: list files from each connector root and filter
+                    for (
+                        connector_info
+                    ) in self._credential_store.get_all_google_drive_connectors():
+                        google_drive_connector = GoogleDriveDatasourceConnector()
+                        connector_nodes = google_drive_connector.list(
+                            path=None,
+                            connector_id=connector_info["connector_id"],
+                            get_connection_details=self.helper_get_google_drive_connection_details,
+                            refresh_token_callback=self.refresh_google_drive_token,
+                        )
+                        # Filter by search_string
+                        filtered_nodes = [
+                            node
+                            for node in connector_nodes
+                            if search_string.lower() in node.name.lower()
+                        ]
+                        google_drive_file_nodes.extend(filtered_nodes)
+
+                    # Search workspace files and databases
+                    warehouses_and_files = livedocs_internal_list_files(
+                        self._report_id, self._token, search_string=search_string
                     )
+
+                    workspace_file_nodes = warehouses_and_files.files
+                    database_nodes = warehouses_and_files.schema_nodes
+
+                    # Search runtime files from root
+                    runtime_file_nodes = list_runtime_files_in_path(
+                        path="", search_string=search_string
+                    )
+
+                    return {
+                        "s3buckets": s3_nodes,
+                        "googledrive": google_drive_file_nodes,
+                        "runtime": runtime_file_nodes,
+                        "databases": database_nodes,
+                        "workspace_files": workspace_file_nodes,
+                    }
                 else:
-                    s3_nodes = []
-            elif connector_type == FileConnectorType.googledrive:
-                # Try Google Drive
-                connector_info = self._credential_store.get_google_drive_connector(
-                    connector_id
-                )
-                if not connector_info:
-                    raise ValueError(
-                        f"Connector '{connector_id}' not found (checked S3 and Google Drive)"
-                    )
-
-                google_drive_connector = GoogleDriveDatasourceConnector()
-                refresh_callback = (
-                    refresh_google_drive_token
-                    if refresh_google_drive_token
-                    else self.refresh_google_drive_token
-                )
-                google_drive_file_nodes = google_drive_connector.list(
-                    path=path,
-                    connector_id=connector_id,
-                    get_connection_details=self.helper_get_google_drive_connection_details,
-                    refresh_token_callback=refresh_callback,
-                )
-            elif connector_type == FileConnectorType.runtime:
-                # Runtime connector - list files/folders from local filesystem
-                # Use provided path or root (current directory)
-                list_path = path if path else "."
-                list_path_obj = Path(list_path)
-
-                # Check if path exists
-                if not list_path_obj.exists():
-                    raise ValueError(f"Path not found: {list_path}")
-
-                # Ensure it's a directory
-                if not list_path_obj.is_dir():
-                    raise ValueError(f"Path is not a directory: {list_path}")
-
-                now = datetime.now(timezone.utc)
-                nodes: list[FileNode] = []
-
-                # Helper function to generate deterministic UUID
-                def _generate_file_id(connector_id: str, file_path: str) -> UUID:
-                    namespace = UUID(connector_id)
-                    return uuid5(namespace, file_path)
-
-                # Helper function to get parent path
-                def _get_parent_path(file_path: str) -> str | None:
-                    """Extract parent directory path."""
-                    file_path = file_path.rstrip("/")
-                    if not file_path or file_path == "/":
-                        return None
-                    parent = "/".join(file_path.split("/")[:-1])
-                    return parent if parent else None
-
-                # List all items in the directory
-                try:
-                    items = list_path_obj.iterdir()
-                    for item in items:
-                        # Determine if it's a directory or file
-                        is_directory = item.is_dir()
-                        name = item.name
-
-                        # Calculate relative path: if path was provided, prepend it to the item name
-                        if path:
-                            # Normalize the base path
-                            base_path = path.strip("/")
-                            relative_path = f"{base_path}/{name}" if base_path else name
-                        else:
-                            # If no path provided, use just the name (root level)
-                            relative_path = name
-
-                        # Normalize path separators
-                        relative_path = relative_path.replace("\\", "/")
-
-                        # Generate IDs
-                        file_id = _generate_file_id(connector_id, relative_path)
-                        parent_path = _get_parent_path(relative_path)
-                        parent_id = (
-                            _generate_file_id(connector_id, parent_path)
-                            if parent_path
-                            else None
+                    if self.sdk_context == SDKContext.RELAY:
+                        raise ValueError(
+                            "RelayImplementationError: List nodes is not supported in relay context"
                         )
-
-                        # Get file metadata
-                        size = None
-                        modified_at = None
-                        created_at = None
-
-                        if item.is_file():
-                            try:
-                                stat = item.stat()
-                                size = stat.st_size
-                                modified_at = datetime.fromtimestamp(
-                                    stat.st_mtime, tz=timezone.utc
-                                )
-                                created_at = datetime.fromtimestamp(
-                                    stat.st_ctime, tz=timezone.utc
-                                )
-                            except (OSError, ValueError):
-                                pass
-                        elif item.is_dir():
-                            try:
-                                stat = item.stat()
-                                modified_at = datetime.fromtimestamp(
-                                    stat.st_mtime, tz=timezone.utc
-                                )
-                                created_at = datetime.fromtimestamp(
-                                    stat.st_ctime, tz=timezone.utc
-                                )
-                            except (OSError, ValueError):
-                                pass
-
-                        nodes.append(
-                            FileNode(
-                                id=file_id,
-                                name=name,
-                                type=FileNodeType.directory
-                                if is_directory
-                                else FileNodeType.file,
-                                mount_type=FileConnectorType.runtime,
-                                connector_id=UUID(connector_id),
-                                path=relative_path,
-                                parent_id=parent_id,
-                                size=size,
-                                mime_type=None,
-                                modified_at=modified_at,
-                                created_at=created_at,
-                                health=MountHealth(
-                                    status=MountHealthStatus.connected,
-                                    last_checked=now,
-                                    error_message=None,
-                                ),
+                    raise ValueError("Credential store not initialized")
+            else:
+                # No search: return all root nodes
+                if (
+                    self._credential_store
+                    and self._report_id
+                    and self._token
+                    and self.sdk_context == SDKContext.IPYTHON
+                ):
+                    # Add S3 connectors to s3_nodes
+                    for (
+                        connector_info
+                    ) in self._credential_store.get_all_s3_connectors():
+                        s3_nodes.append(
+                            S3DatasourceConnector.connector_info_to_file_node(
+                                connector_info
                             )
                         )
-                except (OSError, PermissionError) as e:
-                    raise ValueError(f"Error listing directory '{list_path}': {str(e)}")
+                    # Add Google Drive connectors to google_drive_file_nodes
+                    for (
+                        connector_info
+                    ) in self._credential_store.get_all_google_drive_connectors():
+                        google_drive_file_nodes.append(
+                            GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                                connector_info
+                            )
+                        )
 
-                runtime_file_nodes = nodes
+                    warehouses_and_files = livedocs_internal_list_files(
+                        self._report_id, self._token
+                    )
 
-        return {
-            "s3buckets": s3_nodes,
-            "googledrive": google_drive_file_nodes,
-            "runtime": runtime_file_nodes,
-            "databases": warehouses_and_files.schema_nodes,
-            "workspace_files": warehouses_and_files.files,
-        }
+                    workspace_file_nodes = warehouses_and_files.files
+                    database_nodes = warehouses_and_files.schema_nodes
+
+                    # List runtime files from LIVEDOCS_FILES_PATH
+                    runtime_file_nodes = list_runtime_files_top_level()
+
+                    return {
+                        "s3buckets": s3_nodes,
+                        "googledrive": google_drive_file_nodes,
+                        "runtime": runtime_file_nodes,
+                        "databases": database_nodes,
+                        "workspace_files": workspace_file_nodes,
+                    }
+                else:
+                    if self.sdk_context == SDKContext.RELAY:
+                        raise ValueError(
+                            "RelayImplementationError: List nodes is not supported in relay context"
+                        )
+                    raise ValueError("Credential store not initialized")
+
+        # SECOND CASE: All three params provided
+        elif (
+            path_or_parent_id is not None
+            and source_type is not None
+            and source_id is not None
+        ):
+            # Split into 5 categories based on source_type
+            if (
+                source_type == SourceType.workspace
+                or source_type == SourceType.database
+            ):
+                if (
+                    self._credential_store
+                    and self._report_id
+                    and self._token
+                    and self.sdk_context == SDKContext.IPYTHON
+                ):
+                    warehouses_and_files = livedocs_internal_list_files(
+                        self._report_id,
+                        self._token,
+                        database_parent_id=path_or_parent_id,
+                        search_string=search_string,
+                    )
+                    workspace_file_nodes = warehouses_and_files.files
+                    database_nodes = warehouses_and_files.schema_nodes
+                else:
+                    if self.sdk_context == SDKContext.RELAY:
+                        raise ValueError(
+                            "RelayImplementationError: List nodes is not supported in relay context"
+                        )
+                    raise ValueError("Credential store not initialized")
+            elif source_type == SourceType.runtime:
+                # path_or_parent_id is the path in this case
+                # Runtime doesn't use source_id, path is hashed alone
+                runtime_file_nodes = list_runtime_files_in_path(
+                    path=path_or_parent_id or "",
+                    search_string=search_string,
+                )
+            elif source_type == SourceType.s3bucket:
+                if (
+                    self._credential_store
+                    and self._report_id
+                    and self._token
+                    and self.sdk_context == SDKContext.IPYTHON
+                ):
+                    connector_info = self._credential_store.get_s3_connector(source_id)
+                    if connector_info:
+                        s3_connector = S3DatasourceConnector()
+                        s3_nodes = s3_connector.list(
+                            path=path_or_parent_id,
+                            connector_id=source_id,
+                            get_connection_details=self.helper_get_s3_connection_details,
+                        )
+                        # Filter by search_string if provided
+                        if search_string:
+                            s3_nodes = [
+                                node
+                                for node in s3_nodes
+                                if search_string.lower() in node.name.lower()
+                            ]
+                    else:
+                        s3_nodes = []
+                else:
+                    if self.sdk_context == SDKContext.RELAY:
+                        raise ValueError(
+                            "RelayImplementationError: List nodes is not supported in relay context"
+                        )
+                    raise ValueError("Credential store not initialized")
+            elif source_type == SourceType.googledrive:
+                if (
+                    self._credential_store
+                    and self._report_id
+                    and self._token
+                    and self.sdk_context == SDKContext.IPYTHON
+                ):
+                    connector_info = self._credential_store.get_google_drive_connector(
+                        source_id
+                    )
+                    if not connector_info:
+                        raise ValueError(f"Connector '{source_id}' not found")
+
+                    google_drive_connector = GoogleDriveDatasourceConnector()
+                    google_drive_file_nodes = google_drive_connector.list(
+                        path=path_or_parent_id,
+                        connector_id=source_id,
+                        get_connection_details=self.helper_get_google_drive_connection_details,
+                        refresh_token_callback=self.refresh_google_drive_token,
+                    )
+                    # Filter by search_string if provided
+                    if search_string:
+                        google_drive_file_nodes = [
+                            node
+                            for node in google_drive_file_nodes
+                            if search_string.lower() in node.name.lower()
+                        ]
+                else:
+                    if self.sdk_context == SDKContext.RELAY:
+                        raise ValueError(
+                            "RelayImplementationError: List nodes is not supported in relay context"
+                        )
+                    raise ValueError("Credential store not initialized")
+            else:
+                raise ValueError(f"Unsupported source type: {source_type}")
+
+            return {
+                "workspace_files": workspace_file_nodes,
+                "databases": database_nodes,
+                "runtime": runtime_file_nodes,
+                "s3buckets": s3_nodes,
+                "googledrive": google_drive_file_nodes,
+            }
+
+        else:
+            raise ValueError(
+                "Invalid parameters: path_or_parent_id, source_type, and source_id must be provided together"
+            )
 
     @livedocs_internal_instrument
     def get_file_url(

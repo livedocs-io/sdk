@@ -985,3 +985,36 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
     def teardown(self) -> None:
         """No cleanup needed for Google Drive datasources."""
         pass
+
+    @staticmethod
+    def connector_info_to_file_node(
+        connector_info: GoogleDriveConnectorInfo,
+    ) -> FileNode:
+        """
+        Convert Google Drive connector info to a FileNode representing the root.
+
+        Args:
+            connector_info: GoogleDriveConnectorInfo containing connector information
+
+        Returns:
+            FileNode: FileNode representing the Google Drive root
+        """
+        now = datetime.now(timezone.utc)
+        return FileNode(
+            id=UUID(connector_info["connector_id"]),
+            name=connector_info["name"],
+            type=FileNodeType.directory,
+            mount_type=FileConnectorType.googledrive,
+            connector_id=UUID(connector_info["connector_id"]),
+            path="",  # Google Drive root
+            parent_id=None,
+            size=None,
+            mime_type=None,
+            modified_at=None,
+            created_at=None,
+            health=MountHealth(
+                status=MountHealthStatus.connected,
+                last_checked=now,
+                error_message=None,
+            ),
+        )

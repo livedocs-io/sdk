@@ -243,8 +243,7 @@ def livedocs_internal_fetch_file_manifest(
 def livedocs_internal_list_files(
     report_id: str,
     token: str,
-    warehouse_node_id: str | None = None,
-    warehouse_node_type: SchemaNodeType | None = None,
+    database_parent_id: str | None = None,
     search_string: str | None = None,
 ) -> ListPathResponse:
     CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
@@ -253,10 +252,8 @@ def livedocs_internal_list_files(
 
     # Build request payload with optional parameters
     payload: dict[str, Any] = {}
-    if warehouse_node_id:
-        payload["node_id"] = warehouse_node_id
-    if warehouse_node_type:
-        payload["schema_node_type"] = warehouse_node_type
+    if database_parent_id:
+        payload["parent_node_id"] = database_parent_id
     if search_string:
         payload["search_string"] = search_string
 

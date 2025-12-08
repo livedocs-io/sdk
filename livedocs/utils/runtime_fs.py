@@ -1,0 +1,243 @@
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import UUID, uuid5
+
+from livedocs.types import (
+    FileConnectorType,
+    FileNode,
+    FileNodeType,
+    MountHealth,
+    MountHealthStatus,
+)
+
+
+def list_runtime_files_top_level() -> list[FileNode]:
+    """
+    List all files and directories at the top level of LIVEDOCS_FILES_PATH.
+
+    Returns:
+        list[FileNode]: List of FileNode objects representing files and directories
+                       at the top level. Returns empty list if path doesn't exist
+                       or can't be accessed.
+    """
+    runtime_file_nodes = []
+    files_path = os.getenv("LIVEDOCS_FILES_PATH")
+
+    if not files_path:
+        return runtime_file_nodes
+
+    list_path_obj = Path(files_path)
+
+    # Check if path exists
+    if not list_path_obj.exists() or not list_path_obj.is_dir():
+        return runtime_file_nodes
+
+    now = datetime.now(timezone.utc)
+
+    # List all items in the directory
+    try:
+        items = list_path_obj.iterdir()
+        for item in items:
+            # Determine if it's a directory or file
+            is_directory = item.is_dir()
+            name = item.name
+
+            # For top level, relative path is just the name
+            relative_path = name
+
+            # Normalize path separators
+            relative_path = relative_path.replace("\\", "/")
+
+            # Generate IDs (parent_id is None for top level)
+            file_id = _generate_file_id(relative_path)
+            parent_id = None
+
+            # Get file metadata
+            size = None
+            modified_at = None
+            created_at = None
+
+            if item.is_file():
+                try:
+                    stat = item.stat()
+                    size = stat.st_size
+                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
+                except (OSError, ValueError):
+                    pass
+            elif item.is_dir():
+                try:
+                    stat = item.stat()
+                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
+                except (OSError, ValueError):
+                    pass
+
+            runtime_file_nodes.append(
+                FileNode(
+                    id=file_id,
+                    name=name,
+                    type=FileNodeType.directory if is_directory else FileNodeType.file,
+                    mount_type=FileConnectorType.runtime,
+                    connector_id=None,  # Runtime doesn't have a connector_id
+                    path=relative_path,
+                    parent_id=parent_id,
+                    size=size,
+                    mime_type=None,
+                    modified_at=modified_at,
+                    created_at=created_at,
+                    health=MountHealth(
+                        status=MountHealthStatus.connected,
+                        last_checked=now,
+                        error_message=None,
+                    ),
+                )
+            )
+    except (OSError, PermissionError):
+        # If we can't list the directory, just return empty list
+        # Don't raise error to avoid breaking the entire function
+        pass
+
+    return runtime_file_nodes
+
+
+# Fixed namespace UUID for runtime files (generated from "runtime" string using DNS namespace)
+# Using DNS namespace UUID and "runtime" as the name to create a deterministic namespace
+_DNS_NAMESPACE = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+_RUNTIME_NAMESPACE = uuid5(_DNS_NAMESPACE, "runtime")
+
+
+def _generate_file_id(file_path: str) -> UUID:
+    """Generate a deterministic UUID from file_path using fixed runtime namespace."""
+    return uuid5(_RUNTIME_NAMESPACE, file_path)
+
+
+def _get_parent_path(file_path: str) -> str | None:
+    """Extract parent directory path."""
+    file_path = file_path.rstrip("/")
+    if not file_path or file_path == "/":
+        return None
+    parent = "/".join(file_path.split("/")[:-1])
+    return parent if parent else None
+
+
+def list_runtime_files_in_path(
+    path: str, search_string: str | None = None
+) -> list[FileNode]:
+    """
+    List files and directories at the specified path relative to LIVEDOCS_FILES_PATH.
+    Optionally filter by search_string.
+
+    Args:
+        path: Relative path from LIVEDOCS_FILES_PATH (e.g., "folder/subfolder")
+        search_string: Optional search string to filter file/directory names
+
+    Returns:
+        list[FileNode]: List of FileNode objects representing files and directories
+
+    Raises:
+        ValueError: If path doesn't exist or is a file (not a directory)
+    """
+    files_path = os.getenv("LIVEDOCS_FILES_PATH")
+    if not files_path:
+        raise ValueError("LIVEDOCS_FILES_PATH environment variable is not set")
+
+    # Construct full path
+    base_path = Path(files_path)
+    if path:
+        # Normalize path separators
+        normalized_path = path.replace("\\", "/").strip("/")
+        full_path = base_path / normalized_path
+    else:
+        full_path = base_path
+
+    # Check if path exists
+    if not full_path.exists():
+        raise ValueError(f"Path not found: {path}")
+
+    # Ensure it's a directory
+    if not full_path.is_dir():
+        raise ValueError(f"Path is not a directory: {path}")
+
+    now = datetime.now(timezone.utc)
+    runtime_file_nodes = []
+
+    # List all items in the directory
+    try:
+        items = full_path.iterdir()
+        for item in items:
+            name = item.name
+
+            # Filter by search_string if provided
+            if search_string and search_string.lower() not in name.lower():
+                continue
+
+            is_directory = item.is_dir()
+
+            # Calculate relative path from LIVEDOCS_FILES_PATH
+            try:
+                relative_path = str(item.relative_to(base_path))
+            except ValueError:
+                # If item is not relative to base_path, use the provided path + name
+                if path:
+                    normalized_path = path.replace("\\", "/").strip("/")
+                    relative_path = (
+                        f"{normalized_path}/{name}" if normalized_path else name
+                    )
+                else:
+                    relative_path = name
+
+            # Normalize path separators
+            relative_path = relative_path.replace("\\", "/")
+
+            # Generate IDs (path is hashed alone, no connector_id dependency)
+            file_id = _generate_file_id(relative_path)
+            parent_path = _get_parent_path(relative_path)
+            parent_id = _generate_file_id(parent_path) if parent_path else None
+
+            # Get file metadata
+            size = None
+            modified_at = None
+            created_at = None
+
+            if item.is_file():
+                try:
+                    stat = item.stat()
+                    size = stat.st_size
+                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
+                except (OSError, ValueError):
+                    pass
+            elif item.is_dir():
+                try:
+                    stat = item.stat()
+                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
+                except (OSError, ValueError):
+                    pass
+
+            runtime_file_nodes.append(
+                FileNode(
+                    id=file_id,
+                    name=name,
+                    type=FileNodeType.directory if is_directory else FileNodeType.file,
+                    mount_type=FileConnectorType.runtime,
+                    connector_id=None,  # Runtime doesn't have a connector_id
+                    path=relative_path,
+                    parent_id=parent_id,
+                    size=size,
+                    mime_type=None,
+                    modified_at=modified_at,
+                    created_at=created_at,
+                    health=MountHealth(
+                        status=MountHealthStatus.connected,
+                        last_checked=now,
+                        error_message=None,
+                    ),
+                )
+            )
+    except (OSError, PermissionError) as e:
+        raise ValueError(f"Error listing directory '{path}': {str(e)}")
+
+    return runtime_file_nodes
