@@ -33,6 +33,37 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
+class SortOperation(TypedDict):
+    column: str
+    direction: str
+
+
+class FilterCondition(TypedDict):
+    column: str
+    operator: str
+    value: str
+    id: str
+    conjunction: str
+
+
+class StyleRule(TypedDict):
+    conditions: list[FilterCondition]
+    color: str
+
+
+class CalculationOperation(TypedDict):
+    column: str
+    calculation_type: str
+    id: str
+
+
+class TableMetadata(TypedDict, total=False):
+    sort: SortOperation | None
+    filters: list[FilterCondition] | None
+    styles: list[StyleRule] | None
+    calculations: list[CalculationOperation] | None
+
+
 class FileManifest(BaseModel):
     file_id: str  # The unique ID of the file (resolved by the API)
     file_name: str  # The display name of the file
@@ -49,7 +80,7 @@ class QueryResultMetadata(TypedDict, total=False):
     offset: int
     total_rows: int
     cache_info: CacheInfo
-    applied_metadata: dict[str, Any] | None
+    applied_metadata: TableMetadata | None
     calculation_results: dict[str, dict[str, Any]] | None
 
 
@@ -708,4 +739,5 @@ __all__ = [
     "ListPathRequest",
     "ListPathResponse",
     "SDKContext",
+    "TableMetadata",
 ]

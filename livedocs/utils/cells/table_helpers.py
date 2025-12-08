@@ -4,6 +4,8 @@ from typing import Any
 import dateutil.parser
 import polars as pl
 
+from livedocs.types import TableMetadata
+
 
 def apply_sort(df: pl.DataFrame, sort_operation: dict[str, Any]) -> pl.DataFrame:
     """
@@ -30,7 +32,7 @@ def apply_sort(df: pl.DataFrame, sort_operation: dict[str, Any]) -> pl.DataFrame
 
 
 def apply_table_operations(
-    df: pl.DataFrame, metadata: dict[str, Any]
+    df: pl.DataFrame, metadata: TableMetadata
 ) -> tuple[pl.DataFrame, dict[str, Any]]:
     """
     Apply all table operations from metadata to a DataFrame.

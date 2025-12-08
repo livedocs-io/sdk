@@ -26,6 +26,7 @@ from livedocs.types import (
     QueryResult,
     QueryResultMetadata,
 )
+from livedocs.utils.common import _get_dataframe_schema
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
@@ -298,20 +299,67 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         **kwargs: Any,
     ) -> tuple[pl.DataFrame, dict[str, str]]:
         """
-        Execute a query against a Google Drive datasource (no-op skeleton).
+        Execute a query against a Google Drive datasource using DuckDB.
 
         Args:
-            query: SQL query string to execute
+            query: SQL query string to execute (DuckDB query)
             datasource: Datasource configuration
-            get_database_details: Callable to retrieve database credentials
-            **kwargs: Additional arguments (not used)
+            get_database_details: Callable to retrieve connection details (works for file connectors too)
+            **kwargs: Additional arguments:
+                - duckdb_conn: DuckDB connection instance (required)
 
         Returns:
             Tuple containing:
-            - Empty DataFrame
-            - Empty schema dict
+            - DataFrame with query results
+            - Schema information as a dict mapping column names to Livedocs types
         """
-        return pl.DataFrame(), {}
+        duckdb_conn = kwargs.get("duckdb_conn")
+        if duckdb_conn is None:
+            raise ValueError(
+                "DuckDB connection is required for Google Drive datasources"
+            )
+
+        try:
+            file_info = datasource.get("file_info")
+            if file_info is None:
+                raise ValueError("Missing required information: 'file_info'")
+
+            connector_info = file_info.get("connector_info")
+            if connector_info is None:
+                raise ValueError("Missing required information: 'connector_info'")
+
+            connector_id = connector_info["connector_id"]
+            connector_name = connector_info.get("connector_name")
+            file_name = file_info["file_name"]
+
+            # Use file_name as the Google Drive path
+            # Download the file using download_file with preview=False to download full file
+            local_file_path = self.download_file(
+                file_path=file_name,
+                connector_id=connector_id,
+                get_connection_details=get_database_details,
+                preview=False,
+                connector_name=connector_name,
+            )
+
+            if local_file_path is None:
+                raise ValueError(
+                    f"Failed to download file from Google Drive. File may not exist at path: {file_name}"
+                )
+
+            # Execute query using DuckDB
+            result = duckdb_conn.sql(query).pl()
+            schema = _get_dataframe_schema(result)
+            return result, schema
+
+        except KeyError as e:
+            raise ValueError(f"Missing required information in datasource: {e}")
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(
+                    f"An error occurred while querying the Google Drive file: {e}"
+                )
+            )
 
     def write(
         self,
@@ -754,7 +802,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
     def download_file(
         self,
         file_path: str,
-        connector_type: FileConnectorType,
+        connector_name: str,
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
@@ -762,9 +810,13 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
+        preview: bool = True,
     ) -> str | None:
         """
-        Download a file from Google Drive and save it locally if it's less than 100MB.
+        Download a file from Google Drive and save it locally.
+
+        Only downloads files smaller than 100MB when preview=True. If connector_name is provided,
+        files are saved to a subfolder named after the connector.
 
         Args:
             file_path: Google Drive file path to download
@@ -773,13 +825,12 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             get_connection_details: Callable to retrieve connection details
             refresh_token_callback: Optional callback to refresh tokens if expired.
                 Receives GoogleDriveConnectorInfo and returns updated one.
+            preview: If True, only download files smaller than 100MB. If False, download regardless of size.
+            connector_name: Optional connector name to organize files in a subfolder
 
         Returns:
             Local file path if successful, None otherwise
         """
-        if connector_type != FileConnectorType.googledrive:
-            return None
-
         if connector_id is None or get_connection_details is None:
             return None
 
@@ -788,6 +839,10 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         if not files_path:
             print("ERROR: LIVEDOCS_FILES_PATH environment variable not set")
             return None
+
+        # Create subfolder if connector_name is provided
+        if connector_name:
+            files_path = os.path.join(files_path, connector_name)
 
         # Ensure the directory exists
         os.makedirs(files_path, exist_ok=True)
@@ -806,7 +861,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 print(f"ERROR: File not found at path: {file_path}")
                 return None
 
-            # Get file metadata to check size
+            # Get file metadata
             file_metadata = (
                 service.files().get(fileId=file_id, fields="name, size").execute()
             )
@@ -814,8 +869,8 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             file_name = file_metadata.get("name", os.path.basename(file_path))
             size_str = file_metadata.get("size")
 
-            # Check if file size is available and less than 100MB
-            if size_str:
+            # Check file size only if preview=True
+            if preview and size_str:
                 try:
                     file_size = int(size_str)
                     # 100MB in bytes

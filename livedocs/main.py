@@ -45,6 +45,7 @@ from livedocs.types import (
     SchemaNodeType,
     SourceType,
     Spec,
+    TableMetadata,
     VegaSpec,
     WorkspaceSecret,
 )
@@ -338,13 +339,13 @@ class Livedocs:
         self,
         query: str,
         str_datasource: str,
-        context: dict,
-        dataframe=None,
-        limit=10,
-        offset=0,
-        use_cache=True,
-        table_metadata=None,
-    ) -> tuple[pl.DataFrame, str]:
+        context: dict[str, str],
+        dataframe: pl.DataFrame | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        use_cache: bool = True,
+        table_metadata: TableMetadata | None = None,
+    ) -> tuple[pl.DataFrame, LivedocsResult]:
         """
         Executes a query on a given datasource and returns the result as a Polars DataFrame and JSON string.
 
@@ -361,11 +362,16 @@ class Livedocs:
             tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
         """
         with sentry_sdk.start_transaction(op="task", name="run query"):
-            datasource: ElementDataSource = json.loads(str_datasource)
-            if not datasource:
+            parsed = json.loads(str_datasource)
+            if not isinstance(parsed, dict) or not parsed:
                 raise ValueError(
                     "No datasource selected. Please choose a datasource from the dropdown before running your query."
                 )
+            if "source_type" not in parsed:
+                raise ValueError(
+                    "Invalid datasource: missing 'source_type'. Please choose a datasource from the dropdown before running your query."
+                )
+            datasource = cast(ElementDataSource, cast(object, parsed))
 
             # Plug in the Jinja variables
             final_query = self.helper_render_jinja_template(query, context)
@@ -393,7 +399,7 @@ class Livedocs:
                 query_cache=self._query_cache,
                 **kwargs,
             )
-            query_span.finish()
+            _ = query_span.finish()
 
             # Apply table operations
             applied_metadata = None
@@ -419,7 +425,7 @@ class Livedocs:
                 ),
             )
             payload = LivedocsResult(result)
-            post_span.finish()
+            _ = post_span.finish()
 
             return (df, payload)
 
@@ -1181,102 +1187,6 @@ class Livedocs:
             raise ValueError(f"Unsupported source type: {source_type}")
 
     @livedocs_internal_instrument
-    def preview(
-        self,
-        source_type: SourceType,
-        source_id: str | None = None,
-        path_or_parent_id: str | None = None,
-        refresh_google_drive_token: Callable[
-            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
-        ]
-        | None = None,
-    ) -> str:
-        """
-        Preview a file or table by downloading it locally (if needed) and returning the local path.
-
-        Either provide file_id, or provide connector_type, connector_id, and path.
-
-        Args:
-            connector_type: Type of file connector (runtime, s3bucket, or googledrive)
-            connector_id: Connector ID (required for s3bucket and googledrive)
-            path: Path to the file (required when file_id is not provided)
-            file_id: File ID (if provided, file will be downloaded using download_file, ignoring other params)
-            refresh_google_drive_token: Optional callback to refresh Google Drive tokens
-
-        Returns:
-            Local file path
-
-        Raises:
-            ValueError: If parameters are invalid or file is not found
-        """
-        if source_type == SourceType.workspace:
-            if not source_id:
-                raise ValueError("source_id is required for workspace operations")
-
-            materialized_file_path = self.download_file(file_id=source_id)
-
-        # If file_id is provided, use download_file and return the path (ignore everything else)
-        if file_id is not None:
-            return self.download_file(file_id=file_id)
-
-        # Validate parameters
-        if not connector_type:
-            raise ValueError("connector_type is required when file_id is not provided")
-        if not path:
-            raise ValueError("path is required when file_id is not provided")
-
-        if connector_type == FileConnectorType.runtime:
-            # For runtime, file is already local - just check if it exists
-            if not os.path.exists(path):
-                raise ValueError(f"File not found: {path}")
-            return path
-
-        # For S3 and Google Drive, we need connector_id
-        if not connector_id:
-            raise ValueError(
-                "connector_id is required for S3 and Google Drive operations"
-            )
-        if not self._credential_store:
-            raise ValueError("Credential store not initialized")
-
-        if connector_type == FileConnectorType.s3bucket:
-            s3_connector = S3DatasourceConnector()
-            local_path = s3_connector.get_file(
-                connector_type=connector_type,
-                path=path,
-                connector_id=connector_id,
-                get_connection_details=self.helper_get_s3_connection_details,
-            )
-            if local_path is None:
-                raise ValueError(
-                    f"Failed to download file from S3 at path: {path}. File may not exist or may be larger than 100MB."
-                )
-            return local_path
-
-        elif connector_type == FileConnectorType.googledrive:
-            google_drive_connector = GoogleDriveDatasourceConnector()
-            refresh_callback = (
-                refresh_google_drive_token
-                if refresh_google_drive_token
-                else self.refresh_google_drive_token
-            )
-            local_path = google_drive_connector.download_file(
-                file_path=path,
-                connector_type=connector_type,
-                connector_id=connector_id,
-                get_connection_details=self.helper_get_google_drive_connection_details,
-                refresh_token_callback=refresh_callback,
-            )
-            if local_path is None:
-                raise ValueError(
-                    f"Failed to download file from Google Drive at path: {path}. File may not exist or may be larger than 100MB."
-                )
-            return local_path
-
-        else:
-            raise ValueError(f"Unsupported connector type: {connector_type}")
-
-    @livedocs_internal_instrument
     def upload_runtime_file(
         self,
         path: str,
@@ -1474,7 +1384,7 @@ class Livedocs:
         Returns:
             True if successful, False otherwise
         """
-        if source_type == FileConnectorType.runtime:
+        if source_type == SourceType.runtime:
             # Local file system operation
             if not path:
                 raise ValueError("path is required for runtime connector type")
@@ -1494,7 +1404,7 @@ class Livedocs:
             except Exception:
                 return False
 
-        elif source_type == FileConnectorType.s3bucket:
+        elif source_type == SourceType.s3bucket:
             if not source_id or not path:
                 raise ValueError("connector_id and path are required for S3 operations")
             if not self._credential_store:
@@ -1508,7 +1418,7 @@ class Livedocs:
                 get_connection_details=self.helper_get_s3_connection_details,
             )
 
-        elif source_type == FileConnectorType.googledrive:
+        elif source_type == SourceType.googledrive:
             if not source_id or not path:
                 raise ValueError(
                     "connector_id and path are required for Google Drive operations"

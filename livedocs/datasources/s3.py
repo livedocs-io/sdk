@@ -22,6 +22,7 @@ from livedocs.types import (
     QueryResultMetadata,
     S3ConnectorInfo,
 )
+from livedocs.utils.common import _get_dataframe_schema
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
@@ -143,20 +144,65 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         **kwargs: Any,
     ) -> tuple[pl.DataFrame, dict[str, str]]:
         """
-        Execute a query against an S3 datasource (no-op skeleton).
+        Execute a query against an S3 datasource using DuckDB.
 
         Args:
-            query: SQL query string to execute
+            query: SQL query string to execute (DuckDB query)
             datasource: Datasource configuration
-            get_database_details: Callable to retrieve database credentials
-            **kwargs: Additional arguments (not used)
+            get_database_details: Callable to retrieve connection details (works for file connectors too)
+            **kwargs: Additional arguments:
+                - duckdb_conn: DuckDB connection instance (required)
 
         Returns:
             Tuple containing:
-            - Empty DataFrame
-            - Empty schema dict
+            - DataFrame with query results
+            - Schema information as a dict mapping column names to Livedocs types
         """
-        return pl.DataFrame(), {}
+        duckdb_conn = kwargs.get("duckdb_conn")
+        if duckdb_conn is None:
+            raise ValueError("DuckDB connection is required for S3 datasources")
+
+        try:
+            file_info = datasource.get("file_info")
+            if file_info is None:
+                raise ValueError("Missing required information: 'file_info'")
+
+            connector_info = file_info.get("connector_info")
+            if connector_info is None:
+                raise ValueError("Missing required information: 'connector_info'")
+
+            connector_id = connector_info["connector_id"]
+            connector_name = connector_info.get("connector_name")
+            file_name = file_info["file_name"]
+
+            # Use file_name as the S3 path (relative to bucket/prefix)
+            # Download the file using get_file with preview=False to download full file
+            local_file_path = self.download_file(
+                path=file_name,
+                connector_id=connector_id,
+                get_connection_details=get_database_details,
+                preview=False,
+                connector_name=connector_name,
+            )
+
+            if local_file_path is None:
+                raise ValueError(
+                    f"Failed to download file from S3. File may not exist at path: {file_name}"
+                )
+
+            # Execute query using DuckDB
+            result = duckdb_conn.sql(query).pl()
+            schema = _get_dataframe_schema(result)
+            return result, schema
+
+        except KeyError as e:
+            raise ValueError(f"Missing required information in datasource: {e}")
+        except Exception as e:
+            raise RuntimeError(
+                sanitize_sensitive_data(
+                    f"An error occurred while querying the S3 file: {e}"
+                )
+            )
 
     def write(
         self,
@@ -324,20 +370,21 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
         return nodes
 
-    def get_file(
+    def download_file(
         self,
-        connector_type: FileConnectorType,
-        file_id: str | None = None,
+        connector_name: str,
         path: str | None = None,
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
+        preview: bool = True,
     ) -> str | None:
         """
         Get a file from S3, downloading it to a local path.
 
-        Only downloads files smaller than 100MB. Files are saved to the directory
+        Only downloads files smaller than 100MB when preview=True. Files are saved to the directory
         specified by the LIVEDOCS_FILES_PATH environment variable (defaults to /tmp/livedocs_files).
+        If connector_name is provided, files are saved to a subfolder named after the connector.
 
         Args:
             connector_type: Type of file connector (should be FileConnectorType.s3bucket)
@@ -345,13 +392,12 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             path: Relative path to the file in S3
             connector_id: S3 connector ID
             get_connection_details: Callable to retrieve connection details
+            preview: If True, only download files smaller than 100MB. If False, download regardless of size.
+            connector_name: Optional connector name to organize files in a subfolder
 
         Returns:
-            Local file path if downloaded successfully (file must be < 100MB), or None on error or if file is too large
+            Local file path if downloaded successfully, or None on error or if file is too large (when preview=True)
         """
-        if connector_type != FileConnectorType.s3bucket:
-            return None
-
         if connector_id is None or path is None or get_connection_details is None:
             return None
 
@@ -369,18 +415,24 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             if not s3_fs.exists(s3_path):
                 return None
 
-            # Get file size
-            file_info = s3_fs.info(s3_path)
-            file_size_raw = file_info.get("Size") or file_info.get("size", 0)
-            file_size_bytes = int(file_size_raw) if file_size_raw else 0
+            # Get file size and check limit only if preview=True
+            if preview:
+                file_info = s3_fs.info(s3_path)
+                file_size_raw = file_info.get("Size") or file_info.get("size", 0)
+                file_size_bytes = int(file_size_raw) if file_size_raw else 0
 
-            # Check if file is less than 100MB (100 * 1024 * 1024 bytes)
-            MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
-            if file_size_bytes >= MAX_FILE_SIZE_BYTES:
-                return None
+                # Check if file is less than 100MB (100 * 1024 * 1024 bytes)
+                MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
+                if file_size_bytes >= MAX_FILE_SIZE_BYTES:
+                    return None
 
             # Get download path from environment variable
             download_base_path = os.getenv("LIVEDOCS_FILES_PATH", "/tmp/livedocs_files")
+
+            # Create subfolder if connector_name is provided
+            if connector_name:
+                download_base_path = os.path.join(download_base_path, connector_name)
+
             os.makedirs(download_base_path, exist_ok=True)
 
             # Create local file path
