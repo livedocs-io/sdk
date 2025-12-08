@@ -309,11 +309,18 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                 # Determine if it's a directory (ends with /) or file
                 is_directory = item_key.endswith("/") or item.get("type") == "directory"
 
-                # Skip the listing path itself
-                if relative_path == normalized_path and is_directory:
+                # Strip trailing slash for comparison and name extraction
+                relative_path_clean = relative_path.rstrip("/")
+
+                # Skip the listing path itself (the parent folder we're listing)
+                if relative_path_clean == normalized_path and is_directory:
                     continue
 
-                name = relative_path.split("/")[-1]
+                # Skip empty paths after cleaning
+                if not relative_path_clean:
+                    continue
+
+                name = relative_path_clean.split("/")[-1]
                 parent_path = self._get_parent_path(relative_path)
 
                 file_id = self._generate_file_id(connector_id, relative_path)
