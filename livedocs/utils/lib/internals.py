@@ -258,7 +258,7 @@ def livedocs_internal_list_files(
         payload["search_string"] = search_string
 
     # Make POST request with report_id in query string
-    api_url = f"{CORE_URL}/v1/list-path?report_id={report_id}"
+    api_url = f"{CORE_URL}/v1/datasources/list?report_id={report_id}"
     response = requests.post(
         api_url,
         json=payload,
