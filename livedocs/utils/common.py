@@ -83,10 +83,36 @@ def serializer(obj):
 def get_query_for_datasource(
     datasource: ElementDataSource,
     limit: int | None = 10,
+    file_path: str | None = None,
 ) -> str | None:
     """
     Prepares the DuckDB query for each datasource
+
+    Args:
+        datasource: The datasource configuration
+        limit: Optional limit for the query results
+        file_path: Optional file path for file datasources. When provided, uses
+                   direct file querying syntax (SELECT * FROM <filepath>).
+                   Supported extensions: .csv, .tsv, .txt, .gz, .parquet, .json,
+                   .duckdb, .ddb, .xls, .xlsx, .sqlite
+
+    Returns:
+        SQL query string or None
     """
+    # Supported file extensions for direct querying in DuckDB
+    SUPPORTED_FILE_EXTENSIONS = {
+        ".csv",
+        ".tsv",
+        ".txt",
+        ".gz",
+        ".parquet",
+        ".json",
+        ".duckdb",
+        ".ddb",
+        ".xls",
+        ".xlsx",
+        ".sqlite",
+    }
 
     limit_clause = f" LIMIT {limit}" if limit is not None else ""
 
@@ -139,7 +165,49 @@ def get_query_for_datasource(
         case ElementDatasourceType.file:
             if datasource["file_info"] is None:
                 raise ValueError("File info is required")
+
+            # If file_path is provided, use direct file querying
+            if file_path is not None:
+                # Extract file extension
+                file_extension = None
+                if "." in file_path:
+                    file_extension = "." + file_path.rsplit(".", 1)[1].lower()
+
+                # Validate file extension
+                if (
+                    file_extension is None
+                    or file_extension not in SUPPORTED_FILE_EXTENSIONS
+                ):
+                    supported_exts = ", ".join(sorted(SUPPORTED_FILE_EXTENSIONS))
+                    raise ValueError(
+                        f"Unsupported file extension for direct querying: {file_extension or 'no extension'}. "
+                        f"Supported extensions: {supported_exts}"
+                    )
+
+                # Escape single quotes in file path to prevent SQL injection
+                escaped_file_path = file_path.replace("'", "''")
+                return f"SELECT * FROM '{escaped_file_path}'{limit_clause};"
+
+            # Fallback to old method if file_path is not provided
             file_name = datasource["file_info"]["file_name"]
+
+            # Extract and validate file extension
+            file_extension = None
+            if "." in file_name:
+                file_extension = "." + file_name.rsplit(".", 1)[1].lower()
+
+            # Validate file extension
+            if (
+                file_extension is None
+                or file_extension not in SUPPORTED_FILE_EXTENSIONS
+            ):
+                supported_exts = ", ".join(sorted(SUPPORTED_FILE_EXTENSIONS))
+                raise ValueError(
+                    f"Unsupported file extension for querying: {file_extension or 'no extension'}. "
+                    f"Supported extensions: {supported_exts}"
+                )
+
+            # Use appropriate query method based on file type
             if datasource["file_info"]["file_type"] == "csv":
                 return f"SELECT * FROM read_csv_auto('{file_name}'){limit_clause};"
             elif datasource["file_info"]["file_type"] == "xlsx":
@@ -148,6 +216,10 @@ def get_query_for_datasource(
                     f"read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
                     f"{limit_clause};"
                 )
+            else:
+                # For other supported file types, use direct querying
+                escaped_file_name = file_name.replace("'", "''")
+                return f"SELECT * FROM '{escaped_file_name}'{limit_clause};"
         case ElementDatasourceType.dataframe:
             if datasource["dataframe_info"] is None:
                 raise ValueError("Dataframe info is required")
