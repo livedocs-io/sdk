@@ -33,7 +33,7 @@ def get_run_context() -> str:
     return current_run_context
 
 
-def debug(label: str, data=None):
+def middleman_debug(label: str, data=None):
     """Sends data to the middleman for pretty-printing in its logs."""
     try:
         content_str = json.dumps(data, indent=2, default=str, ensure_ascii=False)

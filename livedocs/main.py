@@ -58,7 +58,6 @@ from livedocs.utils.cells.table_helpers import apply_table_operations
 from livedocs.utils.common import (
     _download_file,
     _setup_dirs,
-    debug,
     get_query_for_datasource,
     serializer,
 )
@@ -586,8 +585,6 @@ class Livedocs:
 
             # Find how many data points we have
             total_data_points = len(df) * len(df.columns)
-            debug(f"Total data points: {total_data_points}")
-
             vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
             MAX_POINTS = 50000
             if total_data_points > MAX_POINTS:
@@ -1313,7 +1310,7 @@ class Livedocs:
             s3_connector = S3DatasourceConnector()
             return s3_connector.delete_file(
                 file_path=path,
-                connector_id=source_type,
+                connector_id=source_id,
                 get_connection_details=self.helper_get_s3_connection_details,
             )
 

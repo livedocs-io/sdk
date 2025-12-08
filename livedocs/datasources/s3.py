@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from doctest import debug
 import os
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -26,6 +27,8 @@ from livedocs.utils.common import _get_dataframe_schema
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+from livedocs.utils.common import middleman_debug
 
 
 class S3DatasourceConnector(BaseDatasourceConnector):
@@ -516,13 +519,18 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         Returns:
             True if successful, False otherwise
         """
+        middleman_debug(
+            f"Deleting file from S3: {file_path}, connector_id: {connector_id}"
+        )
         if connector_id is None or get_connection_details is None:
             return False
 
         try:
             _, connector_info_dict = get_connection_details(connector_id)
+            middleman_debug(f"Connector info dict: ", connector_info_dict)
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"Error getting connection details: {e}")
             return False
 
         try:
@@ -538,7 +546,8 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
             return True
 
-        except Exception:
+        except Exception as e:
+            print(f"Error deleting file from S3: {e}")
             return False
 
     def rename_file(
@@ -569,7 +578,8 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         try:
             _, connector_info_dict = get_connection_details(connector_id)
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"Error getting connection details: {e}")
             return False
 
         try:
@@ -595,7 +605,8 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
             return True
 
-        except Exception:
+        except Exception as e:
+            print(f"Error renaming file in S3: {e}")
             return False
 
     def get_signed_url(
