@@ -872,7 +872,7 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
                 livedocs_type=None,
                 description=None,
                 level=0,
-                metadata={},
+                metadata={"database_type": "snowflake"},
                 created_at=now,
                 updated_at=now,
             )

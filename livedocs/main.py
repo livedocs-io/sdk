@@ -3,11 +3,9 @@ import gzip
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, Callable, Literal, cast
-from uuid import UUID, uuid5
 
 import polars as pl
 import requests
@@ -26,25 +24,19 @@ from livedocs.types import (
     CacheStatus,
     ChartResult,
     DatabaseConnection,
-    DatabaseType,
     DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
     FileAction,
     FileConnectorType,
-    FileNode,
-    FileNodeType,
     GCSBucketType,
     GoogleDriveConnectorInfo,
     JsonDisplay,
     LivedocsResult,
-    MountHealth,
-    MountHealthStatus,
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
     SDKContext,
-    SchemaNodeType,
     SourceType,
     Spec,
     TableMetadata,
@@ -63,10 +55,6 @@ from livedocs.utils.common import (
     get_query_for_datasource,
     serializer,
 )
-from livedocs.utils.runtime_fs import (
-    list_runtime_files_in_path,
-    list_runtime_files_top_level,
-)
 from livedocs.utils.lib.cache import QueryCache
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
@@ -77,6 +65,10 @@ from livedocs.utils.lib.internals import (
     livedocs_internal_setup_sentry,
 )
 from livedocs.utils.lib.vega import create_vega_spec
+from livedocs.utils.runtime_fs import (
+    list_runtime_files_in_path,
+    list_runtime_files_top_level,
+)
 
 
 @dataclass(frozen=True)
@@ -106,7 +98,10 @@ class Livedocs:
 
         self._config: LivedocsConfig = config or LivedocsConfig()
 
-        files_path = os.getenv("LIVEDOCS_FILES_PATH")
+        files_path = os.getenv("LIVEDOCS_FILES_PATH", None)
+        if files_path is None:
+            raise ValueError("LIVEDOCS_FILES_PATH environment variable is not set.")
+
         self._duckdb: DuckDBSingleton = DuckDBSingleton(
             file_search_path=[files_path] if files_path is not None else []
         )
@@ -544,12 +539,26 @@ class Livedocs:
 
         connector_info = file_info.get("connector_info")
 
-        # Handle regular file (no connector_info means it's a file hosted on livedocs servers)
+        # Handle regular file (no connector_info)
+        # This could be a runtime file (already local) or a workspace file (needs download)
         if connector_info is None:
             file_id = file_info.get("file_id")
             if file_id is None:
                 return None
-            # Download using the main download_file method
+
+            # Check if file already exists locally (runtime files)
+            files_path = os.environ.get("LIVEDOCS_FILES_PATH", "")
+            if files_path:
+                # file_id could be absolute path or relative to files_path
+                if file_id.startswith("/"):
+                    local_path = os.path.join(files_path, file_id.lstrip("/"))
+                else:
+                    local_path = os.path.join(files_path, file_id)
+
+                if os.path.exists(local_path):
+                    return local_path
+
+            # File not found locally - try to download from workspace
             try:
                 local_path = self.download_file(file_id=file_id)
                 return local_path
@@ -560,39 +569,65 @@ class Livedocs:
         connector_id = connector_info.get("connector_id")
         connector_name = connector_info.get("connector_name")
         file_name = file_info.get("file_name")
+        file_id = file_info.get("file_id")
+
+        # Handle runtime files (already local)
+        if connector_type == FileConnectorType.runtime.value:
+            if not file_id:
+                return None
+            files_path = os.environ.get("LIVEDOCS_FILES_PATH", "")
+            if files_path:
+                # Construct path relative to LIVEDOCS_FILES_PATH
+                if file_id.startswith("/"):
+                    local_path = os.path.join(files_path, file_id.lstrip("/"))
+                else:
+                    local_path = os.path.join(files_path, file_id)
+            else:
+                # No files path set - use file_id directly (might be absolute path)
+                local_path = file_id
+            # Return path without checking existence - let DuckDB report if file not found
+            return local_path
+
+        # Handle workspace files (need download from livedocs servers)
+        if connector_type == FileConnectorType.workspace.value:
+            if file_id:
+                try:
+                    local_path = self.download_file(file_id=file_id)
+                    return local_path
+                except Exception:
+                    return None
+            return None
 
         if connector_id is None or file_name is None:
             return None
 
         # Handle S3 files
-        if connector_type == FileConnectorType.s3bucket:
+        if connector_type == FileConnectorType.s3bucket.value:
             s3_connector = S3DatasourceConnector()
-            try:
-                local_path = s3_connector.download_file(
-                    path=file_name,
-                    connector_id=connector_id,
-                    get_connection_details=self.helper_get_database_details,
-                    preview=False,  # Download full file for query generation
-                    connector_name=connector_name,
-                )
-                return local_path
-            except Exception:
-                return None
+            # Use file_id for the full path within the bucket
+            s3_path = file_id if file_id else file_name
+            local_path = s3_connector.download_file(
+                path=s3_path,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+                preview=False,  # Download full file for query generation
+                connector_name=connector_name,
+            )
+            return local_path
 
         # Handle Google Drive files
-        if connector_type == FileConnectorType.googledrive:
+        if connector_type == FileConnectorType.googledrive.value:
             gdrive_connector = GoogleDriveDatasourceConnector()
-            try:
-                local_path = gdrive_connector.download_file(
-                    file_path=file_name,
-                    connector_id=connector_id,
-                    get_connection_details=self.helper_get_database_details,
-                    preview=False,  # Download full file for query generation
-                    connector_name=connector_name,
-                )
-                return local_path
-            except Exception:
-                return None
+            # Use file_id for the full path
+            gdrive_path = file_id if file_id else file_name
+            local_path = gdrive_connector.download_file(
+                file_path=gdrive_path,
+                connector_id=connector_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+                preview=False,  # Download full file for query generation
+                connector_name=connector_name,
+            )
+            return local_path
 
         return None
 
@@ -716,7 +751,7 @@ class Livedocs:
     @sentry_sdk.trace
     def _get_table_response(
         self,
-        str_datasource: ElementDataSource,
+        str_datasource: str,
         dataframe=None,
         limit=10,
         offset=0,
@@ -727,7 +762,7 @@ class Livedocs:
         Gets a Polars table for a given datasource.
 
         Args:
-            str_datasource (ElementDataSource): The datasource as a JSON string.
+            str_datasource (str): The ElementDataSource struct as a JSON string.
             dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
             limit (int, optional): The number of rows to return. Defaults to 10.
             offset (int, optional): The offset for the rows to return. Defaults to 0.
@@ -1115,7 +1150,9 @@ class Livedocs:
                             )
                     else:
                         # source_id provided: list files in that connector
-                        connector_info = self._credential_store.get_s3_connector(source_id)
+                        connector_info = self._credential_store.get_s3_connector(
+                            source_id
+                        )
                         if connector_info:
                             s3_connector = S3DatasourceConnector()
                             s3_nodes = s3_connector.list(
@@ -1157,8 +1194,8 @@ class Livedocs:
                             )
                     else:
                         # source_id provided: list files in that connector
-                        connector_info = self._credential_store.get_google_drive_connector(
-                            source_id
+                        connector_info = (
+                            self._credential_store.get_google_drive_connector(source_id)
                         )
                         if not connector_info:
                             raise ValueError(f"Connector '{source_id}' not found")

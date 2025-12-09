@@ -158,7 +158,12 @@ class DatasourceManager:
             if dataframe is not None and duckdb_conn is not None:
                 duckdb_conn.register(datasource["dataframe_info"]["df_name"], dataframe)
 
-        connector = cls._get_connector(datasource)
+        # If file_path is already provided (file was pre-downloaded), use FileDatasourceConnector
+        # directly instead of routing to S3/GDrive connectors that would try to download again
+        if kwargs.get("file_path") is not None and source_type == ElementDatasourceType.file:
+            connector = FileDatasourceConnector()
+        else:
+            connector = cls._get_connector(datasource)
 
         # Execute the query with appropriate parameters
         if source_type in (

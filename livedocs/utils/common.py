@@ -184,7 +184,7 @@ def get_query_for_datasource(
                     f"{limit_clause};"
                 )
 
-        case ElementDatasourceType.file:
+        case ElementDatasourceType.file.value:
             if datasource["file_info"] is None:
                 raise ValueError("File info is required")
 
@@ -242,7 +242,7 @@ def get_query_for_datasource(
                 # For other supported file types, use direct querying
                 escaped_file_name = file_name.replace("'", "''")
                 return f"SELECT * FROM '{escaped_file_name}'{limit_clause};"
-        case ElementDatasourceType.dataframe:
+        case ElementDatasourceType.dataframe.value:
             if datasource["dataframe_info"] is None:
                 raise ValueError("Dataframe info is required")
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}{limit_clause};"

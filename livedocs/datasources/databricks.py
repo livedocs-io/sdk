@@ -946,7 +946,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
                             livedocs_type=None,
                             description=None,
                             level=0,
-                            metadata={},
+                            metadata={"database_type": "databricks"},
                             created_at=now,
                             updated_at=now,
                         )

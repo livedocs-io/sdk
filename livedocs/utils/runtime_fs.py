@@ -1,3 +1,4 @@
+import mimetypes
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,32 @@ from livedocs.types import (
     MountHealth,
     MountHealthStatus,
 )
+
+
+def _get_mime_type(file_path: Path) -> str | None:
+    """Get mime type from file extension."""
+    if file_path.is_dir():
+        return None
+
+    # Use mimetypes to guess from filename
+    guessed_type, _ = mimetypes.guess_type(str(file_path))
+    if guessed_type:
+        return guessed_type
+
+    # Fallback for common data formats not in mimetypes
+    ext = file_path.suffix.lower().lstrip(".")
+    data_format_types = {
+        "parquet": "application/vnd.apache.parquet",
+        "avro": "application/avro",
+        "feather": "application/vnd.apache.arrow.file",
+        "arrow": "application/vnd.apache.arrow.file",
+        "gpkg": "application/geopackage+sqlite3",
+        "geojson": "application/geo+json",
+        "shp": "application/x-shapefile",
+        "kml": "application/vnd.google-earth.kml+xml",
+        "kmz": "application/vnd.google-earth.kmz",
+    }
+    return data_format_types.get(ext)
 
 
 def list_runtime_files_top_level() -> list[FileNode]:
@@ -84,7 +111,7 @@ def list_runtime_files_top_level() -> list[FileNode]:
                     path=relative_path,
                     parent_id=parent_id,
                     size=size,
-                    mime_type=None,
+                    mime_type=_get_mime_type(item),
                     modified_at=modified_at,
                     created_at=created_at,
                     health=MountHealth(
@@ -227,7 +254,7 @@ def list_runtime_files_in_path(
                     path=relative_path,
                     parent_id=parent_id,
                     size=size,
-                    mime_type=None,
+                    mime_type=_get_mime_type(item),
                     modified_at=modified_at,
                     created_at=created_at,
                     health=MountHealth(

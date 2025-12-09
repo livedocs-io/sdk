@@ -331,16 +331,19 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             connector_id = connector_info["connector_id"]
             connector_name = connector_info.get("connector_name")
             file_name = file_info["file_name"]
+            # file_id contains the actual Google Drive path
+            file_id = file_info.get("file_id")
+            # Use file_id for the path, fall back to file_name for backwards compatibility
+            gdrive_path = file_id if file_id else file_name
 
             # Check if file_path was already provided in kwargs (Case 2: preview scenario)
             local_file_path = kwargs.get("file_path")
 
             # Only download if file_path wasn't already provided
             if local_file_path is None:
-                # Use file_name as the Google Drive path
                 # Download the file using download_file with preview=False to download full file
                 local_file_path = self.download_file(
-                    file_path=file_name,
+                    file_path=gdrive_path,
                     connector_id=connector_id,
                     get_connection_details=get_database_details,
                     preview=False,
@@ -349,7 +352,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
 
                 if local_file_path is None:
                     raise ValueError(
-                        f"Failed to download file from Google Drive. File may not exist at path: {file_name}"
+                        f"Failed to download file from Google Drive. File may not exist at path: {gdrive_path}"
                     )
 
             # Execute query using DuckDB
@@ -890,6 +893,14 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                         "WARNING: Could not parse file size, proceeding with download"
                     )
 
+            # Construct local file path
+            local_file_path = os.path.join(files_path, file_name)
+
+            # Check if file already exists locally (caching)
+            if os.path.exists(local_file_path):
+                print(f"DEBUG: Google Drive file cached locally at '{local_file_path}', skipping download")
+                return local_file_path
+
             # Download the file
             request = service.files().get_media(fileId=file_id)
             file_content = io.BytesIO()
@@ -900,7 +911,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 status, done = downloader.next_chunk()
 
             # Save to local directory
-            local_file_path = os.path.join(files_path, file_name)
             with open(local_file_path, "wb") as f:
                 _ = f.write(file_content.getvalue())
 

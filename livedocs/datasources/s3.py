@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from doctest import debug
+import mimetypes
 import os
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -177,16 +178,19 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             connector_id = connector_info["connector_id"]
             connector_name = connector_info.get("connector_name")
             file_name = file_info["file_name"]
+            # file_id contains the actual S3 path (relative to bucket/prefix)
+            file_id = file_info.get("file_id")
+            # Use file_id for the S3 path, fall back to file_name for backwards compatibility
+            s3_path = file_id if file_id else file_name
 
             # Check if file_path was already provided in kwargs (Case 2: preview scenario)
             local_file_path = kwargs.get("file_path")
 
             # Only download if file_path wasn't already provided
             if local_file_path is None:
-                # Use file_name as the S3 path (relative to bucket/prefix)
                 # Download the file using get_file with preview=False to download full file
                 local_file_path = self.download_file(
-                    path=file_name,
+                    path=s3_path,
                     connector_id=connector_id,
                     get_connection_details=get_database_details,
                     preview=False,
@@ -195,7 +199,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
                 if local_file_path is None:
                     raise ValueError(
-                        f"Failed to download file from S3. File may not exist at path: {file_name}"
+                        f"Failed to download file from S3. File may not exist at path: {s3_path}"
                     )
 
             # Execute query using DuckDB
@@ -346,8 +350,29 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                         except (TypeError, ValueError):
                             pass
 
-                # Get content type
+                # Get content type - S3 ListObjectsV2 doesn't return ContentType,
+                # so we infer it from the file extension
                 content_type = item.get("ContentType")
+                if content_type is None and not is_directory:
+                    # Use mimetypes to guess from filename
+                    guessed_type, _ = mimetypes.guess_type(name)
+                    if guessed_type:
+                        content_type = guessed_type
+                    else:
+                        # Fallback for common data formats not in mimetypes
+                        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                        data_format_types = {
+                            "parquet": "application/vnd.apache.parquet",
+                            "avro": "application/avro",
+                            "feather": "application/vnd.apache.arrow.file",
+                            "arrow": "application/vnd.apache.arrow.file",
+                            "gpkg": "application/geopackage+sqlite3",
+                            "geojson": "application/geo+json",
+                            "shp": "application/x-shapefile",
+                            "kml": "application/vnd.google-earth.kml+xml",
+                            "kmz": "application/vnd.google-earth.kmz",
+                        }
+                        content_type = data_format_types.get(ext)
 
                 nodes.append(
                     FileNode(
@@ -454,12 +479,19 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             file_name = os.path.basename(path) if path else "file"
             local_file_path = os.path.join(download_base_path, file_name)
 
+            # Check if file already exists locally (caching)
+            if os.path.exists(local_file_path):
+                middleman_debug(f"S3 file cached locally at '{local_file_path}', skipping download")
+                return local_file_path
+
             # Download file
             s3_fs.download(s3_path, local_file_path)
 
             return local_file_path
 
-        except Exception:
+        except Exception as e:
+            # Log the error for debugging
+            middleman_debug(f"S3 download error for path '{path}': {e}")
             return None
 
     def upload_file_to_s3(
