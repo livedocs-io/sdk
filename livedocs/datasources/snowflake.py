@@ -65,6 +65,11 @@ class SnowflakeConnectionUsernamePassword(BaseModel):
     auth_type: Literal["username_password"] = Field(
         ..., description="Authentication type: 'username_password'"
     )
+    warehouse_name: str = Field(
+        ...,
+        min_length=1,
+        description="Warehouse name (required, non-empty string)",
+    )
     username: str = Field(
         ...,
         min_length=1,
@@ -146,6 +151,13 @@ class SnowflakeConnectionServiceAccount(BaseModel):
     auth_type: Literal["service_account_key"] = Field(
         ..., description="Authentication type: 'service_account_key'"
     )
+
+    warehouse_name: str = Field(
+        ...,
+        min_length=1,
+        description="Warehouse name (required, non-empty string)",
+    )
+
     service_account_key: str = Field(
         ...,
         min_length=1,
@@ -352,7 +364,7 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
         """
         if isinstance(connection_details, SnowflakeConnectionUsernamePassword):
             # Username/password authentication
-            return snowflake.connector.connect(
+            conn = snowflake.connector.connect(
                 user=connection_details.username,
                 password=connection_details.password,
                 account=connection_details.host,
@@ -361,6 +373,9 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
                     "QUERY_TAG": "LivedocsQuery",
                 },
             )
+            cursor = conn.cursor()
+            cursor.execute(f'USE WAREHOUSE "{connection_details.warehouse_name}"')
+            return conn
         else:
             # Service account key authentication
             # Service account key is a PEM key directly
@@ -384,12 +399,15 @@ class SnowflakeDatasourceConnector(BaseDatasourceConnector):
                 .replace("http://", "")
             )
 
-            return snowflake.connector.connect(
+            conn = snowflake.connector.connect(
                 account=account,
                 user=connection_details.service_account_username,
                 private_key=private_key_der,
                 database=connection_details.database,
             )
+            cursor = conn.cursor()
+            cursor.execute(f'USE WAREHOUSE "{connection_details.warehouse_name}"')
+            return conn
 
     def _write_df_to_snowflake(
         self,
