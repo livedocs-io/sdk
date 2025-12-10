@@ -29,6 +29,7 @@ from livedocs.types import (
     ElementDatasourceType,
     FileAction,
     FileConnectorType,
+    FileNode,
     GCSBucketType,
     GoogleDriveConnectorInfo,
     JsonDisplay,
@@ -36,6 +37,7 @@ from livedocs.types import (
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
+    S3ConnectorInfo,
     SDKContext,
     SourceType,
     Spec,
@@ -1235,6 +1237,128 @@ class Livedocs:
             raise ValueError(
                 "Invalid parameters: path_or_parent_id and source_type are required."
             )
+
+    @livedocs_internal_instrument
+    def relay_list_s3_gdrive_nodes(
+        self,
+        path: str | None = None,
+        source_type: SourceType | None = None,
+        source_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+        get_all_s3_connectors: Callable[[], list[S3ConnectorInfo]] | None = None,
+        get_all_google_drive_connectors: Callable[[], list[GoogleDriveConnectorInfo]]
+        | None = None,
+        get_s3_connector: Callable[[str], tuple[object, dict[str, Any]]] | None = None,
+        get_google_drive_connector: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+    ):
+        # Initialize result containers
+        s3_nodes: list[FileNode] = []
+        google_drive_file_nodes: list[FileNode] = []
+
+        # FIRST CASE: No params given (all three are None)
+        if path is None and source_type is None and source_id is None:
+            if (
+                get_all_s3_connectors is not None
+                and get_all_google_drive_connectors is not None
+            ):
+                # Add S3 connectors to s3_nodes
+                for connector_info in get_all_s3_connectors():
+                    s3_nodes.append(
+                        S3DatasourceConnector.connector_info_to_file_node(
+                            connector_info
+                        )
+                    )
+                # Add Google Drive connectors to google_drive_file_nodes
+                for connector_info in get_all_google_drive_connectors():
+                    google_drive_file_nodes.append(
+                        GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                            connector_info
+                        )
+                    )
+
+                return {"s3buckets": s3_nodes, "googledrive": google_drive_file_nodes}
+            else:
+                raise ValueError(
+                    "get_all_s3_connectors and get_all_google_drive_connectors are required"
+                )
+
+        # SECOND CASE: path_or_parent_id and source_type provided
+        # source_id is required for s3bucket/googledrive (connector-based sources)
+        elif path is not None and source_type is not None:
+            # Handle only S3 and Google Drive source types
+            if source_type == SourceType.s3bucket:
+                if get_all_s3_connectors is not None and get_s3_connector is not None:
+                    if source_id is None:
+                        # No source_id: list all S3 connectors as root nodes
+                        for connector_info in get_all_s3_connectors():
+                            s3_nodes.append(
+                                S3DatasourceConnector.connector_info_to_file_node(
+                                    connector_info
+                                )
+                            )
+                    else:
+                        # source_id provided: list files in that connector
+                        connector_info = get_s3_connector(source_id)
+                        if connector_info:
+                            s3_connector = S3DatasourceConnector()
+                            s3_nodes = s3_connector.list(
+                                path=path,
+                                connector_id=source_id,
+                                get_connection_details=get_s3_connector,
+                            )
+                        else:
+                            s3_nodes = []
+                else:
+                    raise ValueError(
+                        "get_all_s3_connectors, get_s3_connector, and get_all_google_drive_connectors are required"
+                    )
+            elif source_type == SourceType.googledrive:
+                if (
+                    get_all_google_drive_connectors is not None
+                    and get_google_drive_connector is not None
+                    and refresh_google_drive_token is not None
+                ):
+                    if source_id is None:
+                        # No source_id: list all Google Drive connectors as root nodes
+                        for connector_info in get_all_google_drive_connectors():
+                            google_drive_file_nodes.append(
+                                GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                                    connector_info
+                                )
+                            )
+                    else:
+                        # source_id provided: list files in that connector
+                        connector_info = get_google_drive_connector(source_id)
+                        if not connector_info:
+                            raise ValueError(f"Connector '{source_id}' not found")
+
+                        google_drive_connector = GoogleDriveDatasourceConnector()
+                        google_drive_file_nodes = google_drive_connector.list(
+                            path=path,
+                            connector_id=source_id,
+                            get_connection_details=get_google_drive_connector,
+                            refresh_token_callback=refresh_google_drive_token,
+                        )
+                else:
+                    raise ValueError(
+                        "get_all_google_drive_connectors, get_google_drive_connector, and refresh_google_drive_token are required"
+                    )
+            else:
+                raise ValueError(
+                    f"Unsupported source type: {source_type}. Only s3bucket and googledrive are supported."
+                )
+
+            return {
+                "s3buckets": s3_nodes,
+                "googledrive": google_drive_file_nodes,
+            }
+
+        else:
+            raise ValueError("Invalid parameters: path and source_type are required.")
 
     @livedocs_internal_instrument
     def get_file_url(
