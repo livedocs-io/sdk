@@ -201,21 +201,21 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return False
 
     @staticmethod
-    def _generate_file_id(connector_id: str, path: str) -> UUID:
+    def _generate_file_id(connector_id: str, identifier: str) -> UUID:
         """
-        Generate a deterministic UUID from connector_id and path.
+        Generate a deterministic UUID from connector_id and identifier.
 
         Args:
             connector_id: The connector ID (must be a valid UUID string)
-            path: The file path
+            identifier: Unique identifier (Google Drive file ID or path)
 
         Returns:
-            UUID: Deterministic UUID based on connector_id and path hash
+            UUID: Deterministic UUID based on connector_id and identifier
         """
         # Use connector_id directly as namespace UUID
         namespace = UUID(connector_id)
-        # Generate UUID from path
-        return uuid5(namespace, path)
+        # Generate UUID from identifier
+        return uuid5(namespace, identifier)
 
     @staticmethod
     def _get_parent_path(path: str) -> str | None:
@@ -258,6 +258,22 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         Returns:
             List of FileNode objects representing sheets in the xlsx file
         """
+        # Get connector info for Google Drive API access
+        connector_info = self._get_connector_info_with_refresh(
+            connector_id, get_connection_details, refresh_token_callback
+        )
+        if connector_info is None:
+            return []
+
+        # Look up the Google Drive file ID for the xlsx file
+        try:
+            service = self._create_google_drive_service(connector_info)
+            gdrive_file_id = self._get_file_id_from_path(service, path)
+            if gdrive_file_id is None:
+                return []
+        except Exception:
+            return []
+
         # Download the xlsx file to a local temp location
         local_path = self.download_file(
             file_path=path,
@@ -278,13 +294,14 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         now = datetime.now(timezone.utc)
         nodes: list[FileNode] = []
 
-        # Generate parent file ID (the xlsx file itself)
-        parent_id = self._generate_file_id(connector_id, path)
+        # Generate parent file ID using Google Drive's file ID for consistency
+        parent_id = self._generate_file_id(connector_id, gdrive_file_id)
 
         for sheet_name in sheet_names:
             # Use :: as separator to distinguish sheet paths from directory paths
             sheet_path = f"{path}::{sheet_name}"
-            sheet_id = self._generate_file_id(connector_id, sheet_path)
+            # Include gdrive_file_id in sheet ID generation for uniqueness
+            sheet_id = self._generate_file_id(connector_id, f"{gdrive_file_id}::{sheet_name}")
 
             nodes.append(
                 FileNode(
@@ -536,6 +553,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
 
             for file_item in file_list:
                 title = file_item.get("name", "")
+                gdrive_file_id = file_item.get("id", "")
                 mime_type = file_item.get("mimeType", "")
                 is_directory = mime_type == "application/vnd.google-apps.folder"
 
@@ -553,11 +571,12 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
 
                 parent_path = self._get_parent_path(relative_path)
 
-                # Generate deterministic UUIDs
-                file_id = self._generate_file_id(connector_id, relative_path)
+                # Generate deterministic UUIDs using Google Drive's file ID for uniqueness
+                # This ensures files with the same name get different IDs
+                file_id = self._generate_file_id(connector_id, gdrive_file_id)
                 parent_id = (
-                    self._generate_file_id(connector_id, parent_path)
-                    if parent_path
+                    self._generate_file_id(connector_id, folder_id)
+                    if folder_id != "root"
                     else None
                 )
 
