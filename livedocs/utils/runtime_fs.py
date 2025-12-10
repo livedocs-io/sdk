@@ -11,6 +11,7 @@ from livedocs.types import (
     MountHealth,
     MountHealthStatus,
 )
+from livedocs.utils.common import get_xlsx_sheet_names
 
 
 def _get_mime_type(file_path: Path) -> str | None:
@@ -149,6 +150,56 @@ def _get_parent_path(file_path: str) -> str | None:
     return parent if parent else None
 
 
+def _list_xlsx_sheets(xlsx_path: Path, relative_path: str) -> list[FileNode]:
+    """
+    List sheets in an xlsx file as virtual FileNodes.
+
+    Args:
+        xlsx_path: Absolute path to the xlsx file
+        relative_path: Relative path from LIVEDOCS_FILES_PATH
+
+    Returns:
+        list[FileNode]: List of FileNode objects representing sheets
+    """
+    sheet_names = get_xlsx_sheet_names(str(xlsx_path))
+    if not sheet_names:
+        return []
+
+    now = datetime.now(timezone.utc)
+    nodes = []
+
+    # Generate parent file ID (the xlsx file itself)
+    parent_id = _generate_file_id(relative_path)
+
+    for sheet_name in sheet_names:
+        # Use :: as separator to distinguish sheet paths from directory paths
+        sheet_path = f"{relative_path}::{sheet_name}"
+        sheet_id = _generate_file_id(sheet_path)
+
+        nodes.append(
+            FileNode(
+                id=sheet_id,
+                name=sheet_name,
+                type=FileNodeType.file,
+                mount_type=FileConnectorType.runtime,
+                connector_id=None,
+                path=sheet_path,
+                parent_id=parent_id,
+                size=None,
+                mime_type="application/vnd.ms-excel.sheet",
+                modified_at=None,
+                created_at=None,
+                health=MountHealth(
+                    status=MountHealthStatus.connected,
+                    last_checked=now,
+                    error_message=None,
+                ),
+            )
+        )
+
+    return nodes
+
+
 def list_runtime_files_in_path(
     path: str, search_string: str | None = None
 ) -> list[FileNode]:
@@ -182,6 +233,11 @@ def list_runtime_files_in_path(
     # Check if path exists
     if not full_path.exists():
         raise ValueError(f"Path not found: {path}")
+
+    # Check if this is an xlsx file - return sheets as children
+    if full_path.is_file() and full_path.suffix.lower() == ".xlsx":
+        normalized_path = path.replace("\\", "/").strip("/") if path else ""
+        return _list_xlsx_sheets(full_path, normalized_path)
 
     # Ensure it's a directory
     if not full_path.is_dir():

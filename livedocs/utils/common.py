@@ -81,6 +81,27 @@ def serializer(obj):
         return str(obj)
 
 
+def get_xlsx_sheet_names(local_path: str) -> list[str]:
+    """
+    Get sheet names from an xlsx file.
+
+    Args:
+        local_path: Path to the local xlsx file
+
+    Returns:
+        List of sheet names, or empty list if file can't be read
+    """
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(local_path, read_only=True, data_only=True)
+        sheet_names = wb.sheetnames
+        wb.close()
+        return sheet_names
+    except Exception:
+        return []
+
+
 def get_query_for_datasource(
     datasource: ElementDataSource,
     limit: int | None = 10,
@@ -208,6 +229,15 @@ def get_query_for_datasource(
 
                 # Escape single quotes in file path to prevent SQL injection
                 escaped_file_path = file_path.replace("'", "''")
+
+                # Handle xlsx with layer_name (sheet selection)
+                # Use ignore_errors=true to handle cells that can't be cast (replaces with NULL)
+                if file_extension == ".xlsx":
+                    layer = datasource["file_info"].get("layer_name")
+                    if layer:
+                        return f"SELECT * FROM read_xlsx('{escaped_file_path}', sheet='{layer}', ignore_errors=true){limit_clause};"
+                    return f"SELECT * FROM read_xlsx('{escaped_file_path}', ignore_errors=true){limit_clause};"
+
                 return f"SELECT * FROM '{escaped_file_path}'{limit_clause};"
 
             # Fallback to old method if file_path is not provided
@@ -233,11 +263,11 @@ def get_query_for_datasource(
             if datasource["file_info"]["file_type"] == "csv":
                 return f"SELECT * FROM read_csv_auto('{file_name}'){limit_clause};"
             elif datasource["file_info"]["file_type"] == "xlsx":
-                return (
-                    "SELECT * FROM "
-                    f"read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
-                    f"{limit_clause};"
-                )
+                # Use ignore_errors=true to handle cells that can't be cast (replaces with NULL)
+                layer = datasource["file_info"].get("layer_name")
+                if layer:
+                    return f"SELECT * FROM read_xlsx('{file_name}', sheet='{layer}', ignore_errors=true){limit_clause};"
+                return f"SELECT * FROM read_xlsx('{file_name}', ignore_errors=true){limit_clause};"
             else:
                 # For other supported file types, use direct querying
                 escaped_file_name = file_name.replace("'", "''")

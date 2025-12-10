@@ -26,7 +26,7 @@ from livedocs.types import (
     QueryResult,
     QueryResultMetadata,
 )
-from livedocs.utils.common import _get_dataframe_schema
+from livedocs.utils.common import _get_dataframe_schema, get_xlsx_sheet_names
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
@@ -234,6 +234,81 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         parent = "/".join(path.split("/")[:-1])
         return parent if parent else None
 
+    def _list_xlsx_sheets(
+        self,
+        path: str,
+        connector_id: str,
+        connector_name: str,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]],
+        refresh_token_callback: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+    ) -> list[FileNode]:
+        """
+        List sheets in an xlsx file as virtual FileNodes.
+
+        Args:
+            path: Path to the xlsx file in Google Drive
+            connector_id: The Google Drive connector ID
+            connector_name: The connector name (for download path organization)
+            get_connection_details: Callable to retrieve connection details
+            refresh_token_callback: Optional callback to refresh tokens if expired
+
+        Returns:
+            List of FileNode objects representing sheets in the xlsx file
+        """
+        # Download the xlsx file to a local temp location
+        local_path = self.download_file(
+            file_path=path,
+            connector_name=connector_name,
+            connector_id=connector_id,
+            get_connection_details=get_connection_details,
+            refresh_token_callback=refresh_token_callback,
+            preview=True,
+        )
+
+        if not local_path or not os.path.exists(local_path):
+            return []
+
+        sheet_names = get_xlsx_sheet_names(local_path)
+        if not sheet_names:
+            return []
+
+        now = datetime.now(timezone.utc)
+        nodes: list[FileNode] = []
+
+        # Generate parent file ID (the xlsx file itself)
+        parent_id = self._generate_file_id(connector_id, path)
+
+        for sheet_name in sheet_names:
+            # Use :: as separator to distinguish sheet paths from directory paths
+            sheet_path = f"{path}::{sheet_name}"
+            sheet_id = self._generate_file_id(connector_id, sheet_path)
+
+            nodes.append(
+                FileNode(
+                    id=sheet_id,
+                    name=sheet_name,
+                    type=FileNodeType.file,
+                    mount_type=FileConnectorType.googledrive,
+                    connector_id=UUID(connector_id),
+                    path=sheet_path,
+                    parent_id=parent_id,
+                    size=None,
+                    mime_type="application/vnd.ms-excel.sheet",
+                    modified_at=None,
+                    created_at=None,
+                    health=MountHealth(
+                        status=MountHealthStatus.connected,
+                        last_checked=now,
+                        error_message=None,
+                    ),
+                )
+            )
+
+        return nodes
+
     def _get_folder_id_from_path(self, service: Any, path: str | None) -> str:
         """
         Convert a path string to a Google Drive folder ID by traversing the folder hierarchy.
@@ -424,6 +499,16 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         )
         if connector_info is None:
             return []
+
+        # Handle xlsx files - list sheets as children
+        if path.lower().endswith(".xlsx"):
+            return self._list_xlsx_sheets(
+                path=path,
+                connector_id=connector_id,
+                connector_name=connector_info.get("name", "googledrive"),
+                get_connection_details=get_connection_details,
+                refresh_token_callback=refresh_token_callback,
+            )
 
         now = datetime.now(timezone.utc)
         nodes: list[FileNode] = []

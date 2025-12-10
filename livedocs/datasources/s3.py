@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from doctest import debug
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -24,12 +23,14 @@ from livedocs.types import (
     QueryResultMetadata,
     S3ConnectorInfo,
 )
-from livedocs.utils.common import _get_dataframe_schema
+from livedocs.utils.common import (
+    _get_dataframe_schema,
+    get_xlsx_sheet_names,
+    middleman_debug,
+)
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
-
-from livedocs.utils.common import middleman_debug
 
 
 class S3DatasourceConnector(BaseDatasourceConnector):
@@ -110,6 +111,75 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return None
         parent = "/".join(path.split("/")[:-1])
         return parent if parent else None
+
+    def _list_xlsx_sheets(
+        self,
+        path: str,
+        connector_id: str,
+        connector_name: str,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]],
+    ) -> list[FileNode]:
+        """
+        List sheets in an xlsx file as virtual FileNodes.
+
+        Args:
+            path: Relative path to the xlsx file in S3
+            connector_id: The S3 connector ID
+            connector_name: The S3 connector name (for download path organization)
+            get_connection_details: Callable to retrieve connection details
+
+        Returns:
+            List of FileNode objects representing sheets in the xlsx file
+        """
+        # Download the xlsx file to a local temp location
+        local_path = self.download_file(
+            connector_name=connector_name,
+            path=path,
+            connector_id=connector_id,
+            get_connection_details=get_connection_details,
+            preview=True,
+        )
+
+        if not local_path or not os.path.exists(local_path):
+            return []
+
+        sheet_names = get_xlsx_sheet_names(local_path)
+        if not sheet_names:
+            return []
+
+        now = datetime.now(timezone.utc)
+        nodes: list[FileNode] = []
+
+        # Generate parent file ID (the xlsx file itself)
+        parent_id = self._generate_file_id(connector_id, path)
+
+        for sheet_name in sheet_names:
+            # Use :: as separator to distinguish sheet paths from directory paths
+            sheet_path = f"{path}::{sheet_name}"
+            sheet_id = self._generate_file_id(connector_id, sheet_path)
+
+            nodes.append(
+                FileNode(
+                    id=sheet_id,
+                    name=sheet_name,
+                    type=FileNodeType.file,
+                    mount_type=FileConnectorType.s3bucket,
+                    connector_id=UUID(connector_id),
+                    path=sheet_path,
+                    parent_id=parent_id,
+                    size=None,
+                    mime_type="application/vnd.ms-excel.sheet",
+                    modified_at=None,
+                    created_at=None,
+                    health=MountHealth(
+                        status=MountHealthStatus.connected,
+                        last_checked=now,
+                        error_message=None,
+                    ),
+                )
+            )
+
+        return nodes
 
     @staticmethod
     def _construct_s3_path(connector_info: S3ConnectorInfo, relative_path: str) -> str:
@@ -266,6 +336,15 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
         except (KeyError, TypeError, ValueError):
             return []
+
+        # Handle xlsx files - list sheets as children
+        if path.lower().endswith(".xlsx"):
+            return self._list_xlsx_sheets(
+                path=path,
+                connector_id=connector_id,
+                connector_name=connector_info.get("name", "s3"),
+                get_connection_details=get_connection_details,
+            )
 
         s3_fs = None
         now = datetime.now(timezone.utc)
@@ -481,7 +560,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
             # Check if file already exists locally (caching)
             if os.path.exists(local_file_path):
-                middleman_debug(f"S3 file cached locally at '{local_file_path}', skipping download")
                 return local_file_path
 
             # Download file
@@ -563,15 +641,11 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         Returns:
             True if successful, False otherwise
         """
-        middleman_debug(
-            f"Deleting file from S3: {file_path}, connector_id: {connector_id}"
-        )
         if connector_id is None or get_connection_details is None:
             return False
 
         try:
             _, connector_info_dict = get_connection_details(connector_id)
-            middleman_debug(f"Connector info dict: ", connector_info_dict)
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
         except (KeyError, TypeError, ValueError) as e:
             print(f"Error getting connection details: {e}")

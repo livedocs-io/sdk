@@ -592,6 +592,22 @@ class Livedocs:
 
         # Handle workspace files (need download from livedocs servers)
         if connector_type == FileConnectorType.workspace.value:
+            # First check if file is already cached locally (e.g., from xlsx sheet listing)
+            files_path = os.environ.get("LIVEDOCS_FILES_PATH", "")
+            if files_path and file_name:
+                local_path = os.path.join(files_path, file_name)
+                if os.path.exists(local_path):
+                    return local_path
+
+            # Try to download by file_name (more reliable than file_id for xlsx sheets)
+            if file_name:
+                try:
+                    local_path = self.download_file(file_name=file_name)
+                    return local_path
+                except Exception:
+                    pass
+
+            # Fall back to file_id
             if file_id:
                 try:
                     local_path = self.download_file(file_id=file_id)
