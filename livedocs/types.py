@@ -289,7 +289,7 @@ class UserMeta(BaseModel):
 
 class VegaSpec(BaseModel):
     spec: str
-    schema: dict[str, Any]
+    schema_: dict[str, Any] = Field(alias="schema")
     status: str
 
     @model_validator(mode="before")
