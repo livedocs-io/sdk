@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import traceback
 import uuid
@@ -9,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
 from uuid import UUID
+
+from livedocs.utils.common import serializer
 
 import polars as pl
 import psycopg
@@ -319,6 +322,9 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         else:
             result_df = pl.DataFrame()
 
+        # Sanitize the dataframe to convert problematic types (Object, Null) to Arrow-compatible types
+        result_df = self._sanitize_dataframe(result_df)
+
         return result_df, schema_df
 
     def write(
@@ -386,6 +392,49 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
 
     def teardown(self) -> None:
         pass
+
+    def _sanitize_dataframe(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Sanitize DataFrame to convert problematic types to Arrow-compatible types.
+
+        - Object dtype (e.g., Python UUID objects, JSONB dicts) -> Utf8 (string)
+        - Null dtype (all-null columns with no type) -> Utf8 (string)
+
+        This ensures the DataFrame can be converted to Arrow format for use with
+        DuckDB registration and other operations.
+        """
+        if df.is_empty():
+            return df
+
+        def serialize_value(x: Any) -> str | None:
+            """Convert a value to string using the common serializer."""
+            if x is None:
+                return None
+            # Use the common serializer to handle UUIDs, datetimes, etc.
+            serialized = serializer(x)
+            # If result is dict/list (JSONB), convert to JSON string
+            if isinstance(serialized, (dict, list)):
+                return json.dumps(serialized)
+            # Otherwise return as string
+            return str(serialized) if serialized is not None else None
+
+        conversions = []
+        for col_name, dtype in df.schema.items():
+            dtype_str = str(dtype)
+            if dtype_str == "Object" or dtype_str == "Null":
+                # Convert Object (e.g., UUID, JSONB) and Null columns to string
+                conversions.append(
+                    pl.col(col_name).map_elements(
+                        serialize_value,
+                        return_dtype=pl.Utf8,
+                    ).alias(col_name)
+                )
+            else:
+                conversions.append(pl.col(col_name))
+
+        if conversions:
+            return df.select(conversions)
+        return df
 
     def _validate_connection_details(
         self, parsed_credentials: dict[str, Any]
