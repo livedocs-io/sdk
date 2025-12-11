@@ -64,7 +64,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
                 "status": status,
             }
         )
-        return validated_spec.model_dump_json()
+        return validated_spec.model_dump_json(by_alias=True)
     else:
         empty_chart = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
@@ -80,7 +80,7 @@ def create_vega_spec(df: pl.DataFrame, spec: Spec, schema: dict):
                 "status": "EMPTY",
             }
         )
-        return validated_spec.model_dump_json()
+        return validated_spec.model_dump_json(by_alias=True)
 
 
 def pie(
