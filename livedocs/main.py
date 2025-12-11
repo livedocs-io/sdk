@@ -39,6 +39,7 @@ from livedocs.types import (
     QueryResultMetadata,
     S3ConnectorInfo,
     SDKContext,
+    SchemaNode,
     SourceType,
     Spec,
     TableMetadata,
@@ -55,6 +56,7 @@ from livedocs.utils.common import (
     _download_file,
     _setup_dirs,
     get_query_for_datasource,
+    middleman_debug,
     serializer,
 )
 from livedocs.utils.lib.cache import QueryCache
@@ -732,7 +734,7 @@ class Livedocs:
                     limited_spec = json.loads(limited_spec_json)
                     limited_spec["status"] = "OVERLOADED"
                     validated_spec = VegaSpec(**limited_spec)
-                    vega_spec_json_str = validated_spec.model_dump_json()
+                    vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
                 except Exception:
                     style_settings = settings.get("styleSettings", {})
                     empty_chart = {
@@ -749,7 +751,7 @@ class Livedocs:
                             "status": "OVERLOADED",
                         }
                     )
-                    vega_spec_json_str = validated_spec.model_dump_json()
+                    vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
             else:
                 vega_spec_json_str = create_vega_spec(df, settings, schema)
             vega_span.finish()
@@ -1253,6 +1255,112 @@ class Livedocs:
             raise ValueError(
                 "Invalid parameters: path_or_parent_id and source_type are required."
             )
+
+    @livedocs_internal_instrument
+    def search_nodes(
+        self,
+        query: str,
+        source_type: SourceType | None = None,
+    ) -> dict:
+        """
+        Search across datasources.
+
+        When source_type is None, searches ALL sources (files, databases, S3, Google Drive).
+        When source_type is provided, searches only that specific source type.
+
+        Args:
+            query: Search string to match against file/table names (case-insensitive)
+            source_type: Optional - filter to specific source type.
+                         If None, searches ALL sources.
+
+        Returns:
+            Dict with keys: s3buckets, googledrive, runtime, databases, workspace_files
+            Each key contains a list of matching nodes (FileNode or SchemaNode).
+        """
+        middleman_debug(
+            "search_nodes called with query:",
+            {"query": query, "source_type": source_type},
+        )
+        if not query or not query.strip():
+            raise ValueError("Search query cannot be empty")
+
+        # Initialize result containers
+        s3_nodes: list[FileNode] = []
+        google_drive_nodes: list[FileNode] = []
+        runtime_nodes: list[FileNode] = []
+        database_nodes: list[SchemaNode] = []
+        workspace_nodes: list[FileNode] = []
+
+        # Determine which sources to search
+        search_all = source_type is None
+
+        # Check if we have the required context
+        if not (
+            self._credential_store
+            and self._report_id
+            and self._token
+            and self.sdk_context == SDKContext.IPYTHON
+        ):
+            if self.sdk_context == SDKContext.RELAY:
+                raise ValueError(
+                    "RelayImplementationError: search_nodes is not supported in relay context"
+                )
+            raise ValueError("Credential store not initialized")
+
+        # Search S3
+        if search_all or source_type == SourceType.s3bucket:
+            for connector_info in self._credential_store.get_all_s3_connectors():
+                s3_connector = S3DatasourceConnector()
+                nodes = s3_connector.list(
+                    path=None,
+                    connector_id=connector_info["connector_id"],
+                    get_connection_details=self.helper_get_s3_connection_details,
+                )
+                # Filter by query (case-insensitive)
+                s3_nodes.extend([n for n in nodes if query.lower() in n.name.lower()])
+
+        # Search Google Drive
+        if search_all or source_type == SourceType.googledrive:
+            for (
+                connector_info
+            ) in self._credential_store.get_all_google_drive_connectors():
+                gdrive_connector = GoogleDriveDatasourceConnector()
+                nodes = gdrive_connector.list(
+                    path=None,
+                    connector_id=connector_info["connector_id"],
+                    get_connection_details=self.helper_get_google_drive_connection_details,
+                    refresh_token_callback=self.refresh_google_drive_token,
+                )
+                # Filter by query (case-insensitive)
+                google_drive_nodes.extend(
+                    [n for n in nodes if query.lower() in n.name.lower()]
+                )
+
+        # Search workspace files and databases (via Core API)
+        if search_all or source_type in (SourceType.workspace, SourceType.database):
+            result = livedocs_internal_list_files(
+                self._report_id, self._token, search_string=query
+            )
+            middleman_debug("livedocs_internal_list_files result:", result)
+            if search_all or source_type == SourceType.workspace:
+                workspace_nodes = result.files
+            if search_all or source_type == SourceType.database:
+                database_nodes = result.schema_nodes
+
+        # Search runtime files
+        if search_all or source_type == SourceType.runtime:
+            runtime_nodes = list_runtime_files_in_path(path="", search_string=query)
+
+        nodes = {
+            "s3buckets": s3_nodes,
+            "googledrive": google_drive_nodes,
+            "runtime": runtime_nodes,
+            "databases": database_nodes,
+            "workspace_files": workspace_nodes,
+        }
+        middleman_debug("search_nodes result:", nodes)
+
+        return nodes
 
     @livedocs_internal_instrument
     def relay_list_s3_gdrive_nodes(
