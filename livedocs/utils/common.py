@@ -128,7 +128,6 @@ def get_query_for_datasource(
     SUPPORTED_FILE_EXTENSIONS = {
         ".csv",
         ".tsv",
-        ".txt",
         ".gz",
         ".parquet",
         ".json",
