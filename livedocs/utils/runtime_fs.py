@@ -201,7 +201,7 @@ def _list_xlsx_sheets(xlsx_path: Path, relative_path: str) -> list[FileNode]:
 
 
 def list_runtime_files_in_path(
-    path: str, search_string: str | None = None
+    path: str, search_string: str | None = None, max_depth: int = 3
 ) -> list[FileNode]:
     """
     List files and directories at the specified path relative to LIVEDOCS_FILES_PATH.
@@ -246,81 +246,94 @@ def list_runtime_files_in_path(
     now = datetime.now(timezone.utc)
     runtime_file_nodes = []
 
-    # List all items in the directory
-    try:
-        items = full_path.iterdir()
-        for item in items:
-            name = item.name
+    def walk(current_path: Path, depth: int):
+        nonlocal runtime_file_nodes
+        if depth > max_depth:
+            return
+        try:
+            for item in current_path.iterdir():
+                name = item.name
+                # Always recurse dirs even if name doesn't match; filter files by search
+                is_directory = item.is_dir()
 
-            # Filter by search_string if provided
-            if search_string and search_string.lower() not in name.lower():
-                continue
-
-            is_directory = item.is_dir()
-
-            # Calculate relative path from LIVEDOCS_FILES_PATH
-            try:
-                relative_path = str(item.relative_to(base_path))
-            except ValueError:
-                # If item is not relative to base_path, use the provided path + name
-                if path:
-                    normalized_path = path.replace("\\", "/").strip("/")
+                try:
+                    relative_path = str(item.relative_to(base_path))
+                except ValueError:
+                    normalized_path = path.replace("\\", "/").strip("/") if path else ""
                     relative_path = (
                         f"{normalized_path}/{name}" if normalized_path else name
                     )
-                else:
-                    relative_path = name
+                relative_path = relative_path.replace("\\", "/")
 
-            # Normalize path separators
-            relative_path = relative_path.replace("\\", "/")
-
-            # Generate IDs (path is hashed alone, no connector_id dependency)
-            file_id = _generate_file_id(relative_path)
-            parent_path = _get_parent_path(relative_path)
-            parent_id = _generate_file_id(parent_path) if parent_path else None
-
-            # Get file metadata
-            size = None
-            modified_at = None
-            created_at = None
-
-            if item.is_file():
-                try:
-                    stat = item.stat()
-                    size = stat.st_size
-                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
-                except (OSError, ValueError):
-                    pass
-            elif item.is_dir():
-                try:
-                    stat = item.stat()
-                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
-                except (OSError, ValueError):
-                    pass
-
-            runtime_file_nodes.append(
-                FileNode(
-                    id=file_id,
-                    name=name,
-                    type=FileNodeType.directory if is_directory else FileNodeType.file,
-                    mount_type=FileConnectorType.runtime,
-                    connector_id=None,  # Runtime doesn't have a connector_id
-                    path=relative_path,
-                    parent_id=parent_id,
-                    size=size,
-                    mime_type=_get_mime_type(item),
-                    modified_at=modified_at,
-                    created_at=created_at,
-                    health=MountHealth(
-                        status=MountHealthStatus.connected,
-                        last_checked=now,
-                        error_message=None,
-                    ),
+                matches = (
+                    search_string is None
+                    or search_string.lower() in name.lower()
                 )
-            )
-    except (OSError, PermissionError) as e:
-        raise ValueError(f"Error listing directory '{path}': {str(e)}")
+
+                file_id = _generate_file_id(relative_path)
+                parent_path = _get_parent_path(relative_path)
+                parent_id = _generate_file_id(parent_path) if parent_path else None
+
+                size = None
+                modified_at = None
+                created_at = None
+                try:
+                    stat = item.stat()
+                    size = stat.st_size if item.is_file() else None
+                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    created_at = datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc)
+                except (OSError, ValueError):
+                    pass
+
+                if is_directory:
+                    if matches:
+                        runtime_file_nodes.append(
+                            FileNode(
+                                id=file_id,
+                                name=name,
+                                type=FileNodeType.directory,
+                                mount_type=FileConnectorType.runtime,
+                                connector_id=None,
+                                path=relative_path if relative_path.startswith("/") else f"/{relative_path}",
+                                parent_id=parent_id,
+                                size=None,
+                                mime_type=None,
+                                modified_at=modified_at,
+                                created_at=created_at,
+                                health=MountHealth(
+                                    status=MountHealthStatus.connected,
+                                    last_checked=now,
+                                    error_message=None,
+                                ),
+                            )
+                        )
+                    walk(item, depth + 1)
+                else:
+                    if search_string and not matches:
+                        continue
+                    runtime_file_nodes.append(
+                        FileNode(
+                            id=file_id,
+                            name=name,
+                            type=FileNodeType.file,
+                            mount_type=FileConnectorType.runtime,
+                            connector_id=None,
+                            path=relative_path if relative_path.startswith("/") else f"/{relative_path}",
+                            parent_id=parent_id,
+                            size=size,
+                            mime_type=_get_mime_type(item),
+                            modified_at=modified_at,
+                            created_at=created_at,
+                            health=MountHealth(
+                                status=MountHealthStatus.connected,
+                                last_checked=now,
+                                error_message=None,
+                            ),
+                        )
+                    )
+        except (OSError, PermissionError) as e:
+            raise ValueError(f"Error listing directory '{current_path}': {str(e)}")
+
+    walk(full_path, 0)
 
     return runtime_file_nodes

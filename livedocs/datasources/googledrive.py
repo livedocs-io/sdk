@@ -26,7 +26,10 @@ from livedocs.types import (
     QueryResult,
     QueryResultMetadata,
 )
-from livedocs.utils.common import _get_dataframe_schema, get_xlsx_sheet_names
+from livedocs.utils.common import (
+    _get_dataframe_schema,
+    get_xlsx_sheet_names,
+)
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
@@ -301,7 +304,9 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             # Use :: as separator to distinguish sheet paths from directory paths
             sheet_path = f"{path}::{sheet_name}"
             # Include gdrive_file_id in sheet ID generation for uniqueness
-            sheet_id = self._generate_file_id(connector_id, f"{gdrive_file_id}::{sheet_name}")
+            sheet_id = self._generate_file_id(
+                connector_id, f"{gdrive_file_id}::{sheet_name}"
+            )
 
             nodes.append(
                 FileNode(
@@ -494,6 +499,8 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
+        search_query: str | None = None,
+        max_depth: int = 2,
     ) -> list[FileNode]:
         """
         List files and directories in Google Drive at the given path.
@@ -537,19 +544,38 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             # Convert path to folder ID
             folder_id = self._get_folder_id_from_path(service, normalized_path)
 
-            # Query for files and folders in the target folder
-            query = f"'{folder_id}' in parents and trashed=false"
+            file_list: list[dict[str, Any]] = []
 
-            results = (
-                service.files()
-                .list(
-                    q=query,
-                    fields="files(id, name, mimeType, modifiedTime, createdTime, size)",
-                    pageSize=1000,
+            def bfs_collect(start_id: str, depth: int):
+                if depth > max_depth:
+                    return
+                query = f"'{start_id}' in parents and trashed=false"
+                results = (
+                    service.files()
+                    .list(
+                        q=query,
+                        fields="files(id, name, mimeType, modifiedTime, createdTime, size)",
+                        pageSize=1000,
+                    )
+                    .execute()
                 )
-                .execute()
-            )
-            file_list = results.get("files", [])
+                files = results.get("files", [])
+                file_list.extend(files)
+                if depth < max_depth:
+                    for it in files:
+                        if it.get("mimeType") == "application/vnd.google-apps.folder":
+                            bfs_collect(it["id"], depth + 1)
+
+            if search_query:
+                bfs_collect(folder_id, 0)
+                # Filter by search term (case-insensitive) here to reduce output
+                file_list = [
+                    f
+                    for f in file_list
+                    if search_query.lower() in f.get("name", "").lower()
+                ]
+            else:
+                bfs_collect(folder_id, 0)
 
             for file_item in file_list:
                 title = file_item.get("name", "")
@@ -1002,7 +1028,9 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
 
             # Check if file already exists locally (caching)
             if os.path.exists(local_file_path):
-                print(f"DEBUG: Google Drive file cached locally at '{local_file_path}', skipping download")
+                print(
+                    f"DEBUG: Google Drive file cached locally at '{local_file_path}', skipping download"
+                )
                 return local_file_path
 
             # Download the file

@@ -391,9 +391,6 @@ def _get_xlsx_sheet_nodes_from_path(
             # Download to LIVEDOCS_FILES_PATH
             response = requests.get(manifest.signed_url)
             if response.status_code != 200:
-                middleman_debug(
-                    f"Failed to download xlsx file, status: {response.status_code}"
-                )
                 return []
 
             os.makedirs(files_path, exist_ok=True)
@@ -424,7 +421,6 @@ def _get_xlsx_sheet_nodes_from_path(
         sheet_path = f"{xlsx_path}::{sheet_name}"
         # Generate deterministic UUID for sheet
         sheet_id = uuid5(parent_id, sheet_name)
-        middleman_debug(f"Generated sheet ID: {sheet_id} for sheet: {sheet_name}")
 
         nodes.append(
             FileNode(

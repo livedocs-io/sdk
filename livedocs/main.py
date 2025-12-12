@@ -397,7 +397,9 @@ class Livedocs:
                 kwargs["download_file"] = self.download_file
                 if file_path is not None:
                     kwargs["file_path"] = file_path
-                kwargs["get_s3_connection_details"] = self.helper_get_s3_connection_details
+                kwargs["get_s3_connection_details"] = (
+                    self.helper_get_s3_connection_details
+                )
                 kwargs["get_google_drive_connection_details"] = (
                     self.helper_get_google_drive_connection_details
                 )
@@ -1288,10 +1290,6 @@ class Livedocs:
             Dict with keys: s3buckets, googledrive, runtime, databases, workspace_files
             Each key contains a list of matching nodes (FileNode or SchemaNode).
         """
-        middleman_debug(
-            "search_nodes called with query:",
-            {"query": query, "source_type": source_type},
-        )
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty")
 
@@ -1323,12 +1321,14 @@ class Livedocs:
             for connector_info in self._credential_store.get_all_s3_connectors():
                 s3_connector = S3DatasourceConnector()
                 nodes = s3_connector.list(
-                    path=None,
+                    path="",
                     connector_id=connector_info["connector_id"],
                     get_connection_details=self.helper_get_s3_connection_details,
+                    search_query=query,
+                    max_depth=3,
                 )
                 # Filter by query (case-insensitive)
-                s3_nodes.extend([n for n in nodes if query.lower() in n.name.lower()])
+                s3_nodes.extend(nodes)
 
         # Search Google Drive
         if search_all or source_type == SourceType.googledrive:
@@ -1337,22 +1337,21 @@ class Livedocs:
             ) in self._credential_store.get_all_google_drive_connectors():
                 gdrive_connector = GoogleDriveDatasourceConnector()
                 nodes = gdrive_connector.list(
-                    path=None,
+                    path="",
                     connector_id=connector_info["connector_id"],
                     get_connection_details=self.helper_get_google_drive_connection_details,
                     refresh_token_callback=self.refresh_google_drive_token,
+                    search_query=query,
+                    max_depth=3,
                 )
                 # Filter by query (case-insensitive)
-                google_drive_nodes.extend(
-                    [n for n in nodes if query.lower() in n.name.lower()]
-                )
+                google_drive_nodes.extend(nodes)
 
         # Search workspace files and databases (via Core API)
         if search_all or source_type in (SourceType.workspace, SourceType.database):
             result = livedocs_internal_list_files(
                 self._report_id, self._token, search_string=query
             )
-            middleman_debug("livedocs_internal_list_files result:", result)
             if search_all or source_type == SourceType.workspace:
                 workspace_nodes = result.files
             if search_all or source_type == SourceType.database:
@@ -1360,7 +1359,9 @@ class Livedocs:
 
         # Search runtime files
         if search_all or source_type == SourceType.runtime:
-            runtime_nodes = list_runtime_files_in_path(path="", search_string=query)
+            runtime_nodes = list_runtime_files_in_path(
+                path="", search_string=query, max_depth=3
+            )
 
         nodes = {
             "s3buckets": s3_nodes,
@@ -1369,7 +1370,6 @@ class Livedocs:
             "databases": database_nodes,
             "workspace_files": workspace_nodes,
         }
-        middleman_debug("search_nodes result:", nodes)
 
         return nodes
 

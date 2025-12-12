@@ -315,6 +315,8 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
+        search_query: str | None = None,
+        max_depth: int = 2,
     ) -> list[FileNode]:
         """
         List files and directories in an S3 bucket at the given path.
@@ -366,13 +368,57 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             else:
                 s3_path = f"{bucket_name}/"  # List from bucket root
 
-            # Use s3fs ls() with detail=True to get file information
-            # This returns a list of dicts with file/directory info
-            items = s3_fs.ls(s3_path, detail=True)
+            # If a search query is provided, use a glob with depth limit
+            if search_query:
+                # Build glob pattern: include prefix and allow nested folders up to max_depth
+                glob_prefix = s3_path.rstrip("/")
+                pattern = f"{glob_prefix}/**/*{search_query}*"
+                raw = s3_fs.glob(pattern, detail=True, maxdepth=max_depth)
+                if isinstance(raw, dict):
+                    items = [(k, v) for k, v in raw.items()]
+                elif isinstance(raw, list):
+                    tmp = []
+                    for entry in raw:
+                        if isinstance(entry, dict):
+                            path_candidate = (
+                                entry.get("Key")
+                                or entry.get("name")
+                                or entry.get("path")
+                                or entry.get("key")
+                            )
+                            tmp.append((path_candidate, entry))
+                        else:
+                            tmp.append((entry, {}))
+                    items = tmp
+                else:
+                    items = []
+            else:
+                # Use s3fs ls() with detail=True to get file information (non-recursive)
+                raw = s3_fs.ls(s3_path, detail=True)
+                if isinstance(raw, dict):
+                    items = [(k, v) for k, v in raw.items()]
+                else:
+                    items = []
+                    for entry in raw:
+                        if isinstance(entry, dict):
+                            path_candidate = (
+                                entry.get("Key")
+                                or entry.get("name")
+                                or entry.get("path")
+                                or entry.get("key")
+                            )
+                            items.append((path_candidate, entry))
+                        else:
+                            items.append((entry, {}))
 
-            for item in items:
-                # s3fs returns items with 'Key' or 'name' field
-                item_key = item.get("Key") or item.get("name", "")
+            for item_key, item_detail in items:
+                if not item_key:
+                    continue
+                # s3fs returns items as dicts when detail=True; glob may return strings
+                is_directory = item_key.endswith("/") or (
+                    isinstance(item_detail, dict)
+                    and item_detail.get("type") == "directory"
+                )
 
                 # Remove bucket name prefix to get relative path
                 if item_key.startswith(f"{bucket_name}/"):
@@ -388,9 +434,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
                 if not relative_path:
                     continue
-
-                # Determine if it's a directory (ends with /) or file
-                is_directory = item_key.endswith("/") or item.get("type") == "directory"
 
                 # Strip trailing slash for comparison and name extraction
                 relative_path_clean = relative_path.rstrip("/")
@@ -414,8 +457,16 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                 )
 
                 # Get metadata from s3fs item
-                size = item.get("Size")
-                last_modified = item.get("LastModified")
+                size = (
+                    item_detail.get("Size")
+                    if not isinstance(item_detail, str)
+                    else None
+                )
+                last_modified = (
+                    item_detail.get("LastModified")
+                    if not isinstance(item_detail, str)
+                    else None
+                )
                 modified_at = None
                 if last_modified:
                     if isinstance(last_modified, datetime):
@@ -431,7 +482,9 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
                 # Get content type - S3 ListObjectsV2 doesn't return ContentType,
                 # so we infer it from the file extension
-                content_type = item.get("ContentType")
+                content_type = None
+                if isinstance(item_detail, dict):
+                    content_type = item_detail.get("ContentType")
                 if content_type is None and not is_directory:
                     # Use mimetypes to guess from filename
                     guessed_type, _ = mimetypes.guess_type(name)
@@ -475,8 +528,15 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                         ),
                     )
                 )
-
         except Exception as e:
+            middleman_debug(
+                "s3 search_nodes error",
+                {
+                    "connector_id": connector_id,
+                    "query": search_query,
+                    "error": str(e),
+                },
+            )
             # On error, return nodes found so far with error health status
             error_health = MountHealth(
                 status=MountHealthStatus.error,
@@ -568,7 +628,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return local_file_path
 
         except Exception as e:
-            # Log the error for debugging
             middleman_debug(f"S3 download error for path '{path}': {e}")
             return None
 
