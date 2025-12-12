@@ -986,7 +986,6 @@ class Livedocs:
         path_or_parent_id: str | None = None,
         source_type: SourceType | None = None,
         source_id: str | None = None,
-        search_string: str | None = None,
         refresh_google_drive_token: Callable[
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
@@ -999,129 +998,52 @@ class Livedocs:
         database_nodes = []
         workspace_file_nodes = []
 
-        # FIRST CASE: No params given (all three are None)
+        # FIRST CASE: No params given (all three are None) -> return roots
         if path_or_parent_id is None and source_type is None and source_id is None:
-            if search_string:
-                # Search case: search across all sources (runtime, workspace, databases, s3, google drive)
-                if (
-                    self._credential_store
-                    and self._report_id
-                    and self._token
-                    and self.sdk_context == SDKContext.IPYTHON
-                ):
-                    # Search S3: list files from each connector root and filter
-                    for (
-                        connector_info
-                    ) in self._credential_store.get_all_s3_connectors():
-                        s3_connector = S3DatasourceConnector()
-                        connector_nodes = s3_connector.list(
-                            path=None,
-                            connector_id=connector_info["connector_id"],
-                            get_connection_details=self.helper_get_s3_connection_details,
+            if (
+                self._credential_store
+                and self._report_id
+                and self._token
+                and self.sdk_context == SDKContext.IPYTHON
+            ):
+                for connector_info in self._credential_store.get_all_s3_connectors():
+                    s3_nodes.append(
+                        S3DatasourceConnector.connector_info_to_file_node(
+                            connector_info
                         )
-                        # Filter by search_string
-                        filtered_nodes = [
-                            node
-                            for node in connector_nodes
-                            if search_string.lower() in node.name.lower()
-                        ]
-                        s3_nodes.extend(filtered_nodes)
-
-                    # Search Google Drive: list files from each connector root and filter
-                    for (
-                        connector_info
-                    ) in self._credential_store.get_all_google_drive_connectors():
-                        google_drive_connector = GoogleDriveDatasourceConnector()
-                        connector_nodes = google_drive_connector.list(
-                            path=None,
-                            connector_id=connector_info["connector_id"],
-                            get_connection_details=self.helper_get_google_drive_connection_details,
-                            refresh_token_callback=self.refresh_google_drive_token,
-                        )
-                        # Filter by search_string
-                        filtered_nodes = [
-                            node
-                            for node in connector_nodes
-                            if search_string.lower() in node.name.lower()
-                        ]
-                        google_drive_file_nodes.extend(filtered_nodes)
-
-                    # Search workspace files and databases
-                    warehouses_and_files = livedocs_internal_list_files(
-                        self._report_id, self._token, search_string=search_string
                     )
 
-                    workspace_file_nodes = warehouses_and_files.files
-                    database_nodes = warehouses_and_files.schema_nodes
-
-                    # Search runtime files from root
-                    runtime_file_nodes = list_runtime_files_in_path(
-                        path="", search_string=search_string
+                for (
+                    connector_info
+                ) in self._credential_store.get_all_google_drive_connectors():
+                    google_drive_file_nodes.append(
+                        GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                            connector_info
+                        )
                     )
 
-                    return {
-                        "s3buckets": s3_nodes,
-                        "googledrive": google_drive_file_nodes,
-                        "runtime": runtime_file_nodes,
-                        "databases": database_nodes,
-                        "workspace_files": workspace_file_nodes,
-                    }
-                else:
-                    if self.sdk_context == SDKContext.RELAY:
-                        raise ValueError(
-                            "RelayImplementationError: List nodes is not supported in relay context"
-                        )
-                    raise ValueError("Credential store not initialized")
+                warehouses_and_files = livedocs_internal_list_files(
+                    self._report_id, self._token
+                )
+
+                workspace_file_nodes = warehouses_and_files.files
+                database_nodes = warehouses_and_files.schema_nodes
+
+                runtime_file_nodes = list_runtime_files_top_level()
+
+                return {
+                    "s3buckets": s3_nodes,
+                    "googledrive": google_drive_file_nodes,
+                    "runtime": runtime_file_nodes,
+                    "databases": database_nodes,
+                    "workspace_files": workspace_file_nodes,
+                }
             else:
-                # No search: return all root nodes
-                if (
-                    self._credential_store
-                    and self._report_id
-                    and self._token
-                    and self.sdk_context == SDKContext.IPYTHON
-                ):
-                    # Add S3 connectors to s3_nodes
-                    for (
-                        connector_info
-                    ) in self._credential_store.get_all_s3_connectors():
-                        s3_nodes.append(
-                            S3DatasourceConnector.connector_info_to_file_node(
-                                connector_info
-                            )
-                        )
-                    # Add Google Drive connectors to google_drive_file_nodes
-                    for (
-                        connector_info
-                    ) in self._credential_store.get_all_google_drive_connectors():
-                        google_drive_file_nodes.append(
-                            GoogleDriveDatasourceConnector.connector_info_to_file_node(
-                                connector_info
-                            )
-                        )
-
-                    warehouses_and_files = livedocs_internal_list_files(
-                        self._report_id, self._token
+                if self.sdk_context == SDKContext.RELAY:
+                    raise ValueError(
+                        "RelayImplementationError: List nodes is not supported in relay context"
                     )
-
-                    workspace_file_nodes = warehouses_and_files.files
-                    database_nodes = warehouses_and_files.schema_nodes
-
-                    # List runtime files from LIVEDOCS_FILES_PATH
-                    runtime_file_nodes = list_runtime_files_top_level()
-
-                    return {
-                        "s3buckets": s3_nodes,
-                        "googledrive": google_drive_file_nodes,
-                        "runtime": runtime_file_nodes,
-                        "databases": database_nodes,
-                        "workspace_files": workspace_file_nodes,
-                    }
-                else:
-                    if self.sdk_context == SDKContext.RELAY:
-                        raise ValueError(
-                            "RelayImplementationError: List nodes is not supported in relay context"
-                        )
-                    raise ValueError("Credential store not initialized")
+                raise ValueError("Credential store not initialized")
 
         # SECOND CASE: path_or_parent_id and source_type provided
         # source_id is optional for workspace/database (built-in sources)
@@ -1147,7 +1069,6 @@ class Livedocs:
                         self._report_id,
                         self._token,
                         database_parent_id=effective_parent_id,
-                        search_string=search_string,
                     )
                     workspace_file_nodes = warehouses_and_files.files
                     database_nodes = warehouses_and_files.schema_nodes
@@ -1162,7 +1083,6 @@ class Livedocs:
                 # Runtime doesn't use source_id, path is hashed alone
                 runtime_file_nodes = list_runtime_files_in_path(
                     path=path_or_parent_id or "",
-                    search_string=search_string,
                 )
             elif source_type == SourceType.s3bucket:
                 if (
@@ -1193,13 +1113,6 @@ class Livedocs:
                                 connector_id=source_id,
                                 get_connection_details=self.helper_get_s3_connection_details,
                             )
-                            # Filter by search_string if provided
-                            if search_string:
-                                s3_nodes = [
-                                    node
-                                    for node in s3_nodes
-                                    if search_string.lower() in node.name.lower()
-                                ]
                         else:
                             s3_nodes = []
                 else:
@@ -1240,13 +1153,6 @@ class Livedocs:
                             get_connection_details=self.helper_get_google_drive_connection_details,
                             refresh_token_callback=self.refresh_google_drive_token,
                         )
-                        # Filter by search_string if provided
-                        if search_string:
-                            google_drive_file_nodes = [
-                                node
-                                for node in google_drive_file_nodes
-                                if search_string.lower() in node.name.lower()
-                            ]
                 else:
                     if self.sdk_context == SDKContext.RELAY:
                         raise ValueError(

@@ -516,7 +516,6 @@ class SchemaNode(BaseModel):
 class ListPathRequest(BaseModel):
     node_id: str | None = None
     schema_node_type: SchemaNodeType | None = None
-    search_string: str | None = None
 
 
 class ListPathResponse(BaseModel):
