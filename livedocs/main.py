@@ -380,16 +380,27 @@ class Livedocs:
             # Plug in the Jinja variables
             final_query = self.helper_render_jinja_template(query, context)
 
+            # For file datasources, materialize the file locally (same pathing as preview)
+            file_path: str | None = None
+            source_type = ElementDatasourceType(datasource["source_type"])
+            if source_type == ElementDatasourceType.file:
+                file_path = self._prepare_file_for_query(datasource)
+
             # Run the actual queries
             query_span = sentry_sdk.start_span(name="run query")
             df: pl.DataFrame = pl.DataFrame()
 
             # Prepare kwargs for DatasourceManager
-            source_type = ElementDatasourceType(datasource["source_type"])
             kwargs: dict[str, Any] = {}
             if source_type == ElementDatasourceType.file:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["download_file"] = self.download_file
+                if file_path is not None:
+                    kwargs["file_path"] = file_path
+                kwargs["get_s3_connection_details"] = self.helper_get_s3_connection_details
+                kwargs["get_google_drive_connection_details"] = (
+                    self.helper_get_google_drive_connection_details
+                )
             elif source_type == ElementDatasourceType.dataframe:
                 kwargs["duckdb_conn"] = self._duckdb.conn
                 kwargs["dataframe"] = dataframe
