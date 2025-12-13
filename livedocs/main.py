@@ -534,6 +534,14 @@ class Livedocs:
     def _prepare_file_for_query(
         self,
         datasource: ElementDataSource,
+        download_file: Callable[[str | None, str | None, bool, str | None], str]
+        | None = None,
+        get_s3_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        get_google_drive_connection_details: Callable[
+            [str], tuple[object, dict[str, Any]]
+        ]
+        | None = None,
     ) -> str | None:
         """
         Prepare file for query generation by downloading it if needed.
@@ -557,6 +565,23 @@ class Livedocs:
 
         connector_info = file_info.get("connector_info")
 
+        if self.sdk_context == SDKContext.IPYTHON:
+            _download_file = self.download_file
+            _get_s3_connection_details = self.helper_get_s3_connection_details
+            _get_google_drive_connection_details = (
+                self.helper_get_google_drive_connection_details
+            )
+        else:
+            if download_file is None:
+                raise ValueError("download_file is required")
+            if get_s3_connection_details is None:
+                raise ValueError("get_s3_connection_details is required")
+            if get_google_drive_connection_details is None:
+                raise ValueError("get_google_drive_connection_details is required")
+            _download_file = download_file
+            _get_s3_connection_details = get_s3_connection_details
+            _get_google_drive_connection_details = get_google_drive_connection_details
+
         # Handle regular file (no connector_info)
         # This could be a runtime file (already local) or a workspace file (needs download)
         if connector_info is None:
@@ -578,7 +603,7 @@ class Livedocs:
 
             # File not found locally - try to download from workspace
             try:
-                local_path = self.download_file(file_id=file_id)
+                local_path = _download_file(None, file_id, False, None)
                 return local_path
             except Exception:
                 return None
@@ -618,7 +643,7 @@ class Livedocs:
             # Try to download by file_name (more reliable than file_id for xlsx sheets)
             if file_name:
                 try:
-                    local_path = self.download_file(file_name=file_name)
+                    local_path = _download_file(file_name, None, False, None)
                     return local_path
                 except Exception:
                     pass
@@ -626,7 +651,7 @@ class Livedocs:
             # Fall back to file_id
             if file_id:
                 try:
-                    local_path = self.download_file(file_id=file_id)
+                    local_path = _download_file(None, file_id, False, None)
                     return local_path
                 except Exception:
                     return None
@@ -643,7 +668,7 @@ class Livedocs:
             local_path = s3_connector.download_file(
                 path=s3_path,
                 connector_id=connector_id,
-                get_connection_details=self.helper_get_s3_connection_details,
+                get_connection_details=_get_s3_connection_details,
                 preview=False,  # Download full file for query generation
                 connector_name=connector_name,
             )
@@ -657,7 +682,7 @@ class Livedocs:
             local_path = gdrive_connector.download_file(
                 file_path=gdrive_path,
                 connector_id=connector_id,
-                get_connection_details=self.helper_get_google_drive_connection_details,
+                get_connection_details=_get_google_drive_connection_details,
                 preview=False,  # Download full file for query generation
                 connector_name=connector_name,
             )
@@ -791,6 +816,16 @@ class Livedocs:
         offset=0,
         use_cache=True,
         table_metadata=None,
+        get_database_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        download_file: Callable[[str | None, str | None, bool | None, str | None], str]
+        | None = None,
+        get_s3_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        get_google_drive_connection_details: Callable[
+            [str], tuple[object, dict[str, Any]]
+        ]
+        | None = None,
     ) -> pl.DataFrame:
         """
         Gets a Polars table for a given datasource.
@@ -809,15 +844,39 @@ class Livedocs:
         with sentry_sdk.start_transaction(op="task", name="run table element"):
             datasource: ElementDataSource = json.loads(str_datasource)
 
+            if self.sdk_context == SDKContext.IPYTHON:
+                _get_database_details = self.helper_get_database_details
+                _get_s3_connection_details = self.helper_get_s3_connection_details
+                _get_google_drive_connection_details = (
+                    self.helper_get_google_drive_connection_details
+                )
+            else:
+                if get_database_details is None:
+                    raise ValueError("get_database_details is required")
+                _get_database_details = get_database_details
+                if get_s3_connection_details is None:
+                    raise ValueError("get_s3_connection_details is required")
+                _get_s3_connection_details = get_s3_connection_details
+                if get_google_drive_connection_details is None:
+                    raise ValueError("get_google_drive_connection_details is required")
+                _get_google_drive_connection_details = (
+                    get_google_drive_connection_details
+                )
+
             # Download file if needed for preview
-            file_path = self._prepare_file_for_query(datasource)
+            file_path = self._prepare_file_for_query(
+                datasource,
+                download_file,
+                _get_s3_connection_details,
+                _get_google_drive_connection_details,
+            )
 
             # Generate query with file_path and get_database_details for Snowflake
             query = get_query_for_datasource(
                 datasource,
                 None,
                 file_path=file_path,
-                get_database_details=self.helper_get_database_details,
+                get_database_details=_get_database_details,
             )
 
             query_span = sentry_sdk.start_span(name="run query")
@@ -837,7 +896,7 @@ class Livedocs:
             df, schema, cache_info = DatasourceManager.read(
                 query,
                 datasource,
-                self.helper_get_database_details,
+                _get_database_details,
                 schema=True,
                 use_cache=use_cache,
                 query_cache=self._query_cache,
