@@ -156,7 +156,6 @@ class Livedocs:
     #########################################################
     """
 
-    @livedocs_internal_instrument
     def set_var(self, key: str, value: str):
         """
         Sets a built-in variable.
@@ -170,7 +169,6 @@ class Livedocs:
             self._report_id, self._token, self._built_in_vars
         )
 
-    @livedocs_internal_instrument
     def get_var(self, key: str) -> str | None:
         """
         Gets the value of a built-in variable.
@@ -186,7 +184,6 @@ class Livedocs:
 
         return self._built_in_vars.get(key, None)
 
-    @livedocs_internal_instrument
     def unset_var(self, key: str):
         """
         Unsets a built-in variable.
@@ -200,7 +197,6 @@ class Livedocs:
                 self._report_id, self._token, self._built_in_vars
             )
 
-    @livedocs_internal_instrument
     def clear_vars(self):
         """
         Clears all built-in variables.
@@ -215,7 +211,6 @@ class Livedocs:
             self._report_id, self._token, self._built_in_vars
         )
 
-    @livedocs_internal_instrument
     def secrets(self, key: str, default_value: str = "") -> str:
         """
         Access user-defined secrets with default value if not found.
@@ -247,7 +242,6 @@ class Livedocs:
 
         return default_value
 
-    @livedocs_internal_instrument
     def download_file(
         self,
         file_name: str | None = None,
