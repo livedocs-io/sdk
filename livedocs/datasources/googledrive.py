@@ -499,7 +499,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
-        search_query: str | None = None,
         max_depth: int = 2,
     ) -> list[FileNode]:
         """
@@ -566,16 +565,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                         if it.get("mimeType") == "application/vnd.google-apps.folder":
                             bfs_collect(it["id"], depth + 1)
 
-            if search_query:
-                bfs_collect(folder_id, 0)
-                # Filter by search term (case-insensitive) here to reduce output
-                file_list = [
-                    f
-                    for f in file_list
-                    if search_query.lower() in f.get("name", "").lower()
-                ]
-            else:
-                bfs_collect(folder_id, 0)
+            bfs_collect(folder_id, 0)
 
             for file_item in file_list:
                 title = file_item.get("name", "")
@@ -737,6 +727,159 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return file_list[0]["id"]
         except Exception:
             return None
+
+    def search(
+        self,
+        search_query: str,
+        connector_id: str | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        refresh_token_callback: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+        max_results: int = 50,
+    ) -> list[FileNode]:
+        """
+        Search Google Drive files by name using the Drive search endpoint.
+
+        Args:
+            search_query: Substring to match against file names (case-insensitive).
+            connector_id: Google Drive connector ID.
+            get_connection_details: Callable to retrieve connector credentials.
+            refresh_token_callback: Optional callback to refresh tokens if expired.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of FileNode entries matching the query.
+        """
+        if not search_query or connector_id is None or get_connection_details is None:
+            return []
+
+        connector_info = self._get_connector_info_with_refresh(
+            connector_id, get_connection_details, refresh_token_callback
+        )
+        if connector_info is None:
+            return []
+
+        try:
+            service = self._create_google_drive_service(connector_info)
+        except Exception:
+            return []
+
+        # Build Drive query: name contains '<query>' and not trashed
+        escaped = search_query.replace("'", "\\'")
+        drive_query = f"name contains '{escaped}' and trashed = false"
+
+        nodes: list[FileNode] = []
+        page_token: str | None = None
+        fetched = 0
+        now = datetime.now(timezone.utc)
+
+        try:
+            while True:
+                page_size = min(100, max_results - fetched)
+                if page_size <= 0:
+                    break
+
+                response = (
+                    service.files()
+                    .list(
+                        q=drive_query,
+                        fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime)",
+                        pageSize=page_size,
+                        pageToken=page_token,
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                        corpora="allDrives",
+                    )
+                    .execute()
+                )
+                files = response.get("files", [])
+
+                for file_item in files:
+                    title = file_item.get("name", "")
+                    gdrive_file_id = file_item.get("id", "")
+                    mime_type = file_item.get("mimeType", "")
+                    is_directory = mime_type == "application/vnd.google-apps.folder"
+
+                    # Use name as path (search is not hierarchical)
+                    relative_path = title
+                    parent_id = None
+
+                    file_id = self._generate_file_id(connector_id, gdrive_file_id)
+
+                    modified_at = None
+                    created_at = None
+                    modified_date_str = file_item.get("modifiedTime")
+                    if modified_date_str:
+                        try:
+                            date_str = modified_date_str.replace("Z", "+00:00")
+                            modified_at = datetime.fromisoformat(date_str)
+                            if modified_at.tzinfo is None:
+                                modified_at = modified_at.replace(tzinfo=timezone.utc)
+                        except (ValueError, AttributeError, TypeError):
+                            pass
+
+                    created_date_str = file_item.get("createdTime")
+                    if created_date_str:
+                        try:
+                            date_str = created_date_str.replace("Z", "+00:00")
+                            created_at = datetime.fromisoformat(date_str)
+                            if created_at.tzinfo is None:
+                                created_at = created_at.replace(tzinfo=timezone.utc)
+                        except (ValueError, AttributeError, TypeError):
+                            pass
+                    if created_at is None:
+                        created_at = modified_at
+
+                    size = None
+                    if not is_directory:
+                        size_str = file_item.get("size")
+                        if size_str:
+                            try:
+                                size = int(size_str)
+                            except (ValueError, TypeError):
+                                size = None
+
+                    nodes.append(
+                        FileNode(
+                            id=file_id,
+                            name=title,
+                            type=FileNodeType.directory
+                            if is_directory
+                            else FileNodeType.file,
+                            mount_type=FileConnectorType.googledrive,
+                            connector_id=UUID(connector_id),
+                            path=relative_path,
+                            parent_id=parent_id,
+                            size=size,
+                            mime_type=mime_type if not is_directory else None,
+                            modified_at=modified_at,
+                            created_at=created_at,
+                            health=MountHealth(
+                                status=MountHealthStatus.connected,
+                                last_checked=now,
+                                error_message=None,
+                            ),
+                        )
+                    )
+
+                fetched += len(files)
+                page_token = response.get("nextPageToken")
+                if not page_token or fetched >= max_results:
+                    break
+
+        except Exception as e:
+            error_health = MountHealth(
+                status=MountHealthStatus.error,
+                last_checked=datetime.now(timezone.utc),
+                error_message=str(sanitize_sensitive_data(str(e))),
+            )
+            for node in nodes:
+                node.health = error_health
+
+        return nodes
 
     def delete_file(
         self,

@@ -1281,6 +1281,7 @@ class Livedocs:
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
+        max_results: int = 50,
     ):
         """
         Search across datasources.
@@ -1384,15 +1385,13 @@ class Livedocs:
         if search_all or source_type == SourceType.googledrive:
             for connector_info in _get_all_google_drive_connectors():
                 gdrive_connector = GoogleDriveDatasourceConnector()
-                nodes = gdrive_connector.list(
-                    path="",
+                nodes = gdrive_connector.search(
+                    search_query=query,
                     connector_id=connector_info["connector_id"],
                     get_connection_details=_get_google_drive_connection_details,
                     refresh_token_callback=_refresh_google_drive_token,
-                    search_query=query,
-                    max_depth=3,
+                    max_results=max_results,
                 )
-                # Filter by query (case-insensitive)
                 google_drive_nodes.extend(nodes)
 
         # Search workspace files and databases (via Core API)
