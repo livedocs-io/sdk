@@ -448,11 +448,14 @@ def _get_xlsx_sheet_nodes_from_path(
 
 @livedocs_internal_instrument
 def livedocs_internal_list_files(
-    report_id: str,
-    token: str,
+    report_id: str | None,
+    token: str | None,
     database_parent_id: str | None = None,
     search_string: str | None = None,
 ) -> ListPathResponse:
+    if report_id is None or token is None:
+        raise ValueError("Report ID and token are required in IPython context")
+
     CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
     if not CORE_URL:
         raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
