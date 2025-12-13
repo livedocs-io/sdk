@@ -124,21 +124,9 @@ def get_query_for_datasource(
     Returns:
         SQL query string or None
     """
-    # Supported file extensions for direct querying in DuckDB
-    SUPPORTED_FILE_EXTENSIONS = {
-        ".csv",
-        ".tsv",
-        ".gz",
-        ".parquet",
-        ".json",
-        ".duckdb",
-        ".ddb",
-        ".xls",
-        ".xlsx",
-        ".sqlite",
-    }
-
     limit_clause = f" LIMIT {limit}" if limit is not None else ""
+
+    supported_exts = get_duckdb_supported_file_extensions()
 
     match datasource["source_type"]:
         case ElementDatasourceType.dataframe.value:
@@ -216,14 +204,10 @@ def get_query_for_datasource(
                     file_extension = "." + file_path.rsplit(".", 1)[1].lower()
 
                 # Validate file extension
-                if (
-                    file_extension is None
-                    or file_extension not in SUPPORTED_FILE_EXTENSIONS
-                ):
-                    supported_exts = ", ".join(sorted(SUPPORTED_FILE_EXTENSIONS))
+                if file_extension is None or file_extension not in supported_exts:
                     raise ValueError(
                         f"Unsupported file extension for direct querying: {file_extension or 'no extension'}. "
-                        f"Supported extensions: {supported_exts}"
+                        f"Supported extensions: {', '.join(sorted(supported_exts))}"
                     )
 
                 # Escape single quotes in file path to prevent SQL injection
@@ -248,14 +232,10 @@ def get_query_for_datasource(
                 file_extension = "." + file_name.rsplit(".", 1)[1].lower()
 
             # Validate file extension
-            if (
-                file_extension is None
-                or file_extension not in SUPPORTED_FILE_EXTENSIONS
-            ):
-                supported_exts = ", ".join(sorted(SUPPORTED_FILE_EXTENSIONS))
+            if file_extension is None or file_extension not in supported_exts:
                 raise ValueError(
                     f"Unsupported file extension for querying: {file_extension or 'no extension'}. "
-                    f"Supported extensions: {supported_exts}"
+                    f"Supported extensions: {', '.join(sorted(supported_exts))}"
                 )
 
             # Use appropriate query method based on file type
@@ -439,3 +419,21 @@ def _download_file(
         raise RuntimeError(
             f"An error occurred during download of {file_description}: {e}"
         ) from e
+
+
+def get_duckdb_supported_file_extensions() -> set[str]:
+    """
+    Returns the set of file extensions DuckDB can query directly via read_* functions.
+    """
+    return {
+        ".csv",
+        ".tsv",
+        ".gz",
+        ".parquet",
+        ".json",
+        ".duckdb",
+        ".ddb",
+        ".xls",
+        ".xlsx",
+        ".sqlite",
+    }
