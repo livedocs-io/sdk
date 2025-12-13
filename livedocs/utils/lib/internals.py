@@ -2,12 +2,11 @@ import os
 import re
 import tempfile
 from datetime import datetime, timezone
-from functools import lru_cache, wraps
+from functools import lru_cache
 from typing import Any
 from uuid import UUID, uuid5
 
 import requests
-import sentry_sdk
 
 from livedocs.types import (
     FileAction,
@@ -55,24 +54,6 @@ def livedocs_internal_sanitize_sensitive_data(message: str | None) -> str:
     return sanitized
 
 
-def livedocs_internal_instrument(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            sanitized_args = tuple(
-                livedocs_internal_sanitize_sensitive_data(str(arg)) for arg in e.args
-            )
-            if sanitized_args:
-                e.args = sanitized_args
-            sentry_sdk.capture_exception(e)
-            raise  # Re-raise the exception after capturing it
-
-    return wrapper
-
-
-@livedocs_internal_instrument
 def livedocs_internal_persist_built_in_vars(
     report_id: str | None, token: str | None, vars: dict[str, str]
 ) -> dict[str, str]:
@@ -96,7 +77,6 @@ def livedocs_internal_persist_built_in_vars(
         )
 
 
-@livedocs_internal_instrument
 def livedocs_internal_fetch_credentials(report_id: str, token: str) -> dict[str, str]:
     CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
     if not CORE_URL:
@@ -115,7 +95,6 @@ def livedocs_internal_fetch_credentials(report_id: str, token: str) -> dict[str,
         )
 
 
-@livedocs_internal_instrument
 def livedocs_internal_file_operation(
     report_id: str,
     token: str,
@@ -446,7 +425,6 @@ def _get_xlsx_sheet_nodes_from_path(
     return nodes
 
 
-@livedocs_internal_instrument
 def livedocs_internal_list_files(
     report_id: str | None,
     token: str | None,
@@ -498,35 +476,10 @@ def livedocs_internal_list_files(
         raise Exception(f"Failed to list path. Status code: {response.status_code}")
 
 
-def livedocs_internal_setup_sentry():
-    """
-    Initializes Sentry for error tracking and performance monitoring.
-    """
-    dsn = os.getenv("LIVEDOCS_PY_SDK_SENTRY_DSN")
-    if not dsn:
-        return
-
-    try:
-        sentry_sdk.init(
-            dsn=dsn,
-            traces_sample_rate=1
-            if os.getenv("LIVEDOCS_APP_ENV") != "production"
-            else 0.2,
-            profiles_sample_rate=1
-            if os.getenv("LIVEDOCS_APP_ENV") != "production"
-            else 0.2,
-            environment=os.getenv("LIVEDOCS_APP_ENV"),
-        )
-    except Exception as e:
-        raise RuntimeError("Failed to initialize Sentry") from e
-
-
 __all__ = [
     "livedocs_internal_persist_built_in_vars",
-    "livedocs_internal_instrument",
     "livedocs_internal_fetch_credentials",
     "livedocs_internal_sanitize_sensitive_data",
     "livedocs_internal_fetch_file_manifest",
     "livedocs_internal_list_files",
-    "livedocs_internal_setup_sentry",
 ]

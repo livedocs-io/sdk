@@ -9,7 +9,6 @@ from typing import Any, Callable, Literal, cast
 
 import polars as pl
 import requests
-import sentry_sdk
 from jinja2 import Template
 
 from livedocs.datasources.googledrive import (
@@ -64,10 +63,8 @@ from livedocs.utils.lib.cache import QueryCache
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
     livedocs_internal_file_operation,
-    livedocs_internal_instrument,
     livedocs_internal_list_files,
     livedocs_internal_persist_built_in_vars,
-    livedocs_internal_setup_sentry,
 )
 from livedocs.utils.lib.vega import create_vega_spec
 from livedocs.utils.runtime_fs import (
@@ -98,7 +95,6 @@ class Livedocs:
         """
         Creates the Livedocs instance, setting up necessary components and configurations.
         """
-        livedocs_internal_setup_sentry()
         _setup_dirs()
 
         self._config: LivedocsConfig = config or LivedocsConfig()
@@ -136,27 +132,23 @@ class Livedocs:
             token (str): The session token.
             client_id_token (str, optional): The client ID token.
         """
-        with sentry_sdk.start_transaction(op="task", name="initialize sdk"):
-            if not client_id_token:
-                sentry_sdk.set_tag("report_id", report_id)
-                self._report_id = report_id
-                self._token = token
-                span = sentry_sdk.start_span(name="fetch credentials")
-                self._credential_store = self._config.credential_store_factory(
-                    report_id, token
-                )
-                bundle = self._credential_store.load()
-                _ = span.finish()
-                self.is_initialized = True
+        if not client_id_token:
+            self._report_id = report_id
+            self._token = token
+            self._credential_store = self._config.credential_store_factory(
+                report_id, token
+            )
+            bundle = self._credential_store.load()
+            self.is_initialized = True
 
-                self._secrets = {
-                    key: secret for key, secret in bundle.workspace_secrets.items()
-                }
-                self._built_in_vars = {**bundle.built_in_vars}
-                self._query_cache = self._config.query_cache_factory(report_id, token)
-            else:
-                self.is_initialized = True
-                self.sdk_context = SDKContext.RELAY
+            self._secrets = {
+                key: secret for key, secret in bundle.workspace_secrets.items()
+            }
+            self._built_in_vars = {**bundle.built_in_vars}
+            self._query_cache = self._config.query_cache_factory(report_id, token)
+        else:
+            self.is_initialized = True
+            self.sdk_context = SDKContext.RELAY
 
     """
     #########################################################
@@ -338,8 +330,6 @@ class Livedocs:
     #########################################################
     """
 
-    @livedocs_internal_instrument
-    @sentry_sdk.trace
     def query(
         self,
         query: str,
@@ -366,99 +356,89 @@ class Livedocs:
         Returns:
             tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
         """
-        with sentry_sdk.start_transaction(op="task", name="run query"):
-            parsed = json.loads(str_datasource)
-            if not isinstance(parsed, dict) or not parsed:
-                raise ValueError(
-                    "No datasource selected. Please choose a datasource from the dropdown before running your query."
-                )
-            if "source_type" not in parsed:
-                raise ValueError(
-                    "Invalid datasource: missing 'source_type'. Please choose a datasource from the dropdown before running your query."
-                )
-            datasource = cast(ElementDataSource, cast(object, parsed))
+        parsed = json.loads(str_datasource)
 
-            # Plug in the Jinja variables
-            final_query = self.helper_render_jinja_template(query, context)
-
-            # For file datasources, materialize the file locally (same pathing as preview)
-            file_path: str | None = None
-            source_type = ElementDatasourceType(datasource["source_type"])
-            if source_type == ElementDatasourceType.file:
-                file_path = self._prepare_file_for_query(datasource)
-
-            # Run the actual queries
-            query_span = sentry_sdk.start_span(name="run query")
-            df: pl.DataFrame = pl.DataFrame()
-
-            # Prepare kwargs for DatasourceManager
-            kwargs: dict[str, Any] = {}
-            if source_type == ElementDatasourceType.file:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["download_file"] = self.download_file
-                if file_path is not None:
-                    kwargs["file_path"] = file_path
-                kwargs["get_s3_connection_details"] = (
-                    self.helper_get_s3_connection_details
-                )
-                kwargs["get_google_drive_connection_details"] = (
-                    self.helper_get_google_drive_connection_details
-                )
-            elif source_type == ElementDatasourceType.dataframe:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["dataframe"] = dataframe
-
-            df, schema, cache_info = DatasourceManager.read(
-                final_query,
-                datasource,
-                self.helper_get_database_details,
-                schema=True,
-                use_cache=use_cache,
-                query_cache=self._query_cache,
-                **kwargs,
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError(
+                "No datasource selected. Please choose a datasource from the dropdown before running your query."
             )
-            _ = query_span.finish()
-
-            # Apply table operations
-            applied_metadata = None
-            additional_metadata = {}
-            if table_metadata:
-                df, additional_metadata = apply_table_operations(df, table_metadata)
-                applied_metadata = table_metadata
-
-            # Prepare paginated results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            df_slice = df.slice(offset, limit)
-
-            # Compress and encode response
-            result = QueryResult(
-                data=df_slice,
-                metadata=QueryResultMetadata(
-                    limit=limit,
-                    offset=offset,
-                    total_rows=len(df),
-                    cache_info=cache_info,
-                    applied_metadata=applied_metadata,
-                    calculation_results=additional_metadata.get("calculation_results"),
-                ),
+        if "source_type" not in parsed:
+            raise ValueError(
+                "Invalid datasource: missing 'source_type'. Please choose a datasource from the dropdown before running your query."
             )
-            payload = LivedocsResult(result)
-            _ = post_span.finish()
+        datasource = cast(ElementDataSource, cast(object, parsed))
 
-            return (df, payload)
+        # Plug in the Jinja variables
+        final_query = self.helper_render_jinja_template(query, context)
 
-    @livedocs_internal_instrument
-    @sentry_sdk.trace
+        # For file datasources, materialize the file locally (same pathing as preview)
+        file_path: str | None = None
+        source_type = ElementDatasourceType(datasource["source_type"])
+        if source_type == ElementDatasourceType.file:
+            file_path = self._prepare_file_for_query(datasource)
+
+        # Run the actual queries
+        df: pl.DataFrame = pl.DataFrame()
+
+        # Prepare kwargs for DatasourceManager
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["download_file"] = self.download_file
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+            kwargs["get_s3_connection_details"] = self.helper_get_s3_connection_details
+            kwargs["get_google_drive_connection_details"] = (
+                self.helper_get_google_drive_connection_details
+            )
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["dataframe"] = dataframe
+
+        df, schema, cache_info = DatasourceManager.read(
+            final_query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
+        _ = query_span.finish()
+
+        # Apply table operations
+        applied_metadata = None
+        additional_metadata = {}
+        if table_metadata:
+            df, additional_metadata = apply_table_operations(df, table_metadata)
+            applied_metadata = table_metadata
+
+        # Prepare paginated results
+        df_slice = df.slice(offset, limit)
+
+        # Compress and encode response
+        result = QueryResult(
+            data=df_slice,
+            metadata=QueryResultMetadata(
+                limit=limit,
+                offset=offset,
+                total_rows=len(df),
+                cache_info=cache_info,
+                applied_metadata=applied_metadata,
+                calculation_results=additional_metadata.get("calculation_results"),
+            ),
+        )
+        payload = LivedocsResult(result)
+
+        return (df, payload)
+
     def save_to_database(self, dataframe: pl.DataFrame, str_save_config: str):
-        with sentry_sdk.start_transaction(op="task", name="save to database"):
-            save_config: DBSaveConfig = json.loads(str_save_config)
-            result = DatasourceManager.write(
-                dataframe, save_config, self.helper_get_database_details
-            )
-            return result
+        save_config: DBSaveConfig = json.loads(str_save_config)
+        result = DatasourceManager.write(
+            dataframe, save_config, self.helper_get_database_details
+        )
+        return result
 
-    @livedocs_internal_instrument
-    @sentry_sdk.trace
     def process_raw_text(self, str_src: str, context: dict) -> str:
         """
         Processes raw text by plugging in Jinja variables.
@@ -470,11 +450,9 @@ class Livedocs:
         Returns:
             str: The processed HTML text.
         """
-        with sentry_sdk.start_transaction(op="task", name="run text element"):
-            src = json.loads(str_src)
-            return self.helper_render_jinja_template(src["html"], context)
+        src = json.loads(str_src)
+        return self.helper_render_jinja_template(src["html"], context)
 
-    @livedocs_internal_instrument
     def enrich_prompt(self, system, user, context: dict):
         enriched_prompt = {
             "system": self.helper_render_jinja_template(system, context),
@@ -690,8 +668,6 @@ class Livedocs:
 
         return None
 
-    @livedocs_internal_instrument
-    @sentry_sdk.trace
     def _get_vega_spec(
         self,
         settings_str: str,
@@ -711,103 +687,90 @@ class Livedocs:
         Returns:
             dict: The Vega specification as a base64 encoded string.
         """
-        with sentry_sdk.start_transaction(op="task", name="run chart element"):
-            settings: Spec = json.loads(settings_str)
-            datasource: ElementDataSource = json.loads(datasource_str)
+        settings: Spec = json.loads(settings_str)
+        datasource: ElementDataSource = json.loads(datasource_str)
 
-            # Run actual span
-            query_span = sentry_sdk.start_span(name="run query")
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(datasource)
 
-            # Download file if needed for preview
-            file_path = self._prepare_file_for_query(datasource)
+        # Generate query with file_path and get_database_details for Snowflake
+        query = get_query_for_datasource(
+            datasource,
+            50000,
+            file_path=file_path,
+            get_database_details=self.helper_get_database_details,
+        )
 
-            # Generate query with file_path and get_database_details for Snowflake
-            query = get_query_for_datasource(
-                datasource,
-                50000,
-                file_path=file_path,
-                get_database_details=self.helper_get_database_details,
-            )
+        # Prepare kwargs for DatasourceManager
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["download_file"] = self.download_file
+            # Pass file_path if it was already downloaded (Case 2: preview scenario)
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["dataframe"] = dataframe
 
-            # Prepare kwargs for DatasourceManager
-            source_type = ElementDatasourceType(datasource["source_type"])
-            kwargs: dict[str, Any] = {}
-            if source_type == ElementDatasourceType.file:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["download_file"] = self.download_file
-                # Pass file_path if it was already downloaded (Case 2: preview scenario)
-                if file_path is not None:
-                    kwargs["file_path"] = file_path
-            elif source_type == ElementDatasourceType.dataframe:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["dataframe"] = dataframe
+        df, schema, cache_info = DatasourceManager.read(
+            query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
 
-            df, schema, cache_info = DatasourceManager.read(
-                query,
-                datasource,
-                self.helper_get_database_details,
-                schema=True,
-                use_cache=use_cache,
-                query_cache=self._query_cache,
-                **kwargs,
-            )
-            query_span.finish()
+        df = apply_chart_filters(df, schema, settings, chart_metadata)
 
-            filter_span = sentry_sdk.start_span(name="run apply_chart_filters")
-            df = apply_chart_filters(df, schema, settings, chart_metadata)
-            filter_span.finish()
-
-            # Find how many data points we have
-            total_data_points = len(df) * len(df.columns)
-            vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
-            MAX_POINTS = 50000
-            if total_data_points > MAX_POINTS:
-                # Limit the dataframe so that rendered points stay within the cap
-                num_cols = max(1, len(df.columns))
-                max_rows = max(1, MAX_POINTS // num_cols)
-                try:
-                    df_limited = df.slice(0, max_rows)
-                    # Build a normal spec from the limited data
-                    limited_spec_json = create_vega_spec(df_limited, settings, schema)
-                    # Change status to signal warning while still rendering the chart
-                    limited_spec = json.loads(limited_spec_json)
-                    limited_spec["status"] = "OVERLOADED"
-                    validated_spec = VegaSpec(**limited_spec)
-                    vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
-                except Exception:
-                    style_settings = settings.get("styleSettings", {})
-                    empty_chart = {
-                        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                        "usermeta": {
-                            "styleSettings": style_settings,
-                            "chartType": "main",
-                        },
+        # Find how many data points we have
+        total_data_points = len(df) * len(df.columns)
+        MAX_POINTS = 50000
+        if total_data_points > MAX_POINTS:
+            # Limit the dataframe so that rendered points stay within the cap
+            num_cols = max(1, len(df.columns))
+            max_rows = max(1, MAX_POINTS // num_cols)
+            try:
+                df_limited = df.slice(0, max_rows)
+                # Build a normal spec from the limited data
+                limited_spec_json = create_vega_spec(df_limited, settings, schema)
+                # Change status to signal warning while still rendering the chart
+                limited_spec = json.loads(limited_spec_json)
+                limited_spec["status"] = "OVERLOADED"
+                validated_spec = VegaSpec(**limited_spec)
+                vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
+            except Exception:
+                style_settings = settings.get("styleSettings", {})
+                empty_chart = {
+                    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+                    "usermeta": {
+                        "styleSettings": style_settings,
+                        "chartType": "main",
+                    },
+                }
+                validated_spec = VegaSpec(
+                    **{
+                        "spec": json.dumps(empty_chart, separators=(",", ":")),
+                        "schema": schema,
+                        "status": "OVERLOADED",
                     }
-                    validated_spec = VegaSpec(
-                        **{
-                            "spec": json.dumps(empty_chart, separators=(",", ":")),
-                            "schema": schema,
-                            "status": "OVERLOADED",
-                        }
-                    )
-                    vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
-            else:
-                vega_spec_json_str = create_vega_spec(df, settings, schema)
-            vega_span.finish()
+                )
+                vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
+        else:
+            vega_spec_json_str = create_vega_spec(df, settings, schema)
 
-            # Post-process the results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
+        # Post-process the results
+        compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
 
-            result = ChartResult(data=encoded, cache_info=cache_info)
-            payload = LivedocsResult(result)
-            post_span.finish()
+        result = ChartResult(data=encoded, cache_info=cache_info)
+        payload = LivedocsResult(result)
 
-            return payload
+        return payload
 
-    @livedocs_internal_instrument
-    @sentry_sdk.trace
     def _get_table_response(
         self,
         str_datasource: str,
@@ -841,96 +804,86 @@ class Livedocs:
         Returns:
             pl.DataFrame: The resulting Polars DataFrame.
         """
-        with sentry_sdk.start_transaction(op="task", name="run table element"):
-            datasource: ElementDataSource = json.loads(str_datasource)
+        datasource: ElementDataSource = json.loads(str_datasource)
 
-            if self.sdk_context == SDKContext.IPYTHON:
-                _get_database_details = self.helper_get_database_details
-                _get_s3_connection_details = self.helper_get_s3_connection_details
-                _get_google_drive_connection_details = (
-                    self.helper_get_google_drive_connection_details
-                )
-            else:
-                if get_database_details is None:
-                    raise ValueError("get_database_details is required")
-                _get_database_details = get_database_details
-                if get_s3_connection_details is None:
-                    raise ValueError("get_s3_connection_details is required")
-                _get_s3_connection_details = get_s3_connection_details
-                if get_google_drive_connection_details is None:
-                    raise ValueError("get_google_drive_connection_details is required")
-                _get_google_drive_connection_details = (
-                    get_google_drive_connection_details
-                )
-
-            # Download file if needed for preview
-            file_path = self._prepare_file_for_query(
-                datasource,
-                download_file,
-                _get_s3_connection_details,
-                _get_google_drive_connection_details,
+        if self.sdk_context == SDKContext.IPYTHON:
+            _get_database_details = self.helper_get_database_details
+            _get_s3_connection_details = self.helper_get_s3_connection_details
+            _get_google_drive_connection_details = (
+                self.helper_get_google_drive_connection_details
             )
+        else:
+            if get_database_details is None:
+                raise ValueError("get_database_details is required")
+            _get_database_details = get_database_details
+            if get_s3_connection_details is None:
+                raise ValueError("get_s3_connection_details is required")
+            _get_s3_connection_details = get_s3_connection_details
+            if get_google_drive_connection_details is None:
+                raise ValueError("get_google_drive_connection_details is required")
+            _get_google_drive_connection_details = get_google_drive_connection_details
 
-            # Generate query with file_path and get_database_details for Snowflake
-            query = get_query_for_datasource(
-                datasource,
-                None,
-                file_path=file_path,
-                get_database_details=_get_database_details,
-            )
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(
+            datasource,
+            download_file,
+            _get_s3_connection_details,
+            _get_google_drive_connection_details,
+        )
 
-            query_span = sentry_sdk.start_span(name="run query")
-            # Prepare kwargs for DatasourceManager
-            source_type = ElementDatasourceType(datasource["source_type"])
-            kwargs: dict[str, Any] = {}
-            if source_type == ElementDatasourceType.file:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["download_file"] = self.download_file
-                # Pass file_path if it was already downloaded
-                if file_path is not None:
-                    kwargs["file_path"] = file_path
-            elif source_type == ElementDatasourceType.dataframe:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["dataframe"] = dataframe
+        # Generate query with file_path and get_database_details for Snowflake
+        query = get_query_for_datasource(
+            datasource,
+            None,
+            file_path=file_path,
+            get_database_details=_get_database_details,
+        )
 
-            df, schema, cache_info = DatasourceManager.read(
-                query,
-                datasource,
-                _get_database_details,
-                schema=True,
-                use_cache=use_cache,
-                query_cache=self._query_cache,
-                **kwargs,
-            )
-            query_span.finish()
+        # Prepare kwargs for DatasourceManager
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["download_file"] = self.download_file
+            # Pass file_path if it was already downloaded
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["dataframe"] = dataframe
 
-            # Apply table operations
-            applied_metadata = None
-            additional_metadata = {}
-            if table_metadata:
-                df, additional_metadata = apply_table_operations(df, table_metadata)
-                applied_metadata = table_metadata
+        df, schema, cache_info = DatasourceManager.read(
+            query,
+            datasource,
+            _get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
+        # Apply table operations
+        applied_metadata = None
+        additional_metadata = {}
+        if table_metadata:
+            df, additional_metadata = apply_table_operations(df, table_metadata)
+            applied_metadata = table_metadata
 
-            # Prepare paginated results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            df_slice = df.slice(offset, limit)
-            result = QueryResult(
-                data=df_slice,
-                metadata=QueryResultMetadata(
-                    limit=limit,
-                    offset=offset,
-                    total_rows=len(df),
-                    cache_info=cache_info,
-                    applied_metadata=applied_metadata,
-                    calculation_results=additional_metadata.get("calculation_results"),
-                ),
-            )
-            payload = LivedocsResult(result)
-            post_span.finish()
-            return payload
+        # Prepare paginated results
+        df_slice = df.slice(offset, limit)
+        result = QueryResult(
+            data=df_slice,
+            metadata=QueryResultMetadata(
+                limit=limit,
+                offset=offset,
+                total_rows=len(df),
+                cache_info=cache_info,
+                applied_metadata=applied_metadata,
+                calculation_results=additional_metadata.get("calculation_results"),
+            ),
+        )
+        payload = LivedocsResult(result)
+        return payload
 
-    @livedocs_internal_instrument
-    @sentry_sdk.trace
     def _get_chart_schema(
         self, datasource_str: str, dataframe: pl.DataFrame = None
     ) -> dict:
@@ -944,82 +897,75 @@ class Livedocs:
         Returns:
             dict: The schema as a base64 encoded string.
         """
-        with sentry_sdk.start_transaction(op="task", name="get schema for chart"):
-            datasource: ElementDataSource = json.loads(datasource_str)
+        datasource: ElementDataSource = json.loads(datasource_str)
 
-            query_span = sentry_sdk.start_span(name="run query")
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(datasource)
 
-            # Download file if needed for preview
-            file_path = self._prepare_file_for_query(datasource)
+        # Generate query with file_path and get_database_details for Snowflake
+        query = get_query_for_datasource(
+            datasource,
+            None,
+            file_path=file_path,
+            get_database_details=self.helper_get_database_details,
+        )
+        if query is None:
+            raise ValueError("Query is required")
 
-            # Generate query with file_path and get_database_details for Snowflake
-            query = get_query_for_datasource(
-                datasource,
-                None,
-                file_path=file_path,
-                get_database_details=self.helper_get_database_details,
-            )
-            if query is None:
-                raise ValueError("Query is required")
+        # Prepare kwargs for DatasourceManager based on datasource type
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
 
-            # Prepare kwargs for DatasourceManager based on datasource type
-            source_type = ElementDatasourceType(datasource["source_type"])
-            kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["download_file"] = self.download_file
+            # Pass file_path if it was already downloaded (Case 2: preview scenario)
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb.conn
+            if dataframe is not None and datasource is not None:
+                self._duckdb.conn.register(
+                    datasource["dataframe_info"]["df_name"], dataframe
+                )
 
-            if source_type == ElementDatasourceType.file:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                kwargs["download_file"] = self.download_file
-                # Pass file_path if it was already downloaded (Case 2: preview scenario)
-                if file_path is not None:
-                    kwargs["file_path"] = file_path
-            elif source_type == ElementDatasourceType.dataframe:
-                kwargs["duckdb_conn"] = self._duckdb.conn
-                if dataframe is not None and datasource is not None:
-                    self._duckdb.conn.register(
-                        datasource["dataframe_info"]["df_name"], dataframe
-                    )
+        # Execute query using DatasourceManager (no caching for schema-only queries)
+        _, schema, _ = DatasourceManager.read(
+            query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=False,
+            query_cache=None,
+            **kwargs,
+        )
 
-            # Execute query using DatasourceManager (no caching for schema-only queries)
-            _, schema, _ = DatasourceManager.read(
-                query,
-                datasource,
-                self.helper_get_database_details,
-                schema=True,
-                use_cache=False,
-                query_cache=None,
-                **kwargs,
-            )
-            query_span.finish()
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "styleSettings": {},
+                "chartType": "main",
+            },
+        }
 
-            post_span = sentry_sdk.start_span(name="post-processing")
-            empty_chart = {
-                "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                "usermeta": {
-                    "styleSettings": {},
-                    "chartType": "main",
-                },
-            }
+        empty_spec_with_schema = json.dumps(
+            {
+                "spec": json.dumps(empty_chart, separators=(",", ":")),
+                "schema": schema,
+                "status": "EMPTY",
+            },
+            separators=(",", ":"),
+        )
+        compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
 
-            empty_spec_with_schema = json.dumps(
-                {
-                    "spec": json.dumps(empty_chart, separators=(",", ":")),
-                    "schema": schema,
-                    "status": "EMPTY",
-                },
-                separators=(",", ":"),
-            )
-            compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
+        # Create empty cache info for schema requests
+        empty_cache_info = CacheInfo(id="", status=CacheStatus.MISS)
+        result = ChartResult(data=encoded, cache_info=empty_cache_info)
+        payload = LivedocsResult(result)
 
-            # Create empty cache info for schema requests
-            empty_cache_info = CacheInfo(id="", status=CacheStatus.MISS)
-            result = ChartResult(data=encoded, cache_info=empty_cache_info)
-            payload = LivedocsResult(result)
-            _ = post_span.finish()
+        return payload
 
-            return payload
-
-    @livedocs_internal_instrument
     def process_single_value(self, config: str, context: dict = None) -> dict:
         """
         Process a SingleValue element with formatting and comparison calculations
@@ -1040,7 +986,6 @@ class Livedocs:
     #########################################################
     """
 
-    @livedocs_internal_instrument
     def list_nodes(
         self,
         path_or_parent_id: str | None = None,
@@ -1265,7 +1210,6 @@ class Livedocs:
                 "Invalid parameters: path_or_parent_id and source_type are required."
             )
 
-    @livedocs_internal_instrument
     def search_nodes(
         self,
         query: str,
@@ -1418,7 +1362,6 @@ class Livedocs:
 
         return nodes
 
-    @livedocs_internal_instrument
     def get_file_url(
         self,
         source_type: SourceType,
@@ -1532,7 +1475,6 @@ class Livedocs:
         else:
             raise ValueError(f"Unsupported source type: {source_type}")
 
-    @livedocs_internal_instrument
     def upload_runtime_file(
         self,
         path: str,
@@ -1615,7 +1557,6 @@ class Livedocs:
                     "RelayImplementationError: Upload runtime file to workspace is not supported in relay context"
                 )
 
-    @livedocs_internal_instrument
     def delete_file(
         self,
         source_type: SourceType,
@@ -1706,7 +1647,6 @@ class Livedocs:
         else:
             raise ValueError(f"Unsupported source type: {source_type}")
 
-    @livedocs_internal_instrument
     def rename_file(
         self,
         source_type: SourceType,
