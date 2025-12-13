@@ -56,7 +56,6 @@ from livedocs.utils.common import (
     _download_file,
     _setup_dirs,
     get_query_for_datasource,
-    middleman_debug,
     serializer,
 )
 from livedocs.utils.lib.cache import QueryCache
@@ -1309,14 +1308,12 @@ class Livedocs:
         if search_all or source_type == SourceType.s3bucket:
             for connector_info in _get_all_s3_connectors():
                 s3_connector = S3DatasourceConnector()
-                nodes = s3_connector.list(
-                    path="",
+                nodes = s3_connector.search(
+                    search_query=query,
                     connector_id=connector_info["connector_id"],
                     get_connection_details=_get_s3_connection_details,
-                    search_query=query,
-                    max_depth=3,
+                    max_results=max_results,
                 )
-                # Filter by query (case-insensitive)
                 s3_nodes.extend(nodes)
 
         # Search Google Drive

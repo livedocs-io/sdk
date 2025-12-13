@@ -112,6 +112,52 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         parent = "/".join(path.split("/")[:-1])
         return parent if parent else None
 
+    @staticmethod
+    def _guess_mime_type(path: str) -> str | None:
+        """
+        Best-effort MIME type detection based on file extension.
+        """
+        name = os.path.basename(path)
+        guessed_type, _ = mimetypes.guess_type(name)
+        if guessed_type:
+            return guessed_type
+
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        data_format_types = {
+            "parquet": "application/vnd.apache.parquet",
+            "avro": "application/avro",
+            "feather": "application/vnd.apache.arrow.file",
+            "arrow": "application/vnd.apache.arrow.file",
+            "gpkg": "application/geopackage+sqlite3",
+            "geojson": "application/geo+json",
+            "shp": "application/x-shapefile",
+            "kml": "application/vnd.google-earth.kml+xml",
+            "kmz": "application/vnd.google-earth.kmz",
+        }
+        return data_format_types.get(ext)
+
+    @staticmethod
+    def _strip_bucket_and_prefix(
+        full_path: str, bucket_name: str, path_prefix_clean: str
+    ) -> str:
+        """
+        Remove bucket name and path_prefix from a full S3 path and return a relative key.
+        """
+        # Drop scheme if present
+        if full_path.startswith("s3://"):
+            full_path = full_path[len("s3://") :]
+
+        # Remove leading bucket name
+        bucket_prefix = f"{bucket_name}/"
+        if full_path.startswith(bucket_prefix):
+            full_path = full_path[len(bucket_prefix) :]
+
+        # Remove configured path prefix
+        if path_prefix_clean and full_path.startswith(path_prefix_clean):
+            full_path = full_path[len(path_prefix_clean) :]
+
+        return full_path.lstrip("/")
+
     def _list_xlsx_sheets(
         self,
         path: str,
@@ -178,6 +224,145 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                     ),
                 )
             )
+
+        return nodes
+
+    def search(
+        self,
+        search_query: str,
+        connector_id: str | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        max_results: int = 200,
+    ) -> list[FileNode]:
+        """
+        Search files in S3 by name using a glob pattern (non-recursive list kept separate).
+
+        Args:
+            search_query: Substring to match in file names.
+            connector_id: S3 connector ID.
+            get_connection_details: Callable to retrieve connector credentials.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of FileNode objects matching the query.
+        """
+        if not search_query or connector_id is None or get_connection_details is None:
+            return []
+
+        try:
+            _, connector_info_dict = get_connection_details(connector_id)
+            connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
+        except (KeyError, TypeError, ValueError):
+            return []
+
+        s3_fs = None
+        now = datetime.now(timezone.utc)
+        nodes: list[FileNode] = []
+
+        try:
+            s3_fs = self._create_s3_filesystem(connector_info)
+            bucket_name = connector_info["bucket_name"]
+            path_prefix_clean = connector_info.get("path_prefix", "").rstrip("/")
+
+            # Build glob pattern to search across connector scope (similar to previous logic)
+            if path_prefix_clean:
+                glob_prefix = f"{bucket_name}/{path_prefix_clean}"
+            else:
+                glob_prefix = f"{bucket_name}"
+
+            pattern = f"{glob_prefix}/**/*{search_query}*"
+            raw = s3_fs.glob(pattern, detail=True, recursive=True)
+
+            items: list[tuple[str, Any]] = []
+            if isinstance(raw, dict):
+                items = list(raw.items())
+            elif isinstance(raw, list):
+                for entry in raw:
+                    if isinstance(entry, dict):
+                        path_candidate = (
+                            entry.get("Key")
+                            or entry.get("name")
+                            or entry.get("path")
+                            or entry.get("key")
+                        )
+                        items.append((path_candidate, entry))
+                    else:
+                        items.append((entry, {}))
+
+            for item_key, item_detail in items:
+                if not item_key:
+                    continue
+
+                # Respect max_results
+                if len(nodes) >= max_results:
+                    break
+
+                is_directory = item_key.endswith("/") or (
+                    isinstance(item_detail, dict)
+                    and item_detail.get("type") == "directory"
+                )
+
+                # Skip directories
+                if is_directory:
+                    continue
+
+                relative_path = self._strip_bucket_and_prefix(
+                    item_key, bucket_name, path_prefix_clean
+                )
+                parent_path = self._get_parent_path(relative_path)
+
+                size = None
+                if isinstance(item_detail, dict):
+                    size_raw = item_detail.get("Size") or item_detail.get("size")
+                    if size_raw is not None:
+                        try:
+                            size = int(size_raw)
+                        except (ValueError, TypeError):
+                            size = None
+
+                modified_at = None
+                if isinstance(item_detail, dict):
+                    last_modified = item_detail.get("LastModified")
+                    if isinstance(last_modified, datetime):
+                        modified_at = last_modified
+
+                file_id = self._generate_file_id(connector_id, relative_path)
+                parent_id = (
+                    self._generate_file_id(connector_id, parent_path)
+                    if parent_path
+                    else None
+                )
+
+                nodes.append(
+                    FileNode(
+                        id=file_id,
+                        name=relative_path.split("/")[-1],
+                        type=FileNodeType.file,
+                        mount_type=FileConnectorType.s3bucket,
+                        connector_id=UUID(connector_id),
+                        path=relative_path,
+                        parent_id=parent_id,
+                        size=size,
+                        mime_type=self._guess_mime_type(relative_path),
+                        modified_at=modified_at,
+                        created_at=None,
+                        health=MountHealth(
+                            status=MountHealthStatus.connected,
+                            last_checked=now,
+                            error_message=None,
+                        ),
+                    )
+                )
+
+        except Exception as e:
+            error_health = MountHealth(
+                status=MountHealthStatus.error,
+                last_checked=datetime.now(timezone.utc),
+                error_message=str(sanitize_sensitive_data(str(e))),
+            )
+            for node in nodes:
+                node.health = error_health
 
         return nodes
 
@@ -315,7 +500,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
-        search_query: str | None = None,
         max_depth: int = 2,
     ) -> list[FileNode]:
         """
@@ -368,48 +552,23 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             else:
                 s3_path = f"{bucket_name}/"  # List from bucket root
 
-            # If a search query is provided, use a glob with depth limit
-            if search_query:
-                # Build glob pattern: include prefix and allow nested folders up to max_depth
-                glob_prefix = s3_path.rstrip("/")
-                pattern = f"{glob_prefix}/**/*{search_query}*"
-                raw = s3_fs.glob(pattern, detail=True, maxdepth=max_depth)
-                if isinstance(raw, dict):
-                    items = [(k, v) for k, v in raw.items()]
-                elif isinstance(raw, list):
-                    tmp = []
-                    for entry in raw:
-                        if isinstance(entry, dict):
-                            path_candidate = (
-                                entry.get("Key")
-                                or entry.get("name")
-                                or entry.get("path")
-                                or entry.get("key")
-                            )
-                            tmp.append((path_candidate, entry))
-                        else:
-                            tmp.append((entry, {}))
-                    items = tmp
-                else:
-                    items = []
+            # Use s3fs ls() with detail=True to get file information (non-recursive)
+            raw = s3_fs.ls(s3_path, detail=True)
+            if isinstance(raw, dict):
+                items = [(k, v) for k, v in raw.items()]
             else:
-                # Use s3fs ls() with detail=True to get file information (non-recursive)
-                raw = s3_fs.ls(s3_path, detail=True)
-                if isinstance(raw, dict):
-                    items = [(k, v) for k, v in raw.items()]
-                else:
-                    items = []
-                    for entry in raw:
-                        if isinstance(entry, dict):
-                            path_candidate = (
-                                entry.get("Key")
-                                or entry.get("name")
-                                or entry.get("path")
-                                or entry.get("key")
-                            )
-                            items.append((path_candidate, entry))
-                        else:
-                            items.append((entry, {}))
+                items = []
+                for entry in raw:
+                    if isinstance(entry, dict):
+                        path_candidate = (
+                            entry.get("Key")
+                            or entry.get("name")
+                            or entry.get("path")
+                            or entry.get("key")
+                        )
+                        items.append((path_candidate, entry))
+                    else:
+                        items.append((entry, {}))
 
             for item_key, item_detail in items:
                 if not item_key:
@@ -529,15 +688,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                     )
                 )
         except Exception as e:
-            middleman_debug(
-                "s3 search_nodes error",
-                {
-                    "connector_id": connector_id,
-                    "query": search_query,
-                    "error": str(e),
-                },
-            )
-            # On error, return nodes found so far with error health status
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
