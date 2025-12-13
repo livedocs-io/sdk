@@ -229,6 +229,7 @@ def _get_xlsx_sheet_nodes(
     xlsx_file: FileNode,
     report_id: str,
     token: str,
+    signed_url: str | None = None,
 ) -> list[FileNode]:
     """
     Download an xlsx file and return FileNodes for each sheet.
@@ -243,20 +244,25 @@ def _get_xlsx_sheet_nodes(
     """
 
     try:
-        # Get signed URL for the workspace file
-        manifest = livedocs_internal_fetch_file_manifest(
-            report_id=report_id,
-            token=token,
-            action="read",
-            bucket=GCSBucketType.USER_FILES,
-            file_name=xlsx_file.path.lstrip("/"),
-        )
+        if not signed_url:
+            # Get signed URL for the workspace file
+            manifest = livedocs_internal_fetch_file_manifest(
+                report_id=report_id,
+                token=token,
+                action="read",
+                bucket=GCSBucketType.USER_FILES,
+                file_name=xlsx_file.path.lstrip("/"),
+            )
 
-        if not manifest or not manifest.signed_url:
-            return []
+            if not manifest or not manifest.signed_url:
+                return []
+
+            file_signed_url = manifest.signed_url
+        else:
+            file_signed_url = signed_url
 
         # Download to temp file
-        response = requests.get(manifest.signed_url)
+        response = requests.get(file_signed_url)
         if response.status_code != 200:
             return []
 
@@ -319,6 +325,7 @@ def _get_xlsx_sheet_nodes_from_path(
     xlsx_path: str,
     report_id: str,
     token: str,
+    signed_url: str | None = None,
 ) -> list[FileNode]:
     """
     Download an xlsx file by path and return FileNodes for each sheet.
@@ -355,20 +362,24 @@ def _get_xlsx_sheet_nodes_from_path(
         if os.path.exists(local_file_path):
             pass
         else:
-            # Get signed URL using display_name
-            manifest = livedocs_internal_fetch_file_manifest(
-                report_id=report_id,
-                token=token,
-                action="read",
-                bucket=GCSBucketType.USER_FILES,
-                file_name=file_name,
-            )
+            if not signed_url:
+                # Get signed URL using display_name
+                manifest = livedocs_internal_fetch_file_manifest(
+                    report_id=report_id,
+                    token=token,
+                    action="read",
+                    bucket=GCSBucketType.USER_FILES,
+                    file_name=file_name,
+                )
 
-            if not manifest or not manifest.signed_url:
-                return []
+                if not manifest or not manifest.signed_url:
+                    return []
+                file_signed_url = manifest.signed_url
+            else:
+                file_signed_url = signed_url
 
             # Download to LIVEDOCS_FILES_PATH
-            response = requests.get(manifest.signed_url)
+            response = requests.get(file_signed_url)
             if response.status_code != 200:
                 return []
 

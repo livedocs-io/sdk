@@ -782,7 +782,7 @@ class Livedocs:
             [str], tuple[object, dict[str, Any]]
         ]
         | None = None,
-    ) -> pl.DataFrame:
+    ) -> LivedocsResult:
         """
         Gets a Polars table for a given datasource.
 
