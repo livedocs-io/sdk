@@ -728,6 +728,7 @@ __all__ = [
     "DataframeInfo",
     "FileInfo",
     "ElementDataSource",
+    "FileConnectorType",
     "Schema",
     "LivedocsChartSpec",
     "Spec",
