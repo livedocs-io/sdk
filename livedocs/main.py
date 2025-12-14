@@ -397,7 +397,6 @@ class Livedocs:
             query_cache=self._query_cache,
             **kwargs,
         )
-        _ = query_span.finish()
 
         # Apply table operations
         applied_metadata = None
