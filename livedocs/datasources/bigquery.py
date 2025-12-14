@@ -639,7 +639,7 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                 livedocs_type=None,
                 description=f"BigQuery Project: {project_id}",
                 level=0,
-                metadata={},
+                metadata={"database_type": "bigquery"},
                 created_at=now,
                 updated_at=now,
             )

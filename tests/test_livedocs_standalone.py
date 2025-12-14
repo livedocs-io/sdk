@@ -16,7 +16,6 @@ class TestLivedocsStandalone(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         os.environ["LIVEDOCS_FILES_PATH"] = self.temp_dir
-        os.environ.pop("LIVEDOCS_PY_SDK_SENTRY_DSN", None)
 
         self.credentials_bundle = Credentials(
             workspace_id="ws-id",

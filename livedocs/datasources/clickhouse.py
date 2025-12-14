@@ -198,7 +198,7 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
             result = client.query(query)
             if result.result_set:
                 columns = result.column_names
-                df = pl.DataFrame(result.result_set, schema=columns)
+                df = pl.DataFrame(result.result_set, schema=columns, orient="row")
             else:
                 df = pl.DataFrame()
 
@@ -723,7 +723,7 @@ class ClickHouseDatasourceConnector(BaseDatasourceConnector):
                 livedocs_type=None,
                 description=None,
                 level=0,
-                metadata={},
+                metadata={"database_type": "clickhouse"},
                 created_at=now,
                 updated_at=now,
             )

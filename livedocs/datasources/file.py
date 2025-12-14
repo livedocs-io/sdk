@@ -5,7 +5,7 @@ from typing import Any, Callable
 import polars as pl
 
 from livedocs.datasources.base import BaseDatasourceConnector
-from livedocs.types import ElementDataSource
+from livedocs.types import ElementDataSource, FileConnectorType
 from livedocs.utils.common import _get_dataframe_schema
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -53,8 +53,20 @@ class FileDatasourceConnector(BaseDatasourceConnector):
             if file_info is None:
                 raise ValueError("Missing required information: 'file_info'")
 
-            file_id = file_info["file_id"]
-            download_file(file_id=file_id)
+            connector_info = file_info.get("connector_info")
+            connector_type = (
+                connector_info.get("connector_type") if connector_info else None
+            )
+
+            # Check if file_path was already provided in kwargs (Case 2: preview scenario)
+            # If so, skip download as file was already downloaded
+            if kwargs.get("file_path") is None:
+                file_id = file_info["file_id"]
+                # Runtime files are already on disk; no manifest/download needed
+                if connector_type == FileConnectorType.runtime:
+                    pass
+                else:
+                    download_file(file_id=file_id)
 
             result = duckdb_conn.sql(query).pl()
             schema = _get_dataframe_schema(result)

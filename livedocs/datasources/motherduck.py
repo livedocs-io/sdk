@@ -419,148 +419,174 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
             )
 
         details = self._extract_details(validated_connection_details.model_dump())
-        database_name = details.get("database") or "main"
-
-        # Create database node (level 0)
-        db_node_id = uuid.uuid4()
-        db_path = database_name
-        nodes.append(
-            SchemaNode(
-                id=db_node_id,
-                connector_id=UUID(connector_id),
-                parent_id=None,
-                path=db_path,
-                type=SchemaNodeType.DATABASE,
-                name=database_name,
-                data_type=None,
-                livedocs_type=None,
-                description=None,
-                level=0,
-                metadata={},
-                created_at=now,
-                updated_at=now,
-            )
-        )
 
         conn = None
         try:
             conn = self._motherduck_connection(details)
 
-            # Query schema details (DuckDB uses information_schema similar to Postgres)
-            schema_details_query = """
-                SELECT 
-                    c.table_schema,
-                    c.table_name,
-                    c.column_name,
-                    c.data_type,
-                    t.table_type,
-                    c.ordinal_position
-                FROM 
-                    information_schema.columns c
-                JOIN 
-                    information_schema.tables t
-                    ON c.table_schema = t.table_schema
-                    AND c.table_name = t.table_name
-                WHERE 
-                    c.table_schema NOT IN ('information_schema', 'pg_catalog')
-                    AND t.table_schema NOT IN ('information_schema', 'pg_catalog')
-                ORDER BY 
-                    c.table_schema, c.table_name, c.ordinal_position;
-            """
+            # Motherduck system views to exclude (metadata views, not user data)
+            MOTHERDUCK_SYSTEM_VIEWS = (
+                "database_snapshots",
+                "databases",
+                "query_history",
+                "recent_queries",
+                "owned_shares",
+                "shared_with_me",
+                "storage_info",
+                "storage_info_history",
+            )
 
-            result = conn.execute(schema_details_query).fetchall()
+            # Get all databases in the Motherduck account
+            all_dbs_raw = conn.execute("SHOW DATABASES").fetchall()
+            all_databases = [
+                db[0] for db in all_dbs_raw if db[0] != "md_information_schema"
+            ]
 
-            schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
-            table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
+            # Process each database
+            for database_name in all_databases:
+                # Switch to this database
+                conn.execute(f"USE {database_name}")
 
-            for row in result:
-                table_schema = row[0]
-                table_name = row[1]
-                column_name = row[2]
-                data_type = row[3]
-                table_type = row[4]
+                # Create database node (level 0)
+                db_node_id = uuid.uuid4()
+                db_path = database_name
+                nodes.append(
+                    SchemaNode(
+                        id=db_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=None,
+                        path=db_path,
+                        type=SchemaNodeType.DATABASE,
+                        name=database_name,
+                        data_type=None,
+                        livedocs_type=None,
+                        description=None,
+                        level=0,
+                        metadata={"database_type": "motherduck"},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
 
-                # Create or get schema node (level 1)
-                schema_node_id = schema_node_ids.get(table_schema)
-                schema_path = f"{db_path}/{table_schema}"
-                if not schema_node_id:
-                    schema_node_id = uuid.uuid4()
+                # Query schema details for this database
+                schema_details_query = f"""
+                    SELECT 
+                        c.table_schema,
+                        c.table_name,
+                        c.column_name,
+                        c.data_type,
+                        t.table_type,
+                        c.ordinal_position
+                    FROM 
+                        information_schema.columns c
+                    JOIN 
+                        information_schema.tables t
+                        ON c.table_schema = t.table_schema
+                        AND c.table_name = t.table_name
+                    WHERE 
+                        c.table_schema NOT IN ('information_schema', 'pg_catalog')
+                        AND t.table_schema NOT IN ('information_schema', 'pg_catalog')
+                        AND t.table_name NOT IN {MOTHERDUCK_SYSTEM_VIEWS}
+                    ORDER BY 
+                        c.table_schema, c.table_name, c.ordinal_position;
+                """
+
+                result = conn.execute(schema_details_query).fetchall()
+
+                # Track schema and table nodes for this database
+                schema_node_ids: dict[str, UUID] = {}  # "schemaName" -> nodeId
+                table_node_ids: dict[str, UUID] = {}  # "schemaName.tableName" -> nodeId
+
+                for row in result:
+                    table_schema = row[0]
+                    table_name = row[1]
+                    column_name = row[2]
+                    data_type = row[3]
+                    table_type = row[4]
+
+                    # Create or get schema node (level 1)
+                    schema_node_id = schema_node_ids.get(table_schema)
+                    schema_path = f"{db_path}/{table_schema}"
+                    if not schema_node_id:
+                        schema_node_id = uuid.uuid4()
+                        nodes.append(
+                            SchemaNode(
+                                id=schema_node_id,
+                                connector_id=UUID(connector_id),
+                                parent_id=db_node_id,
+                                path=schema_path,
+                                type=SchemaNodeType.SCHEMA,
+                                name=table_schema,
+                                data_type=None,
+                                livedocs_type=None,
+                                description=None,
+                                level=1,
+                                metadata={},
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
+                        schema_node_ids[table_schema] = schema_node_id
+
+                    # Create or get table/view node (level 2)
+                    table_key = f"{table_schema}.{table_name}"
+                    table_node_id = table_node_ids.get(table_key)
+                    table_path = f"{schema_path}/{table_name}"
+                    node_type = (
+                        SchemaNodeType.VIEW
+                        if table_type == "VIEW"
+                        else SchemaNodeType.TABLE
+                    )
+
+                    if not table_node_id:
+                        table_node_id = uuid.uuid4()
+                        nodes.append(
+                            SchemaNode(
+                                id=table_node_id,
+                                connector_id=UUID(connector_id),
+                                parent_id=schema_node_id,
+                                path=table_path,
+                                type=node_type,
+                                name=table_name,
+                                data_type=None,
+                                livedocs_type=None,
+                                description=None,
+                                level=2,
+                                metadata={
+                                    "database_type": "motherduck",
+                                    "schema_name": table_schema,
+                                    "database_name": database_name,
+                                },
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
+                        table_node_ids[table_key] = table_node_id
+
+                    # Create column node (level 3)
+                    column_node_id = uuid.uuid4()
+                    column_path = f"{table_path}/{column_name}"
                     nodes.append(
                         SchemaNode(
-                            id=schema_node_id,
+                            id=column_node_id,
                             connector_id=UUID(connector_id),
-                            parent_id=db_node_id,
-                            path=schema_path,
-                            type=SchemaNodeType.SCHEMA,
-                            name=table_schema,
-                            data_type=None,
-                            livedocs_type=None,
+                            parent_id=table_node_id,
+                            path=column_path,
+                            type=SchemaNodeType.COLUMN,
+                            name=column_name,
+                            data_type=data_type if data_type else None,
+                            livedocs_type=(
+                                self._get_livedocs_type(data_type)
+                                if data_type
+                                else None
+                            ),
                             description=None,
-                            level=1,
+                            level=3,
                             metadata={},
                             created_at=now,
                             updated_at=now,
                         )
                     )
-                    schema_node_ids[table_schema] = schema_node_id
-
-                # Create or get table/view node (level 2)
-                table_key = f"{table_schema}.{table_name}"
-                table_node_id = table_node_ids.get(table_key)
-                table_path = f"{schema_path}/{table_name}"
-                node_type = (
-                    SchemaNodeType.VIEW
-                    if table_type == "VIEW"
-                    else SchemaNodeType.TABLE
-                )
-
-                if not table_node_id:
-                    table_node_id = uuid.uuid4()
-                    nodes.append(
-                        SchemaNode(
-                            id=table_node_id,
-                            connector_id=UUID(connector_id),
-                            parent_id=schema_node_id,
-                            path=table_path,
-                            type=node_type,
-                            name=table_name,
-                            data_type=None,
-                            livedocs_type=None,
-                            description=None,
-                            level=2,
-                            metadata={
-                                "database_type": "motherduck",
-                                "schema_name": table_schema,
-                                "database_name": database_name,
-                            },
-                            created_at=now,
-                            updated_at=now,
-                        )
-                    )
-                    table_node_ids[table_key] = table_node_id
-
-                # Create column node (level 3)
-                column_node_id = uuid.uuid4()
-                column_path = f"{table_path}/{column_name}"
-                nodes.append(
-                    SchemaNode(
-                        id=column_node_id,
-                        connector_id=UUID(connector_id),
-                        parent_id=table_node_id,
-                        path=column_path,
-                        type=SchemaNodeType.COLUMN,
-                        name=column_name,
-                        data_type=data_type if data_type else None,
-                        livedocs_type=(
-                            self._get_livedocs_type(data_type) if data_type else None
-                        ),
-                        description=None,
-                        level=3,
-                        metadata={},
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
 
         except Exception as e:
             raise RuntimeError(

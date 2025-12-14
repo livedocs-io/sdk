@@ -623,7 +623,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         Returns
         -------
         dict
-            Structure compatible with the other datasource write helpers used in vm-lib.
+            Structure compatible with the other datasource write helpers used in Livedocs SDK.
         """
         output = {
             "result": pl.DataFrame(),
@@ -885,80 +885,55 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
         try:
             cursor = connection.cursor()
 
-            # Query all accessible tables across all catalogs using the global
-            # Unity Catalog information schema. `system.information_schema`
-            # exposes metadata for every catalog the current credentials can access.
-            schema_details_query = """
-                SELECT 
-                    c.table_catalog,
-                    c.table_schema,
-                    c.table_name,
-                    c.column_name,
-                    c.data_type,
-                    t.table_type,
-                    c.ordinal_position
-                FROM 
-                    system.information_schema.columns c
-                JOIN 
-                    system.information_schema.tables t
-                ON 
-                    c.table_catalog = t.table_catalog
-                    AND c.table_schema = t.table_schema
-                    AND c.table_name = t.table_name
-                WHERE 
-                    UPPER(c.table_schema) <> 'INFORMATION_SCHEMA'
-                ORDER BY 
-                    c.table_catalog, c.table_schema, c.table_name, c.ordinal_position;
-            """
+            # Get all catalogs using SHOW CATALOGS (includes all catalogs, even empty ones)
+            cursor.execute("SHOW CATALOGS")
+            all_catalogs = [row[0] for row in cursor.fetchall()]
 
-            cursor.execute(schema_details_query)
-            result_rows = cursor.fetchall()
+            # Track nodes by their keys
+            catalog_node_ids: dict[str, UUID] = {}
+            schema_node_ids: dict[str, UUID] = {}
+            table_node_ids: dict[str, UUID] = {}
 
-            # Track nodes by their keys to avoid duplicates
-            catalog_node_ids: dict[str, UUID] = {}  # "catalogName" -> nodeId
-            schema_node_ids: dict[str, UUID] = {}  # "catalogName.schemaName" -> nodeId
-            table_node_ids: dict[
-                str, UUID
-            ] = {}  # "catalogName.schemaName.tableName" -> nodeId
-
-            for row in result_rows:
-                table_catalog = row[0]
-                table_schema = row[1]
-                table_name = row[2]
-                column_name = row[3]
-                data_type = row[4]
-                table_type = row[5]
-
-                # Create or get catalog node (level 0)
-                catalog_node_id = catalog_node_ids.get(table_catalog)
-                catalog_path = table_catalog
-                if not catalog_node_id:
-                    catalog_node_id = uuid.uuid4()
-                    nodes.append(
-                        SchemaNode(
-                            id=catalog_node_id,
-                            connector_id=UUID(connector_id),
-                            parent_id=None,
-                            path=catalog_path,
-                            type=SchemaNodeType.DATABASE,
-                            name=table_catalog,
-                            data_type=None,
-                            livedocs_type=None,
-                            description=None,
-                            level=0,
-                            metadata={},
-                            created_at=now,
-                            updated_at=now,
-                        )
+            # Process each catalog
+            for catalog_name in all_catalogs:
+                # Create catalog node (level 0)
+                catalog_node_id = uuid.uuid4()
+                catalog_path = catalog_name
+                nodes.append(
+                    SchemaNode(
+                        id=catalog_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=None,
+                        path=catalog_path,
+                        type=SchemaNodeType.DATABASE,
+                        name=catalog_name,
+                        data_type=None,
+                        livedocs_type=None,
+                        description=None,
+                        level=0,
+                        metadata={"database_type": "databricks"},
+                        created_at=now,
+                        updated_at=now,
                     )
-                    catalog_node_ids[table_catalog] = catalog_node_id
+                )
+                catalog_node_ids[catalog_name] = catalog_node_id
 
-                # Create or get schema node (level 1)
-                schema_key = f"{table_catalog}.{table_schema}"
-                schema_node_id = schema_node_ids.get(schema_key)
-                schema_path = f"{catalog_path}/{table_schema}"
-                if not schema_node_id:
+                # Get all schemas in this catalog
+                try:
+                    cursor.execute(f"SHOW SCHEMAS IN `{catalog_name}`")
+                    schemas = [row[0] for row in cursor.fetchall()]
+                except Exception:
+                    schemas = []
+
+                # Process each schema (excluding information_schema)
+                for schema_name in schemas:
+                    if schema_name.upper() == "INFORMATION_SCHEMA":
+                        continue
+
+                    # Create schema node (level 1)
                     schema_node_id = uuid.uuid4()
+                    schema_key = f"{catalog_name}.{schema_name}"
+                    schema_path = f"{catalog_path}/{schema_name}"
                     nodes.append(
                         SchemaNode(
                             id=schema_node_id,
@@ -966,7 +941,7 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
                             parent_id=catalog_node_id,
                             path=schema_path,
                             type=SchemaNodeType.SCHEMA,
-                            name=table_schema,
+                            name=schema_name,
                             data_type=None,
                             livedocs_type=None,
                             description=None,
@@ -978,64 +953,99 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
                     )
                     schema_node_ids[schema_key] = schema_node_id
 
-                # Create or get table/view node (level 2)
-                table_key = f"{table_catalog}.{table_schema}.{table_name}"
-                table_node_id = table_node_ids.get(table_key)
-                table_path = f"{schema_path}/{table_name}"
-                node_type = (
-                    SchemaNodeType.VIEW
-                    if table_type == "VIEW"
-                    else SchemaNodeType.TABLE
-                )
+                    # Query tables and columns for this specific schema
+                    try:
+                        table_query = f"""
+                            SELECT 
+                                c.table_name,
+                                c.column_name,
+                                c.data_type,
+                                t.table_type,
+                                c.ordinal_position
+                            FROM 
+                                `{catalog_name}`.information_schema.columns c
+                            JOIN 
+                                `{catalog_name}`.information_schema.tables t
+                            ON 
+                                c.table_schema = t.table_schema
+                                AND c.table_name = t.table_name
+                            WHERE 
+                                c.table_schema = '{schema_name}'
+                            ORDER BY 
+                                c.table_name, c.ordinal_position
+                        """
+                        cursor.execute(table_query)
+                        table_rows = cursor.fetchall()
+                    except Exception:
+                        table_rows = []
 
-                if not table_node_id:
-                    table_node_id = uuid.uuid4()
-                    nodes.append(
-                        SchemaNode(
-                            id=table_node_id,
-                            connector_id=UUID(connector_id),
-                            parent_id=schema_node_id,
-                            path=table_path,
-                            type=node_type,
-                            name=table_name,
-                            data_type=None,
-                            livedocs_type=None,
-                            description=None,
-                            level=2,
-                            metadata={
-                                "table_type": table_type,
-                                "database_type": "databricks",
-                                "schema_name": table_schema,
-                                "database_name": table_catalog,
-                            },
-                            created_at=now,
-                            updated_at=now,
+                    # Process table/column rows
+                    for row in table_rows:
+                        table_name = row[0]
+                        column_name = row[1]
+                        data_type = row[2]
+                        table_type = row[3]
+
+                        # Create or get table/view node (level 2)
+                        table_key = f"{catalog_name}.{schema_name}.{table_name}"
+                        table_node_id = table_node_ids.get(table_key)
+                        table_path = f"{schema_path}/{table_name}"
+                        node_type = (
+                            SchemaNodeType.VIEW
+                            if table_type == "VIEW"
+                            else SchemaNodeType.TABLE
                         )
-                    )
-                    table_node_ids[table_key] = table_node_id
 
-                # Create column node (level 3)
-                column_node_id = uuid.uuid4()
-                column_path = f"{table_path}/{column_name}"
-                nodes.append(
-                    SchemaNode(
-                        id=column_node_id,
-                        connector_id=UUID(connector_id),
-                        parent_id=table_node_id,
-                        path=column_path,
-                        type=SchemaNodeType.COLUMN,
-                        name=column_name,
-                        data_type=data_type if data_type else None,
-                        livedocs_type=(
-                            self._get_livedocs_type(data_type) if data_type else None
-                        ),
-                        description=None,
-                        level=3,
-                        metadata={},
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
+                        if not table_node_id:
+                            table_node_id = uuid.uuid4()
+                            nodes.append(
+                                SchemaNode(
+                                    id=table_node_id,
+                                    connector_id=UUID(connector_id),
+                                    parent_id=schema_node_id,
+                                    path=table_path,
+                                    type=node_type,
+                                    name=table_name,
+                                    data_type=None,
+                                    livedocs_type=None,
+                                    description=None,
+                                    level=2,
+                                    metadata={
+                                        "table_type": table_type,
+                                        "database_type": "databricks",
+                                        "schema_name": schema_name,
+                                        "database_name": catalog_name,
+                                    },
+                                    created_at=now,
+                                    updated_at=now,
+                                )
+                            )
+                            table_node_ids[table_key] = table_node_id
+
+                        # Create column node (level 3)
+                        column_node_id = uuid.uuid4()
+                        column_path = f"{table_path}/{column_name}"
+                        nodes.append(
+                            SchemaNode(
+                                id=column_node_id,
+                                connector_id=UUID(connector_id),
+                                parent_id=table_node_id,
+                                path=column_path,
+                                type=SchemaNodeType.COLUMN,
+                                name=column_name,
+                                data_type=data_type if data_type else None,
+                                livedocs_type=(
+                                    self._get_livedocs_type(data_type)
+                                    if data_type
+                                    else None
+                                ),
+                                description=None,
+                                level=3,
+                                metadata={},
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
 
         except Exception as e:
             raise RuntimeError(

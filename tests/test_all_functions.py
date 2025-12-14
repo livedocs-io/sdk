@@ -26,7 +26,6 @@ def setup_test_environment():
     """Set up a temporary directory and environment for testing."""
     temp_dir = tempfile.mkdtemp()
     os.environ["LIVEDOCS_FILES_PATH"] = temp_dir
-    _ = os.environ.pop("LIVEDOCS_PY_SDK_SENTRY_DSN", None)
     return temp_dir
 
 

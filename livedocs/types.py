@@ -33,6 +33,37 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
+class SortOperation(TypedDict):
+    column: str
+    direction: str
+
+
+class FilterCondition(TypedDict):
+    column: str
+    operator: str
+    value: str
+    id: str
+    conjunction: str
+
+
+class StyleRule(TypedDict):
+    conditions: list[FilterCondition]
+    color: str
+
+
+class CalculationOperation(TypedDict):
+    column: str
+    calculation_type: str
+    id: str
+
+
+class TableMetadata(TypedDict, total=False):
+    sort: SortOperation | None
+    filters: list[FilterCondition] | None
+    styles: list[StyleRule] | None
+    calculations: list[CalculationOperation] | None
+
+
 class FileManifest(BaseModel):
     file_id: str  # The unique ID of the file (resolved by the API)
     file_name: str  # The display name of the file
@@ -49,7 +80,7 @@ class QueryResultMetadata(TypedDict, total=False):
     offset: int
     total_rows: int
     cache_info: CacheInfo
-    applied_metadata: dict[str, Any] | None
+    applied_metadata: TableMetadata | None
     calculation_results: dict[str, dict[str, Any]] | None
 
 
@@ -195,8 +226,26 @@ class JsonDisplay(DisplayObject):
 
     def __init__(self, data, metadata: dict[str, Any] | None = None):
         super().__init__(data, metadata=metadata)
-        self.data = data
+        self.data = self._to_json_serializable(data)
         self.metadata = metadata or {}
+
+    def _to_json_serializable(self, obj: Any) -> Any:
+        """Recursively convert objects to JSON-serializable format."""
+        if obj is None:
+            return None
+        if isinstance(obj, BaseModel):
+            return obj.model_dump(mode="json")
+        if isinstance(obj, UUID):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, dict):
+            return {k: self._to_json_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._to_json_serializable(item) for item in obj]
+        return obj
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """
@@ -240,7 +289,7 @@ class UserMeta(BaseModel):
 
 class VegaSpec(BaseModel):
     spec: str
-    schema: dict[str, Any]
+    schema_: dict[str, Any] = Field(alias="schema")
     status: str
 
     @model_validator(mode="before")
@@ -264,6 +313,23 @@ class VegaSpec(BaseModel):
             UserMeta(**usermeta)
 
         return values
+
+
+class SourceType(str, Enum):
+    workspace = "workspace"
+    s3bucket = "s3bucket"
+    runtime = "runtime"
+    googlesheets = "googlesheets"
+    googledrive = "googledrive"
+    database = "database"
+
+
+class FileConnectorType(str, Enum):
+    s3bucket = "s3bucket"
+    runtime = "runtime"
+    googlesheets = "googlesheets"
+    googledrive = "googledrive"
+    workspace = "workspace"
 
 
 class DatabaseType(Enum):
@@ -302,12 +368,19 @@ class DataframeInfo(TypedDict):
     df_name: str
 
 
+class FileConnectorInfo(TypedDict):
+    connector_id: str
+    connector_name: str
+    connector_type: FileConnectorType
+
+
 class FileInfo(TypedDict):
     file_id: str
     file_name: str
     file_type: str
     file_has_layers: bool
     layer_name: str | None
+    connector_info: FileConnectorInfo | None
 
 
 class ElementDataSource(TypedDict):
@@ -330,11 +403,47 @@ class DatabaseConnection(BaseModel):
     connection_details: SecretStr
 
 
+class S3ConnectorInfo(TypedDict):
+    connector_id: str
+    name: str
+    endpoint_url: str
+    region: str
+    provider: str
+    access_key: str
+    secret_key: str
+    bucket_name: str
+    path_prefix: str
+    is_virtual_hosted_style: bool
+
+
+class GoogleDriveConnectorInfo(TypedDict):
+    connector_id: str
+    name: str
+    provider: str
+    email: str
+    access_token: str
+    refresh_token: str
+    token_expiry: datetime
+    scopes: str
+
+
 class Credentials(BaseModel):
     workspace_id: str
     workspace_secrets: dict[str, WorkspaceSecret]
     databases: dict[str, DatabaseConnection]
+    s3_connectors: dict[str, S3ConnectorInfo]
+    google_drive_connectors: dict[str, GoogleDriveConnectorInfo]
     built_in_vars: dict[str, Any | None]
+
+
+class FileAction(str, Enum):
+    RENAME = "rename"
+    DELETE = "delete"
+
+
+class SDKContext(str, Enum):
+    RELAY = "relay"
+    IPYTHON = "ipython"
 
 
 class Schema(TypedDict):
@@ -349,6 +458,40 @@ class SchemaNodeType(str, Enum):
     SCHEMA = "SCHEMA"
     TABLE = "TABLE"
     VIEW = "VIEW"
+
+
+class MountHealthStatus(str, Enum):
+    connected = "connected"
+    reconnecting = "reconnecting"
+    auth_expired = "auth_expired"
+    error = "error"
+
+
+class MountHealth(TypedDict):
+    status: MountHealthStatus
+    last_checked: datetime
+    error_message: str | None
+
+
+class FileNodeType(str, Enum):
+    root = "root"
+    directory = "directory"
+    file = "file"
+
+
+class FileNode(BaseModel):
+    id: UUID
+    name: str
+    type: FileNodeType
+    mount_type: FileConnectorType
+    connector_id: UUID | None = None
+    path: str
+    parent_id: UUID | None = None
+    size: int | None = None
+    mime_type: str | None = None
+    modified_at: datetime | None = None
+    created_at: datetime | None = None
+    health: MountHealth
 
 
 class SchemaNode(BaseModel):
@@ -368,6 +511,16 @@ class SchemaNode(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ListPathRequest(BaseModel):
+    node_id: str | None = None
+    schema_node_type: SchemaNodeType | None = None
+
+
+class ListPathResponse(BaseModel):
+    files: list[FileNode]
+    schema_nodes: list[SchemaNode]
 
 
 class DBSaveConfig(TypedDict):
@@ -582,4 +735,8 @@ __all__ = [
     "JsonDisplay",
     "SchemaNode",
     "SchemaNodeType",
+    "ListPathRequest",
+    "ListPathResponse",
+    "SDKContext",
+    "TableMetadata",
 ]

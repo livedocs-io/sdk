@@ -32,8 +32,6 @@ class TestLivedocsPostgresIntegration(unittest.TestCase):
         self._prev_run_context = os.getenv("LIVEDOCS_RUN_CONTEXT")
         os.environ["LIVEDOCS_RUN_CONTEXT"] = "logic"
 
-        os.environ.pop("LIVEDOCS_PY_SDK_SENTRY_DSN", None)
-
         self.connector_id = f"pg-{uuid.uuid4().hex[:8]}"
 
         connection_details = SecretStr(

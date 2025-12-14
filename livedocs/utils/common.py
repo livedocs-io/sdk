@@ -1,5 +1,6 @@
 import os
 from datetime import date, datetime, time
+from typing import Any, Callable
 
 
 import polars as pl
@@ -33,7 +34,7 @@ def get_run_context() -> str:
     return current_run_context
 
 
-def debug(label: str, data=None):
+def middleman_debug(label: str, data=None):
     """Sends data to the middleman for pretty-printing in its logs."""
     try:
         content_str = json.dumps(data, indent=2, default=str, ensure_ascii=False)
@@ -80,15 +81,52 @@ def serializer(obj):
         return str(obj)
 
 
+def get_xlsx_sheet_names(local_path: str) -> list[str]:
+    """
+    Get sheet names from an xlsx file.
+
+    Args:
+        local_path: Path to the local xlsx file
+
+    Returns:
+        List of sheet names, or empty list if file can't be read
+    """
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(local_path, read_only=True, data_only=True)
+        sheet_names = wb.sheetnames
+        wb.close()
+        return sheet_names
+    except Exception:
+        return []
+
+
 def get_query_for_datasource(
     datasource: ElementDataSource,
     limit: int | None = 10,
+    file_path: str | None = None,
+    get_database_details: Callable[[str], tuple[object, dict[str, Any]]] | None = None,
 ) -> str | None:
     """
     Prepares the DuckDB query for each datasource
-    """
 
+    Args:
+        datasource: The datasource configuration
+        limit: Optional limit for the query results
+        file_path: Optional file path for file datasources. When provided, uses
+                   direct file querying syntax (SELECT * FROM <filepath>).
+                   Supported extensions: .csv, .tsv, .txt, .gz, .parquet, .json,
+                   .duckdb, .ddb, .xls, .xlsx, .sqlite
+        get_database_details: Optional callable to retrieve database credentials.
+                             Required for Snowflake datasources to get database name.
+
+    Returns:
+        SQL query string or None
+    """
     limit_clause = f" LIMIT {limit}" if limit is not None else ""
+
+    supported_exts = get_duckdb_supported_file_extensions()
 
     match datasource["source_type"]:
         case ElementDatasourceType.dataframe.value:
@@ -101,25 +139,43 @@ def get_query_for_datasource(
             if datasource["database_table_info"] is None:
                 raise ValueError("Database table info is required")
 
-            if (
-                DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Bigquery
-            ):
+            database_type = DatabaseType(datasource["database_info"]["database_type"])
+
+            # Handle Snowflake special case - needs database name from credentials
+            if database_type == DatabaseType.Snowflake:
+                if get_database_details is None:
+                    raise ValueError(
+                        "get_database_details is required for Snowflake datasources"
+                    )
+                try:
+                    db_connector_id = datasource["database_info"][
+                        "database_connector_id"
+                    ]
+                    _, parsed_credentials = get_database_details(db_connector_id)
+                    database_name = parsed_credentials.get("database")
+                    if database_name is None:
+                        raise ValueError(
+                            "Database name not found in Snowflake credentials"
+                        )
+                    return (
+                        f'SELECT * FROM "{database_name}".'
+                        f'"{datasource["database_table_info"]["schema_name"]}".'
+                        f'"{datasource["database_table_info"]["table_name"]}"'
+                        f"{limit_clause};"
+                    )
+                except KeyError as e:
+                    raise ValueError(f"Missing required information: {e}")
+
+            if database_type == DatabaseType.Bigquery:
                 return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}{limit_clause};"
-            elif (
-                DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Clickhouse
-            ):
+            elif database_type == DatabaseType.Clickhouse:
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
             elif datasource["database_info"]["database_type"] in {
                 DatabaseType.Postgres.value,
                 DatabaseType.Motherduck.value,
             }:
                 return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
-            elif (
-                DatabaseType(datasource["database_info"]["database_type"])
-                == DatabaseType.Databricks
-            ):
+            elif database_type == DatabaseType.Databricks:
                 return (
                     "SELECT * FROM "
                     f"{datasource['database_table_info']['catalog_name']}."
@@ -136,19 +192,66 @@ def get_query_for_datasource(
                     f"{limit_clause};"
                 )
 
-        case ElementDatasourceType.file:
+        case ElementDatasourceType.file.value:
             if datasource["file_info"] is None:
                 raise ValueError("File info is required")
+
+            # If file_path is provided, use direct file querying
+            if file_path is not None:
+                # Extract file extension
+                file_extension = None
+                if "." in file_path:
+                    file_extension = "." + file_path.rsplit(".", 1)[1].lower()
+
+                # Validate file extension
+                if file_extension is None or file_extension not in supported_exts:
+                    raise ValueError(
+                        f"Unsupported file extension for direct querying: {file_extension or 'no extension'}. "
+                        f"Supported extensions: {', '.join(sorted(supported_exts))}"
+                    )
+
+                # Escape single quotes in file path to prevent SQL injection
+                escaped_file_path = file_path.replace("'", "''")
+
+                # Handle xlsx with layer_name (sheet selection)
+                # Use ignore_errors=true to handle cells that can't be cast (replaces with NULL)
+                if file_extension == ".xlsx":
+                    layer = datasource["file_info"].get("layer_name")
+                    if layer:
+                        return f"SELECT * FROM read_xlsx('{escaped_file_path}', sheet='{layer}', ignore_errors=true){limit_clause};"
+                    return f"SELECT * FROM read_xlsx('{escaped_file_path}', ignore_errors=true){limit_clause};"
+
+                return f"SELECT * FROM '{escaped_file_path}'{limit_clause};"
+
+            # Fallback to old method if file_path is not provided
             file_name = datasource["file_info"]["file_name"]
+
+            # Extract and validate file extension
+            file_extension = None
+            if "." in file_name:
+                file_extension = "." + file_name.rsplit(".", 1)[1].lower()
+
+            # Validate file extension
+            if file_extension is None or file_extension not in supported_exts:
+                raise ValueError(
+                    f"Unsupported file extension for querying: {file_extension or 'no extension'}. "
+                    f"Supported extensions: {', '.join(sorted(supported_exts))}"
+                )
+
+            # Use appropriate query method based on file type
             if datasource["file_info"]["file_type"] == "csv":
                 return f"SELECT * FROM read_csv_auto('{file_name}'){limit_clause};"
             elif datasource["file_info"]["file_type"] == "xlsx":
-                return (
-                    "SELECT * FROM "
-                    f"read_xlsx('{file_name}', sheet='{datasource['file_info']['layer_name']}')"
-                    f"{limit_clause};"
-                )
-        case ElementDatasourceType.dataframe:
+                # Use ignore_errors=true to handle cells that can't be cast (replaces with NULL)
+                layer = datasource["file_info"].get("layer_name")
+                if layer:
+                    return f"SELECT * FROM read_xlsx('{file_name}', sheet='{layer}', ignore_errors=true){limit_clause};"
+                return f"SELECT * FROM read_xlsx('{file_name}', ignore_errors=true){limit_clause};"
+            else:
+                # For other supported file types, use direct querying
+                escaped_file_name = file_name.replace("'", "''")
+                return f"SELECT * FROM '{escaped_file_name}'{limit_clause};"
+        case ElementDatasourceType.dataframe.value:
             if datasource["dataframe_info"] is None:
                 raise ValueError("Dataframe info is required")
             return f"SELECT * FROM {datasource['dataframe_info']['df_name']}{limit_clause};"
@@ -316,3 +419,21 @@ def _download_file(
         raise RuntimeError(
             f"An error occurred during download of {file_description}: {e}"
         ) from e
+
+
+def get_duckdb_supported_file_extensions() -> set[str]:
+    """
+    Returns the set of file extensions DuckDB can query directly via read_* functions.
+    """
+    return {
+        ".csv",
+        ".tsv",
+        ".gz",
+        ".parquet",
+        ".json",
+        ".duckdb",
+        ".ddb",
+        ".xls",
+        ".xlsx",
+        ".sqlite",
+    }

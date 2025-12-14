@@ -10,8 +10,10 @@ from livedocs.datasources.clickhouse import ClickHouseDatasourceConnector
 from livedocs.datasources.dataframe import DataframeDatasourceConnector
 from livedocs.datasources.databricks import DatabricksDatasourceConnector
 from livedocs.datasources.file import FileDatasourceConnector
+from livedocs.datasources.googledrive import GoogleDriveDatasourceConnector
 from livedocs.datasources.motherduck import MotherduckDatasourceConnector
 from livedocs.datasources.postgres import PostgresDatasourceConnector
+from livedocs.datasources.s3 import S3DatasourceConnector
 from livedocs.datasources.snowflake import SnowflakeDatasourceConnector
 from livedocs.types import (
     CacheInfo,
@@ -20,6 +22,7 @@ from livedocs.types import (
     DatabaseType,
     ElementDataSource,
     ElementDatasourceType,
+    FileConnectorType,
     LivedocsResult,
 )
 from livedocs.utils.common import get_run_context
@@ -43,14 +46,6 @@ class DatasourceManager:
         DatabaseType.Databricks: DatabricksDatasourceConnector,
     }
 
-    # Mapping from ElementDatasourceType to connector classes (for non-database datasources)
-    _DATASOURCE_TYPE_CONNECTOR_MAP: dict[
-        ElementDatasourceType, type[BaseDatasourceConnector]
-    ] = {
-        ElementDatasourceType.file: FileDatasourceConnector,
-        ElementDatasourceType.dataframe: DataframeDatasourceConnector,
-    }
-
     @classmethod
     def _get_connector(cls, datasource: ElementDataSource) -> BaseDatasourceConnector:
         """
@@ -72,19 +67,37 @@ class DatasourceManager:
             ElementDatasourceType.database,
             ElementDatasourceType.database_table,
         ):
-            if datasource.get("database_info") is None:
+            database_info = datasource.get("database_info")
+            if database_info is None:
                 raise ValueError("Missing required information: 'database_info'")
-            database_type = DatabaseType(datasource["database_info"]["database_type"])
+            database_type = DatabaseType(database_info["database_type"])
             connector_class = cls._DATABASE_CONNECTOR_MAP.get(database_type)
             if connector_class is None:
                 raise ValueError(f"Unsupported database type: {database_type}")
             return connector_class()
 
-        # Handle non-database datasources
-        connector_class = cls._DATASOURCE_TYPE_CONNECTOR_MAP.get(source_type)
-        if connector_class is None:
-            raise ValueError(f"Unsupported datasource type: {source_type}")
-        return connector_class()
+        # Handle file datasources
+        if source_type == ElementDatasourceType.file:
+            file_info = datasource.get("file_info")
+            if file_info is None:
+                raise ValueError("Missing required information: 'file_info'")
+            connector_info = file_info.get("connector_info")
+            if connector_info is None:
+                return FileDatasourceConnector()
+            connector_type = connector_info["connector_type"]
+            if connector_type == FileConnectorType.s3bucket:
+                return S3DatasourceConnector()
+            if connector_type == FileConnectorType.googledrive:
+                return GoogleDriveDatasourceConnector()
+            # Fallback to default file connector for other connector types
+            return FileDatasourceConnector()
+
+        # Handle dataframe datasources
+        if source_type == ElementDatasourceType.dataframe:
+            return DataframeDatasourceConnector()
+
+        # Unsupported datasource type
+        raise ValueError(f"Unsupported datasource type: {source_type}")
 
     @classmethod
     def read(
@@ -145,7 +158,12 @@ class DatasourceManager:
             if dataframe is not None and duckdb_conn is not None:
                 duckdb_conn.register(datasource["dataframe_info"]["df_name"], dataframe)
 
-        connector = cls._get_connector(datasource)
+        # If file_path is already provided (file was pre-downloaded), use FileDatasourceConnector
+        # directly instead of routing to S3/GDrive connectors that would try to download again
+        if kwargs.get("file_path") is not None and source_type == ElementDatasourceType.file:
+            connector = FileDatasourceConnector()
+        else:
+            connector = cls._get_connector(datasource)
 
         # Execute the query with appropriate parameters
         if source_type in (

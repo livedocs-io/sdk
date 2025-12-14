@@ -2,7 +2,13 @@ import threading
 import time
 from typing import Any
 
-from livedocs.types import Credentials, DatabaseConnection, WorkspaceSecret
+from livedocs.types import (
+    Credentials,
+    DatabaseConnection,
+    GoogleDriveConnectorInfo,
+    S3ConnectorInfo,
+    WorkspaceSecret,
+)
 from livedocs.utils.lib.internals import livedocs_internal_fetch_credentials
 
 
@@ -29,9 +35,7 @@ class CredentialStore:
                 return self._bundle
 
             raw = livedocs_internal_fetch_credentials(self._report_id, self._token)
-
             bundle = Credentials.model_validate(raw)
-
             self._bundle = bundle
             self._loaded_at = now
             return bundle
@@ -46,6 +50,24 @@ class CredentialStore:
     def get_database(self, connector_id: str) -> DatabaseConnection | None:
         bundle = self.load()
         return bundle.databases.get(connector_id)
+
+    def get_s3_connector(self, connector_id: str) -> S3ConnectorInfo | None:
+        bundle = self.load()
+        return bundle.s3_connectors.get(connector_id)
+
+    def get_all_s3_connectors(self) -> list[S3ConnectorInfo]:
+        bundle = self.load()
+        return list[S3ConnectorInfo](bundle.s3_connectors.values())
+
+    def get_all_google_drive_connectors(self) -> list[GoogleDriveConnectorInfo]:
+        bundle = self.load()
+        return list[GoogleDriveConnectorInfo](bundle.google_drive_connectors.values())
+
+    def get_google_drive_connector(
+        self, connector_id: str
+    ) -> GoogleDriveConnectorInfo | None:
+        bundle = self.load()
+        return bundle.google_drive_connectors.get(connector_id)
 
     def get_built_in_vars(self) -> dict[str, Any | None]:
         bundle = self.load()
