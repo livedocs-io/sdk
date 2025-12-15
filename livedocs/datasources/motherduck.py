@@ -483,8 +483,11 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
                         information_schema.tables t
                         ON c.table_schema = t.table_schema
                         AND c.table_name = t.table_name
+                        AND c.table_catalog = t.table_catalog
                     WHERE 
-                        c.table_schema NOT IN ('information_schema', 'pg_catalog')
+                        c.table_catalog = '{database_name}'
+                        AND t.table_catalog = '{database_name}'
+                        AND c.table_schema NOT IN ('information_schema', 'pg_catalog')
                         AND t.table_schema NOT IN ('information_schema', 'pg_catalog')
                         AND t.table_name NOT IN {MOTHERDUCK_SYSTEM_VIEWS}
                     ORDER BY 
