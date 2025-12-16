@@ -1025,6 +1025,7 @@ class Livedocs:
             _get_google_drive_connection_details = (
                 self.helper_get_google_drive_connection_details
             )
+            _get_s3_connection_details = self.helper_get_s3_connection_details
         else:
             if get_all_s3_connectors is None:
                 raise ValueError("get_all_s3_connectors is required")
@@ -1063,6 +1064,15 @@ class Livedocs:
                 connector_id: str,
             ) -> tuple[object, dict[str, Any]]:
                 all_connectors = _get_all_google_drive_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector, dict(connector)
+                return None, {}
+
+            def _get_s3_connection_details(
+                connector_id: str,
+            ) -> tuple[object, dict[str, Any]]:
+                all_connectors = _get_all_s3_connectors()
                 for connector in all_connectors:
                     if connector["connector_id"] == connector_id:
                         return connector, dict(connector)
@@ -1159,7 +1169,7 @@ class Livedocs:
                         s3_nodes = s3_connector.list(
                             path=path_or_parent_id,
                             connector_id=source_id,
-                            get_connection_details=self.helper_get_s3_connection_details,
+                            get_connection_details=_get_s3_connection_details,
                         )
                     else:
                         s3_nodes = []
