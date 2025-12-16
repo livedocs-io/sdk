@@ -304,6 +304,7 @@ def _get_xlsx_sheet_nodes(
                 type=FileNodeType.file,
                 mount_type=FileConnectorType.workspace,
                 connector_id=xlsx_file.connector_id,
+                connector_name=xlsx_file.connector_name or "workspace",
                 path=sheet_path,
                 parent_id=parent_id,
                 size=None,
@@ -378,7 +379,7 @@ def _get_xlsx_sheet_nodes_from_path(
             else:
                 file_signed_url = signed_url
 
-            # Download to LIVEDOCS_FILES_PATH
+            # Download to configured files path
             response = requests.get(file_signed_url)
             if response.status_code != 200:
                 return []
@@ -421,6 +422,7 @@ def _get_xlsx_sheet_nodes_from_path(
                 type=FileNodeType.file,
                 mount_type=FileConnectorType.workspace,
                 connector_id=None,
+                connector_name="workspace",
                 path=sheet_path,
                 parent_id=parent_id,
                 size=None,
@@ -477,6 +479,13 @@ def livedocs_internal_list_files(
     if response.status_code == 200:
         response_data = response.json()
         result = ListPathResponse(**response_data)
+
+        # Ensure connector_name is set for core-managed sources
+        for f in result.files:
+            if f.mount_type == FileConnectorType.workspace and not f.connector_name:
+                f.connector_name = "workspace"
+            elif f.mount_type == FileConnectorType.runtime and not f.connector_name:
+                f.connector_name = "runtime"
 
         # Expand xlsx files to include their sheets as children
         xlsx_files = [f for f in result.files if f.path.lower().endswith(".xlsx")]

@@ -42,7 +42,7 @@ def _get_mime_type(file_path: Path) -> str | None:
 
 def list_runtime_files_top_level() -> list[FileNode]:
     """
-    List all files and directories at the top level of LIVEDOCS_FILES_PATH.
+    List all files and directories at the top level of the configured files path.
 
     Returns:
         list[FileNode]: List of FileNode objects representing files and directories
@@ -109,6 +109,7 @@ def list_runtime_files_top_level() -> list[FileNode]:
                     type=FileNodeType.directory if is_directory else FileNodeType.file,
                     mount_type=FileConnectorType.runtime,
                     connector_id=None,  # Runtime doesn't have a connector_id
+                    connector_name="runtime",
                     path=relative_path,
                     parent_id=parent_id,
                     size=size,
@@ -156,7 +157,7 @@ def _list_xlsx_sheets(xlsx_path: Path, relative_path: str) -> list[FileNode]:
 
     Args:
         xlsx_path: Absolute path to the xlsx file
-        relative_path: Relative path from LIVEDOCS_FILES_PATH
+        relative_path: Relative path from the configured files path
 
     Returns:
         list[FileNode]: List of FileNode objects representing sheets
@@ -183,6 +184,7 @@ def _list_xlsx_sheets(xlsx_path: Path, relative_path: str) -> list[FileNode]:
                 type=FileNodeType.file,
                 mount_type=FileConnectorType.runtime,
                 connector_id=None,
+                connector_name="runtime",
                 path=sheet_path,
                 parent_id=parent_id,
                 size=None,
@@ -204,11 +206,11 @@ def list_runtime_files_in_path(
     path: str, search_string: str | None = None, max_depth: int = 3
 ) -> list[FileNode]:
     """
-    List files and directories at the specified path relative to LIVEDOCS_FILES_PATH.
+    List files and directories at the specified path relative to the configured files path.
     Optionally filter by search_string.
 
     Args:
-        path: Relative path from LIVEDOCS_FILES_PATH (e.g., "folder/subfolder")
+        path: Relative path from configured files path (e.g., "folder/subfolder")
         search_string: Optional search string to filter file/directory names
 
     Returns:
@@ -265,10 +267,7 @@ def list_runtime_files_in_path(
                     )
                 relative_path = relative_path.replace("\\", "/")
 
-                matches = (
-                    search_string is None
-                    or search_string.lower() in name.lower()
-                )
+                matches = search_string is None or search_string.lower() in name.lower()
 
                 file_id = _generate_file_id(relative_path)
                 parent_path = _get_parent_path(relative_path)
@@ -294,7 +293,10 @@ def list_runtime_files_in_path(
                                 type=FileNodeType.directory,
                                 mount_type=FileConnectorType.runtime,
                                 connector_id=None,
-                                path=relative_path if relative_path.startswith("/") else f"/{relative_path}",
+                                connector_name="runtime",
+                                path=relative_path
+                                if relative_path.startswith("/")
+                                else f"/{relative_path}",
                                 parent_id=parent_id,
                                 size=None,
                                 mime_type=None,
@@ -318,7 +320,10 @@ def list_runtime_files_in_path(
                             type=FileNodeType.file,
                             mount_type=FileConnectorType.runtime,
                             connector_id=None,
-                            path=relative_path if relative_path.startswith("/") else f"/{relative_path}",
+                            connector_name="runtime",
+                            path=relative_path
+                            if relative_path.startswith("/")
+                            else f"/{relative_path}",
                             parent_id=parent_id,
                             size=size,
                             mime_type=_get_mime_type(item),

@@ -211,6 +211,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                     type=FileNodeType.file,
                     mount_type=FileConnectorType.s3bucket,
                     connector_id=UUID(connector_id),
+                    connector_name=connector_name,
                     path=sheet_path,
                     parent_id=parent_id,
                     size=None,
@@ -255,6 +256,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
         except (KeyError, TypeError, ValueError):
             return []
+        connector_name = connector_info.get("name", "s3")
 
         s3_fs = None
         now = datetime.now(timezone.utc)
@@ -341,6 +343,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                         type=FileNodeType.file,
                         mount_type=FileConnectorType.s3bucket,
                         connector_id=UUID(connector_id),
+                        connector_name=connector_name,
                         path=relative_path,
                         parent_id=parent_id,
                         size=size,
@@ -522,13 +525,14 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
         except (KeyError, TypeError, ValueError):
             return []
+        connector_name = connector_info.get("name", "s3")
 
         # Handle xlsx files - list sheets as children
         if path.lower().endswith(".xlsx"):
             return self._list_xlsx_sheets(
                 path=path,
                 connector_id=connector_id,
-                connector_name=connector_info.get("name", "s3"),
+                connector_name=connector_name,
                 get_connection_details=get_connection_details,
             )
 
@@ -674,6 +678,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                         else FileNodeType.file,
                         mount_type=FileConnectorType.s3bucket,
                         connector_id=UUID(connector_id),
+                        connector_name=connector_name,
                         path=relative_path,
                         parent_id=parent_id,
                         size=size if not is_directory else None,
@@ -701,7 +706,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
 
     def download_file(
         self,
-        connector_name: str,
+        connector_name: str | None,
         path: str | None = None,
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
@@ -1014,12 +1019,14 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             FileNode: FileNode representing the S3 bucket root
         """
         now = datetime.now(timezone.utc)
+        connector_name = connector_info["name"]
         return FileNode(
             id=UUID(connector_info["connector_id"]),
             name=connector_info["name"],
             type=FileNodeType.directory,
             mount_type=FileConnectorType.s3bucket,
             connector_id=UUID(connector_info["connector_id"]),
+            connector_name=connector_name,
             path=connector_info.get("path_prefix", ""),
             parent_id=None,
             size=None,

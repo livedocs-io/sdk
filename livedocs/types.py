@@ -485,6 +485,7 @@ class FileNode(BaseModel):
     type: FileNodeType
     mount_type: FileConnectorType
     connector_id: UUID | None = None
+    connector_name: str | None = None
     path: str
     parent_id: UUID | None = None
     size: int | None = None
