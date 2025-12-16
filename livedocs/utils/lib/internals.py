@@ -394,7 +394,9 @@ def _get_xlsx_sheet_nodes_from_path(
             return []
 
     except Exception as e:
-        middleman_debug(f"Error processing xlsx file at path: {xlsx_path}", e)
+        middleman_debug(
+            f"Error processing xlsx file at path: {xlsx_path}", e, level="error"
+        )
         return []
 
     # Create FileNodes for each sheet

@@ -778,7 +778,9 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return local_file_path
 
         except Exception as e:
-            middleman_debug(f"S3 download error for path '{path}': {e}")
+            middleman_debug(
+                f"S3 download error for path '{path}'", data=e, level="error"
+            )
             return None
 
     def upload_file_to_s3(

@@ -34,8 +34,27 @@ def get_run_context() -> str:
     return current_run_context
 
 
-def middleman_debug(label: str, data=None):
-    """Sends data to the middleman for pretty-printing in its logs."""
+def middleman_debug(label: str, data=None, level: str = "info"):
+    """
+    Send structured debug output to Middleman logs.
+
+    This emits a Jupyter display with metadata:
+      - middleman_debug: True
+      - middleman_debug_label: <label>
+      - middleman_debug_level: <level>
+
+    Middleman intercepts these displays and logs the pretty-printed payload
+    (along with runtime/report context on the server side). Outside a
+    Middleman runtime this is a no-op display.
+
+    Args:
+        label: A descriptive label for the debug output
+        data: The data to debug (will be JSON serialized if possible)
+        level: Debug level, either "error" or "info" (default: "info")
+    """
+    if level not in ("error", "info"):
+        level = "info"
+
     try:
         content_str = json.dumps(data, indent=2, default=str, ensure_ascii=False)
         mime_type = "application/json"
@@ -47,6 +66,7 @@ def middleman_debug(label: str, data=None):
         metadata={
             "middleman_debug": True,
             "middleman_debug_label": label,
+            "middleman_debug_level": level.lower(),
         },
         raw=True,
     )

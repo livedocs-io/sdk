@@ -56,6 +56,7 @@ from livedocs.utils.common import (
     _download_file,
     _setup_dirs,
     get_query_for_datasource,
+    middleman_debug,
     serializer,
 )
 from livedocs.utils.lib.cache import QueryCache
