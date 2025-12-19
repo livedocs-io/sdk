@@ -267,6 +267,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         )
         if connector_info is None:
             return []
+        connector_name = connector_info.get("name", "googledrive")
 
         # Look up the Google Drive file ID for the xlsx file
         try:
@@ -315,6 +316,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                     type=FileNodeType.file,
                     mount_type=FileConnectorType.googledrive,
                     connector_id=UUID(connector_id),
+                    connector_name=connector_name,
                     path=sheet_path,
                     parent_id=parent_id,
                     size=None,
@@ -522,13 +524,14 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         )
         if connector_info is None:
             return []
+        connector_name = connector_info.get("name", "googledrive")
 
         # Handle xlsx files - list sheets as children
         if path.lower().endswith(".xlsx"):
             return self._list_xlsx_sheets(
                 path=path,
                 connector_id=connector_id,
-                connector_name=connector_info.get("name", "googledrive"),
+                connector_name=connector_name,
                 get_connection_details=get_connection_details,
                 refresh_token_callback=refresh_token_callback,
             )
@@ -647,6 +650,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                         else FileNodeType.file,
                         mount_type=FileConnectorType.googledrive,
                         connector_id=UUID(connector_id),
+                        connector_name=connector_name,
                         path=relative_path,
                         parent_id=parent_id,
                         size=size,
@@ -851,6 +855,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                             else FileNodeType.file,
                             mount_type=FileConnectorType.googledrive,
                             connector_id=UUID(connector_id),
+                            connector_name=connector_name,
                             path=relative_path,
                             parent_id=parent_id,
                             size=size,
@@ -1083,7 +1088,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
     def download_file(
         self,
         file_path: str,
-        connector_name: str,
+        connector_name: str | None,
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
@@ -1118,7 +1123,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         # Get the directory path from environment variable
         files_path = os.getenv("LIVEDOCS_FILES_PATH")
         if not files_path:
-            print("ERROR: LIVEDOCS_FILES_PATH environment variable not set")
             return None
 
         # Create subfolder if connector_name is provided
@@ -1289,6 +1293,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             type=FileNodeType.directory,
             mount_type=FileConnectorType.googledrive,
             connector_id=UUID(connector_info["connector_id"]),
+            connector_name=connector_info["name"],
             path="",  # Google Drive root
             parent_id=None,
             size=None,

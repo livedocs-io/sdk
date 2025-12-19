@@ -553,80 +553,63 @@ class Livedocs:
             _get_s3_connection_details = get_s3_connection_details
             _get_google_drive_connection_details = get_google_drive_connection_details
 
-        # Handle regular file (no connector_info)
-        # This could be a runtime file (already local) or a workspace file (needs download)
-        if connector_info is None:
-            file_id = file_info.get("file_id")
-            if file_id is None:
-                return None
+        files_path_env = os.environ.get("LIVEDOCS_FILES_PATH", "")
 
-            # Check if file already exists locally (runtime files)
-            files_path = os.environ.get("LIVEDOCS_FILES_PATH", "")
-            if files_path:
-                # file_id could be absolute path or relative to files_path
-                if file_id.startswith("/"):
-                    local_path = os.path.join(files_path, file_id.lstrip("/"))
-                else:
-                    local_path = os.path.join(files_path, file_id)
+        file_name = file_info.get("file_name")
+        file_id = file_info.get("file_id")
 
+        def resolve_runtime_or_workspace(
+            prefer_runtime_path: bool,
+        ) -> str | None:
+            """
+            Handle runtime/workspace files:
+            - Try local path under files_path_env (when set).
+            - For runtime, return constructed path even if missing (DuckDB will error later).
+            - For workspace, try cache then download via _download_file.
+            """
+            if prefer_runtime_path and file_id:
+                if files_path_env:
+                    if file_id.startswith("/"):
+                        return os.path.join(files_path_env, file_id.lstrip("/"))
+                    return os.path.join(files_path_env, file_id)
+                return file_id
+
+            # workspace-style: check cache
+            if files_path_env and file_name:
+                local_path = os.path.join(files_path_env, file_name)
                 if os.path.exists(local_path):
                     return local_path
 
-            # File not found locally - try to download from workspace
-            try:
-                local_path = _download_file(None, file_id, False, None)
-                return local_path
-            except Exception:
+            # Try download by name then id
+            if file_name:
+                try:
+                    return _download_file(file_name, None, False, None)
+                except Exception:
+                    pass
+            if file_id:
+                try:
+                    return _download_file(None, file_id, False, None)
+                except Exception:
+                    return None
+            return None
+
+        # Handle files without connector_info (runtime or workspace path/download)
+        if connector_info is None:
+            if file_id is None:
                 return None
+            return resolve_runtime_or_workspace(prefer_runtime_path=True)
 
         connector_type = connector_info.get("connector_type")
         connector_id = connector_info.get("connector_id")
         connector_name = connector_info.get("connector_name")
-        file_name = file_info.get("file_name")
-        file_id = file_info.get("file_id")
 
-        # Handle runtime files (already local)
+        # Runtime files (with explicit connector_info)
         if connector_type == FileConnectorType.runtime.value:
-            if not file_id:
-                return None
-            files_path = os.environ.get("LIVEDOCS_FILES_PATH", "")
-            if files_path:
-                # Construct path relative to LIVEDOCS_FILES_PATH
-                if file_id.startswith("/"):
-                    local_path = os.path.join(files_path, file_id.lstrip("/"))
-                else:
-                    local_path = os.path.join(files_path, file_id)
-            else:
-                # No files path set - use file_id directly (might be absolute path)
-                local_path = file_id
-            # Return path without checking existence - let DuckDB report if file not found
-            return local_path
+            return resolve_runtime_or_workspace(prefer_runtime_path=True)
 
-        # Handle workspace files (need download from livedocs servers)
+        # Workspace files
         if connector_type == FileConnectorType.workspace.value:
-            # First check if file is already cached locally (e.g., from xlsx sheet listing)
-            files_path = os.environ.get("LIVEDOCS_FILES_PATH", "")
-            if files_path and file_name:
-                local_path = os.path.join(files_path, file_name)
-                if os.path.exists(local_path):
-                    return local_path
-
-            # Try to download by file_name (more reliable than file_id for xlsx sheets)
-            if file_name:
-                try:
-                    local_path = _download_file(file_name, None, False, None)
-                    return local_path
-                except Exception:
-                    pass
-
-            # Fall back to file_id
-            if file_id:
-                try:
-                    local_path = _download_file(None, file_id, False, None)
-                    return local_path
-                except Exception:
-                    return None
-            return None
+            return resolve_runtime_or_workspace(prefer_runtime_path=False)
 
         if connector_id is None or file_name is None:
             return None
@@ -827,7 +810,7 @@ class Livedocs:
         # Generate query with file_path and get_database_details for Snowflake
         query = get_query_for_datasource(
             datasource,
-            None,
+            limit,
             file_path=file_path,
             get_database_details=_get_database_details,
         )
@@ -896,9 +879,10 @@ class Livedocs:
         file_path = self._prepare_file_for_query(datasource)
 
         # Generate query with file_path and get_database_details for Snowflake
+        # For schema extraction, we only need a small sample (1 row is enough to get all column types)
         query = get_query_for_datasource(
             datasource,
-            None,
+            1,
             file_path=file_path,
             get_database_details=self.helper_get_database_details,
         )

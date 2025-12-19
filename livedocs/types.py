@@ -187,6 +187,43 @@ class LivedocsResult:
 
         return data, metadata
 
+    def to_output(self, execution_count: int = 1) -> dict:
+        """
+        Convert LivedocsResult to Output format for JSON serialization.
+
+        This method converts the result to the Output format expected by
+        Jupyter/notebook frontends. Used by HTTP services (Relay) to return
+        results in a format compatible with notebook Output cells.
+
+        The data is serialized using the result's serialize() method, which
+        for QueryResult returns base64-encoded gzipped JSON of the DataFrame.
+
+        Args:
+            execution_count: Execution count for the output (default: 1)
+
+        Returns:
+            Dictionary in Output format with execute_result type:
+            {
+                "output_type": "execute_result",
+                "execution_count": 1,
+                "data": {
+                    "text/plain": "<base64 gzipped JSON>"
+                },
+                "metadata": {
+                    "text/plain": {"compression": "gzip", "encoding": "base64"},
+                    "query": {...}
+                }
+            }
+        """
+        return {
+            "output_type": "execute_result",
+            "execution_count": execution_count,
+            "data": {
+                "text/plain": self.result.serialize(),
+            },
+            "metadata": self.result.get_metadata(),
+        }
+
 
 class MsgPackDisplay(DisplayObject):
     """
@@ -485,6 +522,7 @@ class FileNode(BaseModel):
     type: FileNodeType
     mount_type: FileConnectorType
     connector_id: UUID | None = None
+    connector_name: str | None = None
     path: str
     parent_id: UUID | None = None
     size: int | None = None
