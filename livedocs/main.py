@@ -810,7 +810,7 @@ class Livedocs:
         # Generate query with file_path and get_database_details for Snowflake
         query = get_query_for_datasource(
             datasource,
-            None,
+            limit,
             file_path=file_path,
             get_database_details=_get_database_details,
         )
@@ -879,9 +879,10 @@ class Livedocs:
         file_path = self._prepare_file_for_query(datasource)
 
         # Generate query with file_path and get_database_details for Snowflake
+        # For schema extraction, we only need a small sample (1 row is enough to get all column types)
         query = get_query_for_datasource(
             datasource,
-            None,
+            1,
             file_path=file_path,
             get_database_details=self.helper_get_database_details,
         )

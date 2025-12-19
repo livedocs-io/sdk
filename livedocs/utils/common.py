@@ -124,16 +124,19 @@ def get_xlsx_sheet_names(local_path: str) -> list[str]:
 
 def get_query_for_datasource(
     datasource: ElementDataSource,
-    limit: int | None = 10,
+    limit: int | None,
     file_path: str | None = None,
     get_database_details: Callable[[str], tuple[object, dict[str, Any]]] | None = None,
 ) -> str | None:
     """
-    Prepares the DuckDB query for each datasource
+    Constructs the appropriate SQL query for a given datasource.
+
+    This function handles query construction for different datasource types (database tables,
+    files, dataframes) and accounts for database-specific syntax requirements.
 
     Args:
-        datasource: The datasource configuration
-        limit: Optional limit for the query results
+        datasource: The datasource configuration containing type and connection details
+        limit: Optional row limit for query results. If None, no limit is applied.
         file_path: Optional file path for file datasources. When provided, uses
                    direct file querying syntax (SELECT * FROM <filepath>).
                    Supported extensions: .csv, .tsv, .txt, .gz, .parquet, .json,
@@ -142,17 +145,24 @@ def get_query_for_datasource(
                              Required for Snowflake datasources to get database name.
 
     Returns:
-        SQL query string or None
-    """
-    limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        str | None: The constructed SQL query string, or None if construction fails
 
+    Raises:
+        ValueError: If required datasource information is missing or invalid
+    """
+    # Determine limit clause for query. Default to 100,000 if no limit is specified.
+    limit_clause = f" LIMIT {limit}" if limit is not None else "LIMIT 100000"
     supported_exts = get_duckdb_supported_file_extensions()
 
     match datasource["source_type"]:
+        # Datasource Type: DATAFRAME
         case ElementDatasourceType.dataframe.value:
             if datasource["dataframe_info"] is None:
                 raise ValueError("Dataframe info is required")
-            return f"SELECT * FROM {datasource['dataframe_info']['df_name']}{limit_clause};"
+            df_name = datasource["dataframe_info"]["df_name"]
+            return f"SELECT * FROM {df_name}{limit_clause};"
+
+        # Datasource Type: DATABASE TABLE
         case ElementDatasourceType.database_table.value:
             if datasource["database_info"] is None:
                 raise ValueError("Database info is required")
@@ -160,90 +170,98 @@ def get_query_for_datasource(
                 raise ValueError("Database table info is required")
 
             database_type = DatabaseType(datasource["database_info"]["database_type"])
+            db_info = datasource["database_info"]
+            table_info = datasource["database_table_info"]
+            schema_name = table_info["schema_name"]
+            table_name = table_info["table_name"]
 
-            # Handle Snowflake special case - needs database name from credentials
+            # Snowflake: Requires fetching database name from credentials
+            # Format: "database"."schema"."table"
             if database_type == DatabaseType.Snowflake:
                 if get_database_details is None:
                     raise ValueError(
                         "get_database_details is required for Snowflake datasources"
                     )
                 try:
-                    db_connector_id = datasource["database_info"][
-                        "database_connector_id"
-                    ]
+                    db_connector_id = db_info["database_connector_id"]
                     _, parsed_credentials = get_database_details(db_connector_id)
                     database_name = parsed_credentials.get("database")
                     if database_name is None:
                         raise ValueError(
                             "Database name not found in Snowflake credentials"
                         )
-                    return (
-                        f'SELECT * FROM "{database_name}".'
-                        f'"{datasource["database_table_info"]["schema_name"]}".'
-                        f'"{datasource["database_table_info"]["table_name"]}"'
-                        f"{limit_clause};"
-                    )
+                    return f'SELECT * FROM "{database_name}"."{schema_name}"."{table_name}"{limit_clause};'
                 except KeyError as e:
-                    raise ValueError(f"Missing required information: {e}")
+                    raise ValueError(f"Missing required Snowflake information: {e}")
 
-            if database_type == DatabaseType.Bigquery:
-                return f"SELECT * FROM {datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']}{limit_clause};"
+            # BigQuery: Uses dataset.table format (no quotes)
+            # Format: dataset.table
+            elif database_type == DatabaseType.Bigquery:
+                return f"SELECT * FROM {schema_name}.{table_name}{limit_clause};"
+
+            # ClickHouse: Uses quoted identifiers with schema.table
+            # Format: "schema"."table"
             elif database_type == DatabaseType.Clickhouse:
-                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
-            elif datasource["database_info"]["database_type"] in {
-                DatabaseType.Postgres.value,
-                DatabaseType.Motherduck.value,
-            }:
-                return f'SELECT * FROM "{datasource["database_table_info"]["schema_name"]}"."{datasource["database_table_info"]["table_name"]}"{limit_clause};'
-            elif database_type == DatabaseType.Databricks:
-                return (
-                    "SELECT * FROM "
-                    f"{datasource['database_table_info']['catalog_name']}."
-                    f"{datasource['database_table_info']['schema_name']}."
-                    f"{datasource['database_table_info']['table_name']}"
-                    f"{limit_clause};"
-                )
-            else:
-                return (
-                    "SELECT * FROM "
-                    f'"{datasource["database_info"]["database_name"]}".'
-                    f'"{datasource["database_table_info"]["schema_name"]}".'
-                    f'"{datasource["database_table_info"]["table_name"]}"'
-                    f"{limit_clause};"
-                )
+                return f'SELECT * FROM "{schema_name}"."{table_name}"{limit_clause};'
 
+            # PostgreSQL: Uses schema.table with quoted identifiers
+            # Format: "schema"."table"
+            elif database_type == DatabaseType.Postgres:
+                return f'SELECT * FROM "{schema_name}"."{table_name}"{limit_clause};'
+
+            # MotherDuck: Uses database.schema.table (three-part identifier)
+            # Format: "database"."schema"."table"
+            elif database_type == DatabaseType.Motherduck:
+                database_name = db_info["database_name"]
+                return f'SELECT * FROM "{database_name}"."{schema_name}"."{table_name}"{limit_clause};'
+
+            # Databricks: Uses catalog.schema.table (no quotes)
+            # Format: catalog.schema.table
+            elif database_type == DatabaseType.Databricks:
+                # Use catalog_name if available, otherwise fall back to database_name
+                catalog_name = (
+                    table_info.get("catalog_name") or db_info["database_name"]
+                )
+                return f"SELECT * FROM {catalog_name}.{schema_name}.{table_name}{limit_clause};"
+
+            # Default: Most databases use database.schema.table with quotes
+            # Format: "database"."schema"."table"
+            else:
+                database_name = db_info["database_name"]
+                return f'SELECT * FROM "{database_name}"."{schema_name}"."{table_name}"{limit_clause};'
+
+        # Datasource Type: FILE
         case ElementDatasourceType.file.value:
             if datasource["file_info"] is None:
                 raise ValueError("File info is required")
 
-            # If file_path is provided, use direct file querying
+            # Direct file path querying (preferred method)
             if file_path is not None:
-                # Extract file extension
+                # Extract and validate file extension
                 file_extension = None
                 if "." in file_path:
                     file_extension = "." + file_path.rsplit(".", 1)[1].lower()
 
-                # Validate file extension
                 if file_extension is None or file_extension not in supported_exts:
                     raise ValueError(
                         f"Unsupported file extension for direct querying: {file_extension or 'no extension'}. "
                         f"Supported extensions: {', '.join(sorted(supported_exts))}"
                     )
 
-                # Escape single quotes in file path to prevent SQL injection
+                # Escape single quotes to prevent SQL injection
                 escaped_file_path = file_path.replace("'", "''")
 
-                # Handle xlsx with layer_name (sheet selection)
-                # Use ignore_errors=true to handle cells that can't be cast (replaces with NULL)
+                # Handle Excel files with sheet selection
                 if file_extension == ".xlsx":
                     layer = datasource["file_info"].get("layer_name")
                     if layer:
                         return f"SELECT * FROM read_xlsx('{escaped_file_path}', sheet='{layer}', ignore_errors=true){limit_clause};"
                     return f"SELECT * FROM read_xlsx('{escaped_file_path}', ignore_errors=true){limit_clause};"
 
+                # For all other supported file types
                 return f"SELECT * FROM '{escaped_file_path}'{limit_clause};"
 
-            # Fallback to old method if file_path is not provided
+            # Fallback: Use file-name-based querying
             file_name = datasource["file_info"]["file_name"]
 
             # Extract and validate file extension
@@ -251,30 +269,27 @@ def get_query_for_datasource(
             if "." in file_name:
                 file_extension = "." + file_name.rsplit(".", 1)[1].lower()
 
-            # Validate file extension
             if file_extension is None or file_extension not in supported_exts:
                 raise ValueError(
                     f"Unsupported file extension for querying: {file_extension or 'no extension'}. "
                     f"Supported extensions: {', '.join(sorted(supported_exts))}"
                 )
 
-            # Use appropriate query method based on file type
-            if datasource["file_info"]["file_type"] == "csv":
+            # Use file-type-specific query methods
+            file_type = datasource["file_info"]["file_type"]
+
+            if file_type == "csv":
                 return f"SELECT * FROM read_csv_auto('{file_name}'){limit_clause};"
-            elif datasource["file_info"]["file_type"] == "xlsx":
-                # Use ignore_errors=true to handle cells that can't be cast (replaces with NULL)
+            elif file_type == "xlsx":
                 layer = datasource["file_info"].get("layer_name")
                 if layer:
                     return f"SELECT * FROM read_xlsx('{file_name}', sheet='{layer}', ignore_errors=true){limit_clause};"
                 return f"SELECT * FROM read_xlsx('{file_name}', ignore_errors=true){limit_clause};"
             else:
-                # For other supported file types, use direct querying
+                # For other file types, use direct querying
                 escaped_file_name = file_name.replace("'", "''")
                 return f"SELECT * FROM '{escaped_file_name}'{limit_clause};"
-        case ElementDatasourceType.dataframe.value:
-            if datasource["dataframe_info"] is None:
-                raise ValueError("Dataframe info is required")
-            return f"SELECT * FROM {datasource['dataframe_info']['df_name']}{limit_clause};"
+
         case _:
             raise ValueError(
                 f"Unsupported datasource type: {datasource['source_type']}"
