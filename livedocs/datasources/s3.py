@@ -3,7 +3,7 @@ from __future__ import annotations
 import mimetypes
 import os
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, List
 from uuid import UUID, uuid5
 
 import polars as pl
@@ -164,7 +164,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         connector_id: str,
         connector_name: str,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]],
-    ) -> list[FileNode]:
+    ) -> List[FileNode]:
         """
         List sheets in an xlsx file as virtual FileNodes.
 
@@ -235,7 +235,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
         max_results: int = 200,
-    ) -> list[FileNode]:
+    ) -> List[FileNode]:
         """
         Search files in S3 by name using a glob pattern (non-recursive list kept separate).
 
@@ -504,7 +504,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
         max_depth: int = 2,
-    ) -> list[FileNode]:
+    ) -> List[FileNode]:
         """
         List files and directories in an S3 bucket at the given path.
 
@@ -864,7 +864,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             _, connector_info_dict = get_connection_details(connector_id)
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
         except (KeyError, TypeError, ValueError) as e:
-            print(f"Error getting connection details: {e}")
             return False
 
         try:
@@ -881,7 +880,9 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            print(f"Error deleting file from S3: {e}")
+            middleman_debug(
+                f"S3 delete error for path '{file_path}'", data=e, level="error"
+            )
             return False
 
     def rename_file(
@@ -913,7 +914,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             _, connector_info_dict = get_connection_details(connector_id)
             connector_info: S3ConnectorInfo = connector_info_dict  # type: ignore[assignment]
         except (KeyError, TypeError, ValueError) as e:
-            print(f"Error getting connection details: {e}")
             return False
 
         try:
@@ -940,7 +940,9 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            print(f"Error renaming file in S3: {e}")
+            middleman_debug(
+                f"S3 rename error for path '{file_path}'", data=e, level="error"
+            )
             return False
 
     def get_signed_url(

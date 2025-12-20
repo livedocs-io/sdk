@@ -145,7 +145,11 @@ class Livedocs:
             self._secrets = {
                 key: secret for key, secret in bundle.workspace_secrets.items()
             }
-            self._built_in_vars = {**bundle.built_in_vars}
+            self._built_in_vars = {
+                key: str(value)
+                for key, value in bundle.built_in_vars.items()
+                if value is not None
+            }
             self._query_cache = self._config.query_cache_factory(report_id, token)
         else:
             self.is_initialized = True
@@ -455,7 +459,10 @@ class Livedocs:
         return MsgPackDisplay(enriched_prompt)
 
     def process_dependencies(
-        self, dependencies: str, datasource: dict = None, globals_dict: dict = None
+        self,
+        dependencies: str,
+        datasource: dict | None = None,
+        globals_dict: dict | None = None,
     ) -> dict:
         """
         Process dependencies and serialize DataFrames to dictionaries.
@@ -670,7 +677,6 @@ class Livedocs:
         # Download file if needed for preview
         file_path = self._prepare_file_for_query(datasource)
 
-        # Generate query with file_path and get_database_details for Snowflake
         query = get_query_for_datasource(
             datasource,
             50000,
@@ -944,7 +950,7 @@ class Livedocs:
 
         return payload
 
-    def process_single_value(self, config: str, context: dict = None) -> dict:
+    def process_single_value(self, config: str, context: dict | None = None):
         """
         Process a SingleValue element with formatting and comparison calculations
 

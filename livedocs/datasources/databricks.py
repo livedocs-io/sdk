@@ -16,6 +16,8 @@ from typing_extensions import Literal, Union
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
+    CacheInfo,
+    CacheStatus,
     DBSaveConfig,
     ElementDataSource,
     LivedocsResult,
@@ -372,12 +374,11 @@ class DatabricksDatasourceConnector(BaseDatasourceConnector):
 
             output = QueryResult(
                 data=result["result"],
-                metadata=QueryResultMetadata(  # type: ignore[typeddict-item]
+                metadata=QueryResultMetadata(
                     limit=50,
                     offset=0,
                     total_rows=result["rows_written"],
-                    run_date=result["run_date"],
-                    cache_info=None,
+                    cache_info=CacheInfo(id="", status=CacheStatus.MISS),
                 ),
             )
             return LivedocsResult(output)

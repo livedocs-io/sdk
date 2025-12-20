@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
+    CacheInfo,
+    CacheStatus,
     DBSaveConfig,
     ElementDataSource,
     LivedocsResult,
@@ -214,8 +216,7 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
                 limit=50,
                 offset=0,
                 total_rows=df.height,
-                run_date=datetime.now(timezone.utc),
-                cache_info=None,
+                cache_info=CacheInfo(id="", status=CacheStatus.MISS),
             ),
         )
         return LivedocsResult(output)
@@ -311,7 +312,7 @@ class MotherduckDatasourceConnector(BaseDatasourceConnector):
         return conn
 
     def _quote_identifier(self, identifier: str) -> str:
-        return f'"{identifier.replace("\"", "\"\"")}"'
+        return f'"{identifier.replace('"', '""')}"'
 
     def _format_table_name(self, schema_name: str, table_name: str) -> str:
         if schema_name:

@@ -61,6 +61,8 @@ def middleman_debug(label: str, data=None, level: str = "info"):
     except Exception:
         content_str = str(data)
         mime_type = "text/plain"
+
+    print(f"[Middleman Debug - {level.upper()}] {label} {content_str}")
     display(
         {mime_type: content_str},
         metadata={
@@ -127,7 +129,7 @@ def get_query_for_datasource(
     limit: int | None,
     file_path: str | None = None,
     get_database_details: Callable[[str], tuple[object, dict[str, Any]]] | None = None,
-) -> str | None:
+) -> str:
     """
     Constructs the appropriate SQL query for a given datasource.
 

@@ -11,8 +11,6 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 from uuid import UUID
 
-from livedocs.utils.common import serializer
-
 import polars as pl
 import psycopg
 from psycopg import sql
@@ -22,6 +20,8 @@ from typing_extensions import Literal, Union
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
+    CacheInfo,
+    CacheStatus,
     DBSaveConfig,
     ElementDataSource,
     LivedocsResult,
@@ -30,6 +30,7 @@ from livedocs.types import (
     SchemaNode,
     SchemaNodeType,
 )
+from livedocs.utils.common import serializer
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
@@ -377,12 +378,11 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
                 )
             output = QueryResult(
                 data=result["result"],
-                metadata=QueryResultMetadata(  # type: ignore[typeddict-item]
+                metadata=QueryResultMetadata(
                     limit=50,
                     offset=0,
                     total_rows=result["rows_written"],
-                    run_date=result["run_date"],
-                    cache_info=None,
+                    cache_info=CacheInfo(id="", status=CacheStatus.MISS),
                 ),
             )
             payload = LivedocsResult(output)
@@ -424,10 +424,12 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
             if dtype_str == "Object" or dtype_str == "Null":
                 # Convert Object (e.g., UUID, JSONB) and Null columns to string
                 conversions.append(
-                    pl.col(col_name).map_elements(
+                    pl.col(col_name)
+                    .map_elements(
                         serialize_value,
                         return_dtype=pl.Utf8,
-                    ).alias(col_name)
+                    )
+                    .alias(col_name)
                 )
             else:
                 conversions.append(pl.col(col_name))

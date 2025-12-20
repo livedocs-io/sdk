@@ -16,6 +16,8 @@ from typing_extensions import Literal
 
 from livedocs.datasources.base import BaseDatasourceConnector
 from livedocs.types import (
+    CacheInfo,
+    CacheStatus,
     DBSaveConfig,
     ElementDataSource,
     LivedocsResult,
@@ -279,12 +281,14 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                 )
             output = QueryResult(
                 data=result["result"],
-                metadata=QueryResultMetadata(  # type: ignore[typeddict-item]
+                metadata=QueryResultMetadata(
                     limit=50,
                     offset=0,
                     total_rows=result["rows_written"],
-                    run_date=result["run_date"],
-                    cache_info=None,
+                    cache_info=CacheInfo(
+                        id="",
+                        status=CacheStatus.MISS,
+                    ),
                 ),
             )
             payload = LivedocsResult(output)
@@ -334,7 +338,7 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
             table = None
             try:
                 table = client.get_table(table_name)
-            except Exception as e:
+            except Exception:
                 if create_table:
                     # Create schema from DataFrame
                     schema = []
