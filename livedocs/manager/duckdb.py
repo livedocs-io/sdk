@@ -1,31 +1,38 @@
 import duckdb
 
+_conn: duckdb.DuckDBPyConnection | None = None
 
-class DuckDBSingleton:
-    _instance = None
 
-    def __new__(cls, file_search_path: list[str] | None = None):
-        if cls._instance is None:
-            cls._instance = super(DuckDBSingleton, cls).__new__(cls)
-            # Initialize connection
-            cls._instance.conn = duckdb.connect(":memory:")
+def get_duckdb_connection(
+    file_search_path: list[str] | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """
+    Get or create the global DuckDB connection.
 
-            # Set configuration options
-            if file_search_path:
-                # Escape single quotes by doubling them to prevent SQL injection
-                escaped_paths = [path.replace("'", "''") for path in file_search_path]
-                _ = cls._instance.conn.execute(
-                    f"SET file_search_path = '{','.join(escaped_paths)}';"
-                )
+    Args:
+        file_search_path: List of file paths to set for DuckDB file search.
+                         Only used on first call; ignored on subsequent calls.
 
-            # cls._instance.conn.execute("SET enable_http_logging=true;")
-            # cls._instance.conn.execute("SET enable_profiling='json';")
-            # cls._instance.conn.execute("SET profiling_output='./profile.json';")
-            # cls._instance.conn.execute("SET profiling_mode='detailed';")
-            # cls._instance.conn.install_extension("spatial")
-            # cls._instance.conn.load_extension("spatial")
+    Returns:
+        The shared DuckDB connection instance.
+    """
+    global _conn
+    if _conn is None:
+        _conn = duckdb.connect(":memory:")
 
-            cls._instance.conn.install_extension("excel")
-            cls._instance.conn.load_extension("excel")
+        # Set configuration options
+        if file_search_path:
+            # Escape single quotes by doubling them to prevent SQL injection
+            escaped_paths = [path.replace("'", "''") for path in file_search_path]
+            _ = _conn.execute(f"SET file_search_path = '{','.join(escaped_paths)}';")
 
-        return cls._instance
+        _conn.install_extension("excel")
+        _conn.load_extension("excel")
+        # _conn.execute("SET enable_http_logging=true;")
+        # _conn.execute("SET enable_profiling='json';")
+        # _conn.execute("SET profiling_output='./profile.json';")
+        # _conn.execute("SET profiling_mode='detailed';")
+        # _conn.install_extension("spatial")
+        # _conn.load_extension("spatial")
+
+    return _conn
