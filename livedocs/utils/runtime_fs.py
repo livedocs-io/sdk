@@ -2,6 +2,7 @@ import mimetypes
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import List
 from uuid import UUID, uuid5
 
 from livedocs.types import (
@@ -203,8 +204,8 @@ def _list_xlsx_sheets(xlsx_path: Path, relative_path: str) -> list[FileNode]:
 
 
 def list_runtime_files_in_path(
-    path: str, search_string: str | None = None, max_depth: int = 3
-) -> list[FileNode]:
+    path: str, search_string: str | None = None, max_depth: int = 5
+) -> List[FileNode]:
     """
     List files and directories at the specified path relative to the configured files path.
     Optionally filter by search_string.

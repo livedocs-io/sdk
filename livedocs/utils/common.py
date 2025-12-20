@@ -61,6 +61,8 @@ def middleman_debug(label: str, data=None, level: str = "info"):
     except Exception:
         content_str = str(data)
         mime_type = "text/plain"
+
+    print(f"[Middleman Debug - {level.upper()}] {label} {content_str}")
     display(
         {mime_type: content_str},
         metadata={
@@ -127,7 +129,7 @@ def get_query_for_datasource(
     limit: int | None,
     file_path: str | None = None,
     get_database_details: Callable[[str], tuple[object, dict[str, Any]]] | None = None,
-) -> str | None:
+) -> str:
     """
     Constructs the appropriate SQL query for a given datasource.
 
@@ -200,9 +202,14 @@ def get_query_for_datasource(
                 return f"SELECT * FROM {schema_name}.{table_name}{limit_clause};"
 
             # ClickHouse: Uses quoted identifiers with schema.table
-            # Format: "schema"."table"
+            # Format: "schema"."table" or just "table" if no schema
             elif database_type == DatabaseType.Clickhouse:
-                return f'SELECT * FROM "{schema_name}"."{table_name}"{limit_clause};'
+                if schema_name:
+                    return (
+                        f'SELECT * FROM "{schema_name}"."{table_name}"{limit_clause};'
+                    )
+                else:
+                    return f'SELECT * FROM "{table_name}"{limit_clause};'
 
             # PostgreSQL: Uses schema.table with quoted identifiers
             # Format: "schema"."table"

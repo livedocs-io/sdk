@@ -7,6 +7,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Callable, Literal, cast
 
+import duckdb
 import polars as pl
 import requests
 from jinja2 import Template
@@ -17,7 +18,7 @@ from livedocs.datasources.googledrive import (
 from livedocs.datasources.s3 import S3DatasourceConnector
 from livedocs.manager.credentials import CredentialStore
 from livedocs.manager.datasources import DatasourceManager
-from livedocs.manager.duckdb import DuckDBSingleton
+from livedocs.manager.duckdb import get_duckdb_connection
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
@@ -103,7 +104,7 @@ class Livedocs:
         if files_path is None:
             raise ValueError("LIVEDOCS_FILES_PATH environment variable is not set.")
 
-        self._duckdb: DuckDBSingleton = DuckDBSingleton(
+        self._duckdb_conn: duckdb.DuckDBPyConnection = get_duckdb_connection(
             file_search_path=[files_path] if files_path is not None else []
         )
         self._report_id: str | None = None
@@ -144,7 +145,11 @@ class Livedocs:
             self._secrets = {
                 key: secret for key, secret in bundle.workspace_secrets.items()
             }
-            self._built_in_vars = {**bundle.built_in_vars}
+            self._built_in_vars = {
+                key: str(value)
+                for key, value in bundle.built_in_vars.items()
+                if value is not None
+            }
             self._query_cache = self._config.query_cache_factory(report_id, token)
         else:
             self.is_initialized = True
@@ -377,7 +382,7 @@ class Livedocs:
         # Prepare kwargs for DatasourceManager
         kwargs: dict[str, Any] = {}
         if source_type == ElementDatasourceType.file:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["download_file"] = self.download_file
             if file_path is not None:
                 kwargs["file_path"] = file_path
@@ -386,7 +391,7 @@ class Livedocs:
                 self.helper_get_google_drive_connection_details
             )
         elif source_type == ElementDatasourceType.dataframe:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["dataframe"] = dataframe
 
         df, schema, cache_info = DatasourceManager.read(
@@ -454,7 +459,10 @@ class Livedocs:
         return MsgPackDisplay(enriched_prompt)
 
     def process_dependencies(
-        self, dependencies: str, datasource: dict = None, globals_dict: dict = None
+        self,
+        dependencies: str,
+        datasource: dict | None = None,
+        globals_dict: dict | None = None,
     ) -> dict:
         """
         Process dependencies and serialize DataFrames to dictionaries.
@@ -669,7 +677,6 @@ class Livedocs:
         # Download file if needed for preview
         file_path = self._prepare_file_for_query(datasource)
 
-        # Generate query with file_path and get_database_details for Snowflake
         query = get_query_for_datasource(
             datasource,
             50000,
@@ -681,13 +688,13 @@ class Livedocs:
         source_type = ElementDatasourceType(datasource["source_type"])
         kwargs: dict[str, Any] = {}
         if source_type == ElementDatasourceType.file:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["download_file"] = self.download_file
             # Pass file_path if it was already downloaded (Case 2: preview scenario)
             if file_path is not None:
                 kwargs["file_path"] = file_path
         elif source_type == ElementDatasourceType.dataframe:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["dataframe"] = dataframe
 
         df, schema, cache_info = DatasourceManager.read(
@@ -819,13 +826,13 @@ class Livedocs:
         source_type = ElementDatasourceType(datasource["source_type"])
         kwargs: dict[str, Any] = {}
         if source_type == ElementDatasourceType.file:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["download_file"] = self.download_file
             # Pass file_path if it was already downloaded
             if file_path is not None:
                 kwargs["file_path"] = file_path
         elif source_type == ElementDatasourceType.dataframe:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["dataframe"] = dataframe
 
         df, schema, cache_info = DatasourceManager.read(
@@ -861,7 +868,7 @@ class Livedocs:
         return payload
 
     def _get_chart_schema(
-        self, datasource_str: str, dataframe: pl.DataFrame = None
+        self, datasource_str: str, dataframe: pl.DataFrame | None = None
     ) -> dict:
         """
         Returns a dictionary with the schema for a given datasource.
@@ -894,15 +901,15 @@ class Livedocs:
         kwargs: dict[str, Any] = {}
 
         if source_type == ElementDatasourceType.file:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             kwargs["download_file"] = self.download_file
             # Pass file_path if it was already downloaded (Case 2: preview scenario)
             if file_path is not None:
                 kwargs["file_path"] = file_path
         elif source_type == ElementDatasourceType.dataframe:
-            kwargs["duckdb_conn"] = self._duckdb.conn
+            kwargs["duckdb_conn"] = self._duckdb_conn
             if dataframe is not None and datasource is not None:
-                self._duckdb.conn.register(
+                self._duckdb_conn.register(
                     datasource["dataframe_info"]["df_name"], dataframe
                 )
 
@@ -943,7 +950,7 @@ class Livedocs:
 
         return payload
 
-    def process_single_value(self, config: str, context: dict = None) -> dict:
+    def process_single_value(self, config: str, context: dict | None = None):
         """
         Process a SingleValue element with formatting and comparison calculations
 

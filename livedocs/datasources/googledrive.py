@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, List
 from uuid import UUID, uuid5
 
 import polars as pl
@@ -29,6 +29,7 @@ from livedocs.types import (
 from livedocs.utils.common import (
     _get_dataframe_schema,
     get_xlsx_sheet_names,
+    middleman_debug,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
@@ -163,20 +164,12 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             if GoogleDriveDatasourceConnector._is_token_expired_or_expiring(
                 token_expiry
             ):
-                print(
-                    f"DEBUG: Token expired or expiring (expiry: {token_expiry}), calling refresh callback..."
-                )
                 try:
                     connector_info = refresh_token_callback(connector_info)
-                    print("DEBUG: Token refresh callback completed successfully")
                 except Exception as e:
-                    import traceback
-
-                    print(
-                        f"WARNING: Token refresh callback failed: {type(e).__name__}: {str(e)}"
+                    middleman_debug(
+                        f"Token refresh callback failed: {type(e).__name__}", e, "error"
                     )
-                    print(traceback.format_exc())
-                    # Continue with original connector_info if refresh fails
 
         return connector_info
 
@@ -247,7 +240,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
-    ) -> list[FileNode]:
+    ) -> List[FileNode]:
         """
         List sheets in an xlsx file as virtual FileNodes.
 
@@ -502,7 +495,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         ]
         | None = None,
         max_depth: int = 2,
-    ) -> list[FileNode]:
+    ) -> List[FileNode]:
         """
         List files and directories in Google Drive at the given path.
 
@@ -743,7 +736,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         ]
         | None = None,
         max_results: int = 50,
-    ) -> list[FileNode]:
+    ) -> List[FileNode]:
         """
         Search Google Drive files by name using the Drive search endpoint.
 
@@ -855,7 +848,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                             else FileNodeType.file,
                             mount_type=FileConnectorType.googledrive,
                             connector_id=UUID(connector_id),
-                            connector_name=connector_name,
+                            connector_name=connector_info.get("name", "googledrive"),
                             path=relative_path,
                             parent_id=parent_id,
                             size=size,
@@ -933,10 +926,9 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            import traceback
-
-            print(f"ERROR in delete_file: {type(e).__name__}: {str(e)}")
-            print(traceback.format_exc())
+            middleman_debug(
+                f"ERROR in delete_file: {type(e).__name__}: {str(e)}", e, "error"
+            )
             return False
 
     def rename_file(
@@ -990,10 +982,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            import traceback
-
-            print(f"ERROR in rename_file: {type(e).__name__}: {str(e)}")
-            print(traceback.format_exc())
+            middleman_debug(f"ERROR in rename_file: {type(e).__name__}", e, "error")
             return False
 
     def upload_file_to_googledrive(
@@ -1042,47 +1031,30 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
 
             # Get destination folder ID
             folder_id = self._get_folder_id_from_path(service, drive_path)
-            print(f"DEBUG: Uploading to folder_id: {folder_id}")
 
             # Get filename from local path
             filename = os.path.basename(file_path)
-            print(f"DEBUG: Uploading file: {filename} from {file_path}")
 
             # Create file metadata
             file_metadata = {"name": filename}
             if folder_id != "root":
                 file_metadata["parents"] = [folder_id]
-            print(f"DEBUG: File metadata: {file_metadata}")
 
             # Create media upload
             media = MediaFileUpload(file_path, resumable=True)
 
-            # Upload file
-            print(f"DEBUG: Starting file upload...")
-            result = (
+            (
                 service.files()
                 .create(body=file_metadata, media_body=media, fields="id")
                 .execute()
             )
-            print(f"DEBUG: Upload successful: {result}")
 
             return True
 
         except Exception as e:
-            import traceback
-
-            error_msg = f"ERROR in save_file: {type(e).__name__}: {str(e)}"
-            print(error_msg)
-            if isinstance(e, HttpError):
-                if hasattr(e, "resp"):
-                    status = getattr(e.resp, "status", None)
-                    print(f"  HTTP Status: {status}")
-                if hasattr(e, "content"):
-                    content_str = str(e.content)
-                    print(
-                        f"  Error Content: {content_str[:500]}"
-                    )  # Limit to first 500 chars
-            print(traceback.format_exc())
+            middleman_debug(
+                f"ERROR in upload_file_to_googledrive: {type(e).__name__}", e, "error"
+            )
             return False
 
     def download_file(
@@ -1143,7 +1115,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             file_id = self._get_file_id_from_path(service, file_path)
 
             if file_id is None:
-                print(f"ERROR: File not found at path: {file_path}")
                 return None
 
             # Get file metadata
@@ -1196,20 +1167,9 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return local_file_path
 
         except Exception as e:
-            import traceback
-
-            error_msg = f"ERROR in download_file: {type(e).__name__}: {str(e)}"
-            print(error_msg)
-            if isinstance(e, HttpError):
-                if hasattr(e, "resp"):
-                    status = getattr(e.resp, "status", None)
-                    print(f"  HTTP Status: {status}")
-                if hasattr(e, "content"):
-                    content_str = str(e.content)
-                    print(
-                        f"  Error Content: {content_str[:500]}"
-                    )  # Limit to first 500 chars
-            print(traceback.format_exc())
+            middleman_debug(
+                f"ERROR in download_file: {type(e).__name__}: {str(e)}", e, "error"
+            )
             return None
 
     def get_signed_url(
