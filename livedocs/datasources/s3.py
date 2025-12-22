@@ -359,6 +359,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                 )
 
         except Exception as e:
+            middleman_debug("ERROR in S3 search:", e, "error")
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
@@ -468,6 +469,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information in datasource: {e}")
         except Exception as e:
+            middleman_debug("ERROR in S3 read:", e, "error")
             raise RuntimeError(
                 sanitize_sensitive_data(
                     f"An error occurred while querying the S3 file: {e}"
@@ -503,7 +505,6 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         connector_id: str | None = None,
         get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
         | None = None,
-        max_depth: int = 2,
     ) -> List[FileNode]:
         """
         List files and directories in an S3 bucket at the given path.
@@ -693,6 +694,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                     )
                 )
         except Exception as e:
+            middleman_debug("ERROR in S3 list:", e, "error")
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
