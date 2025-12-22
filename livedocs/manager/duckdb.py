@@ -1,35 +1,38 @@
 import duckdb
 
+_conn: duckdb.DuckDBPyConnection | None = None
 
-class DuckDBSingleton:
-    _instance = None
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(DuckDBSingleton, cls).__new__(cls)
-            cls._instance.conn = duckdb.connect(":memory:")
+def get_duckdb_connection(
+    file_search_path: list[str] | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """
+    Get or create the global DuckDB connection.
 
-            # cls._instance.conn.execute("SET enable_http_logging=true;")
-            # cls._instance.conn.execute("SET enable_profiling=JSON;")
-            # cls._instance.conn.execute("SET profiling_mode=DETAILED;")
+    Args:
+        file_search_path: List of file paths to set for DuckDB file search.
+                         Only used on first call; ignored on subsequent calls.
 
-            cls._instance.conn.install_extension("postgres")
-            cls._instance.conn.load_extension("postgres")
+    Returns:
+        The shared DuckDB connection instance.
+    """
+    global _conn
+    if _conn is None:
+        _conn = duckdb.connect(":memory:")
 
-            cls._instance.conn.install_extension("spatial")
-            cls._instance.conn.load_extension("spatial")
+        # Set configuration options
+        if file_search_path:
+            # Escape single quotes by doubling them to prevent SQL injection
+            escaped_paths = [path.replace("'", "''") for path in file_search_path]
+            _ = _conn.execute(f"SET file_search_path = '{','.join(escaped_paths)}';")
 
-            cls._instance.postgres_connections = {}
-        return cls._instance
+        _conn.install_extension("excel")
+        _conn.load_extension("excel")
+        # _conn.execute("SET enable_http_logging=true;")
+        # _conn.execute("SET enable_profiling='json';")
+        # _conn.execute("SET profiling_output='./profile.json';")
+        # _conn.execute("SET profiling_mode='detailed';")
+        # _conn.install_extension("spatial")
+        # _conn.load_extension("spatial")
 
-    def attach_postgres(self, connection_string: str, alias: str):
-        if alias not in self.postgres_connections:
-            self.conn.execute(
-                f"ATTACH '{connection_string}' AS {alias} (TYPE postgres)"
-            )
-            self.postgres_connections[alias] = connection_string
-
-    def detach_postgres(self, alias: str):
-        if alias in self.postgres_connections:
-            self.conn.execute(f"DETACH {alias}")
-            del self.postgres_connections[alias]
+    return _conn

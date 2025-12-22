@@ -1,4 +1,4 @@
-# vm-lib
+# Livedocs SDK
 
 A Python SDK that enables Livedocs to run helper functions for various elements, such as charts, tables, SQL queries, and text.
 
@@ -6,49 +6,53 @@ A Python SDK that enables Livedocs to run helper functions for various elements,
 
 ## Requirements
 
-1. **Install Python** (version 3.12).  
-   - Download and install: [Python Downloads](https://www.python.org/downloads/).
+1. **Install `uv` (latest version)**
+   Download and install from the official documentation:
+   [https://docs.astral.sh/uv/getting-started/installation/](https://docs.astral.sh/uv/getting-started/installation/)
+
+2. **Install Python** (version **3.12**)
+   Download and install from:
+   [https://www.python.org/downloads/](https://www.python.org/downloads/)
 
 ---
 
 ## Installation
 
-Before installation, ensure your build system is set up with `setuptools`, `wheel`, and other build dependencies. If these are not already installed, you can do so by running:
+Before installing the SDK, ensure your Python environment is set up. `uv` handles dependency resolution and installation, so no separate `pip`, `setuptools`, or `wheel` setup is required.
+
+### Install the SDK in Development Mode
+
+If you’ll be actively working on the SDK, install it in *editable mode* so your environment always reflects the latest local changes.
+
+Make sure this command is run in the same virtual environment used by Middleman:
 
 ```bash
-pip install --upgrade pip setuptools wheel
+uv pip install -e .
 ```
 
-### Install vm-lib in Development Mode
+### Install the SDK as a Standalone Package
 
-If you’ll be actively working with `vm-lib`, install it in *editable mode* so the kernel points to your latest changes. Make sure this command is run in the same environment where Middleman’s `VIRTUAL_ENV` is poined to:
-
-```bash
-pip install -e .
-```
-
-### Install vm-lib as a Standalone Package
-
-To install `vm-lib` as a standalone library, use the following command, replacing `username` and `password` with your GitHub credentials:
+To install the SDK as a standalone dependency directly from GitHub:
 
 ```bash
-pip install git+https://username:password@github.com/livedocs-io/vm-lib.git
+uv pip install git+https://github.com/livedocs-io/sdk.git
 ```
 
 ---
 
 ## Testing
 
-To test chart functions directly from the client, run:
+To test chart functions directly from the client:
 
-1. **Install Testing Dependencies**:
+1. **Install testing dependencies**:
 
-    ```bash
-    pip install ".[test]"
-    ```
+   ```bash
+   uv pip install ".[test]"
+   ```
 
-2. **Run Tests**:
+2. **Run tests**:
 
-    ```bash
-    CORE_BASE_URL=http://localhost:4000 flask --app tests.vega-api run
-    ```
+   ```bash
+   CORE_BASE_URL=http://localhost:4000 flask --app tests.vega-api run
+   ```
+* Tighten wording for external/open-source audiences

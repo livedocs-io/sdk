@@ -2,20 +2,25 @@ import base64
 import gzip
 import json
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
+from uuid import UUID
 
 import msgpack
 from IPython.core.display import DisplayObject
 from polars import DataFrame
-from pydantic import BaseModel, model_validator
-
-from livedocs.utils.serialize import _json_serializer
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
 class GCSBucketType(str, Enum):
     USER_FILES = "user-files"
     CACHE_ARTIFACTS = "cache-artifacts"
+
+
+class FileManifestAction(str, Enum):
+    READ = "read"
+    WRITE = "write"
 
 
 class CacheStatus(str, Enum):
@@ -28,11 +33,55 @@ class CacheInfo(TypedDict):
     status: CacheStatus
 
 
-class QueryResultMetadata(TypedDict):
+class SortOperation(TypedDict):
+    column: str
+    direction: str
+
+
+class FilterCondition(TypedDict):
+    column: str
+    operator: str
+    value: str
+    id: str
+    conjunction: str
+
+
+class StyleRule(TypedDict):
+    conditions: list[FilterCondition]
+    color: str
+
+
+class CalculationOperation(TypedDict):
+    column: str
+    calculation_type: str
+    id: str
+
+
+class TableMetadata(TypedDict, total=False):
+    sort: SortOperation | None
+    filters: list[FilterCondition] | None
+    styles: list[StyleRule] | None
+    calculations: list[CalculationOperation] | None
+
+
+class FileManifest(BaseModel):
+    file_id: str  # The unique ID of the file (resolved by the API)
+    file_name: str  # The display name of the file
+    signed_url: str  # The GCS signed URL for download/access
+    size: int | None  # File size in bytes, can be None if unknown
+    type: str | None  # e.g., 'csv', 'xlsx'
+    created_at: str | None  # ISO string for creation timestamp
+    bucket: GCSBucketType | None  # The bucket type (user-files or cache-artifacts)
+    action: FileManifestAction  # Action type (read/write)
+
+
+class QueryResultMetadata(TypedDict, total=False):
     limit: int
     offset: int
     total_rows: int
     cache_info: CacheInfo
+    applied_metadata: TableMetadata | None
+    calculation_results: dict[str, dict[str, Any]] | None
 
 
 class LivedocsResultInterface(ABC):
@@ -75,8 +124,10 @@ class QueryResult(LivedocsResultInterface):
         self.metadata = metadata
 
     def serialize(self) -> str:
+        from livedocs.utils.common import serializer
+
         json_str = json.dumps(
-            self.data.to_dicts(), default=_json_serializer, separators=(",", ":")
+            self.data.to_dicts(), default=serializer, separators=(",", ":")
         )
         compressed = gzip.compress(json_str.encode("utf-8"))
         b64_encoded = base64.b64encode(compressed).decode("ascii")
@@ -92,9 +143,40 @@ class QueryResult(LivedocsResultInterface):
         }
 
 
+class ChartResult(LivedocsResultInterface):
+    """
+    A class to represent the result of a chart generation.
+
+    Attributes:
+    ----------
+    data : str
+        The encoded chart spec data.
+    metadata : dict
+        Metadata associated with the chart result including cache info.
+    """
+
+    def __init__(self, data: str, cache_info: CacheInfo | None = None):
+        self.data = data
+        self.cache_info = cache_info
+
+    def serialize(self) -> str:
+        return self.data
+
+    def get_metadata(self):
+        return {
+            "text/plain": {
+                "compression": "gzip",
+                "encoding": "base64",
+            },
+            "chart": {
+                "cache_info": self.cache_info,
+            },
+        }
+
+
 class LivedocsResult:
     def __init__(self, result: LivedocsResultInterface):
-        self.result = result
+        self.result: LivedocsResultInterface = result
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         data = {
@@ -105,20 +187,59 @@ class LivedocsResult:
 
         return data, metadata
 
+    def to_output(self, execution_count: int = 1) -> dict:
+        """
+        Convert LivedocsResult to Output format for JSON serialization.
+
+        This method converts the result to the Output format expected by
+        Jupyter/notebook frontends. Used by HTTP services (Relay) to return
+        results in a format compatible with notebook Output cells.
+
+        The data is serialized using the result's serialize() method, which
+        for QueryResult returns base64-encoded gzipped JSON of the DataFrame.
+
+        Args:
+            execution_count: Execution count for the output (default: 1)
+
+        Returns:
+            Dictionary in Output format with execute_result type:
+            {
+                "output_type": "execute_result",
+                "execution_count": 1,
+                "data": {
+                    "text/plain": "<base64 gzipped JSON>"
+                },
+                "metadata": {
+                    "text/plain": {"compression": "gzip", "encoding": "base64"},
+                    "query": {...}
+                }
+            }
+        """
+        return {
+            "output_type": "execute_result",
+            "execution_count": execution_count,
+            "data": {
+                "text/plain": self.result.serialize(),
+            },
+            "metadata": self.result.get_metadata(),
+        }
+
 
 class MsgPackDisplay(DisplayObject):
     """
     Custom display class for msgpack data in IPython
     """
 
-    def __init__(self, data: Dict[str, Any], metadata: Optional[Dict] = None):
+    def __init__(self, data, metadata: dict[str, Any] | None = None):
         super().__init__(data, metadata=metadata)
         self.data = data
         self.metadata = metadata or {}
 
     def _pack_data(self) -> bytes:
         """Pack the data using msgpack"""
-        return msgpack.packb(self.data, use_bin_type=True)
+        from livedocs.utils.common import serializer
+
+        return msgpack.packb(self.data, default=serializer)
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """
@@ -135,14 +256,53 @@ class MsgPackDisplay(DisplayObject):
         return data, self.metadata
 
 
+class JsonDisplay(DisplayObject):
+    """
+    Simple JSON display class for IPython - no msgpack, just JSON
+    """
+
+    def __init__(self, data, metadata: dict[str, Any] | None = None):
+        super().__init__(data, metadata=metadata)
+        self.data = self._to_json_serializable(data)
+        self.metadata = metadata or {}
+
+    def _to_json_serializable(self, obj: Any) -> Any:
+        """Recursively convert objects to JSON-serializable format."""
+        if obj is None:
+            return None
+        if isinstance(obj, BaseModel):
+            return obj.model_dump(mode="json")
+        if isinstance(obj, UUID):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, dict):
+            return {k: self._to_json_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._to_json_serializable(item) for item in obj]
+        return obj
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """
+        Return the data as JSON only
+        """
+        data = {
+            "application/json": self.data,
+        }
+
+        return data, self.metadata
+
+
 class UserMeta(BaseModel):
-    styleSettings: dict
+    styleSettings: dict[str, Any]
     chartType: str
-    colorGroups: Optional[dict] = None
-    pieSettings: Optional[dict] = None
-    histogramSettings: Optional[dict] = None
-    chartSettings: Optional[dict] = None
-    swappedChartSettings: Optional[dict] = None
+    colorGroups: dict[str, Any] | None = None
+    pieSettings: dict[str, Any] | None = None
+    histogramSettings: dict[str, Any] | None = None
+    chartSettings: dict[str, Any] | None = None
+    swappedChartSettings: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     def validate_exclusive_chart_settings(cls, values):
@@ -166,9 +326,8 @@ class UserMeta(BaseModel):
 
 class VegaSpec(BaseModel):
     spec: str
-    schema: dict
+    schema_: dict[str, Any] = Field(alias="schema")
     status: str
-    cache_info: Optional[CacheInfo] = None
 
     @model_validator(mode="before")
     def validate_usermeta(cls, values):
@@ -193,9 +352,28 @@ class VegaSpec(BaseModel):
         return values
 
 
+class SourceType(str, Enum):
+    workspace = "workspace"
+    s3bucket = "s3bucket"
+    runtime = "runtime"
+    googlesheets = "googlesheets"
+    googledrive = "googledrive"
+    database = "database"
+
+
+class FileConnectorType(str, Enum):
+    s3bucket = "s3bucket"
+    runtime = "runtime"
+    googlesheets = "googlesheets"
+    googledrive = "googledrive"
+    workspace = "workspace"
+
+
 class DatabaseType(Enum):
     Bigquery = "bigquery"
     Clickhouse = "clickhouse"
+    Motherduck = "motherduck"
+    Databricks = "databricks"
     Mysql = "mysql"
     Postgres = "postgres"
     Redshift = "redshift"
@@ -216,7 +394,8 @@ class DatabaseInfo(TypedDict):
 
 
 class DatabaseTableInfo(TypedDict):
-    instance_id: Optional[str]
+    instance_id: str | None
+    catalog_name: str | None
     schema_name: str
     table_name: str
 
@@ -226,44 +405,160 @@ class DataframeInfo(TypedDict):
     df_name: str
 
 
+class FileConnectorInfo(TypedDict):
+    connector_id: str
+    connector_name: str
+    connector_type: FileConnectorType
+
+
 class FileInfo(TypedDict):
     file_id: str
     file_name: str
     file_type: str
     file_has_layers: bool
-    layer_name: Optional[str]
+    layer_name: str | None
+    connector_info: FileConnectorInfo | None
 
 
 class ElementDataSource(TypedDict):
-    database_info: Optional[DatabaseInfo]
-    database_table_info: Optional[DatabaseTableInfo]
-    dataframe_info: Optional[DataframeInfo]
-    file_info: Optional[FileInfo]
+    database_info: DatabaseInfo | None
+    database_table_info: DatabaseTableInfo | None
+    dataframe_info: DataframeInfo | None
+    file_info: FileInfo | None
     source_type: ElementDatasourceType
 
 
-class DecryptedSecret(TypedDict):
+class WorkspaceSecret(BaseModel):
     id: str
     key: str
-    value: str
+    value: SecretStr
 
 
-class DatabaseConnector(TypedDict):
-    database_connector_id: str
-    database_name: str
-    connection_details: dict[str, str]
+class DatabaseConnection(BaseModel):
+    db_connector_id: str
+    db_name: str
+    connection_details: SecretStr
 
 
-class Credentials(TypedDict):
+class S3ConnectorInfo(TypedDict):
+    connector_id: str
+    name: str
+    endpoint_url: str
+    region: str
+    provider: str
+    access_key: str
+    secret_key: str
+    bucket_name: str
+    path_prefix: str
+    is_virtual_hosted_style: bool
+
+
+class GoogleDriveConnectorInfo(TypedDict):
+    connector_id: str
+    name: str
+    provider: str
+    email: str
+    access_token: str
+    refresh_token: str
+    token_expiry: datetime
+    scopes: str
+
+
+class Credentials(BaseModel):
     workspace_id: str
-    workspace_secrets: List[DecryptedSecret]
-    databases: List[DatabaseConnector]
+    workspace_secrets: dict[str, WorkspaceSecret]
+    databases: dict[str, DatabaseConnection]
+    s3_connectors: dict[str, S3ConnectorInfo]
+    google_drive_connectors: dict[str, GoogleDriveConnectorInfo]
+    built_in_vars: dict[str, Any | None]
+
+
+class FileAction(str, Enum):
+    RENAME = "rename"
+    DELETE = "delete"
+
+
+class SDKContext(str, Enum):
+    RELAY = "relay"
+    IPYTHON = "ipython"
 
 
 class Schema(TypedDict):
     name: str
     type: str
-    children: List
+    children: list["Schema"]
+
+
+class SchemaNodeType(str, Enum):
+    COLUMN = "COLUMN"
+    DATABASE = "DATABASE"
+    SCHEMA = "SCHEMA"
+    TABLE = "TABLE"
+    VIEW = "VIEW"
+
+
+class MountHealthStatus(str, Enum):
+    connected = "connected"
+    reconnecting = "reconnecting"
+    auth_expired = "auth_expired"
+    error = "error"
+
+
+class MountHealth(TypedDict):
+    status: MountHealthStatus
+    last_checked: datetime
+    error_message: str | None
+
+
+class FileNodeType(str, Enum):
+    root = "root"
+    directory = "directory"
+    file = "file"
+
+
+class FileNode(BaseModel):
+    id: UUID
+    name: str
+    type: FileNodeType
+    mount_type: FileConnectorType
+    connector_id: UUID | None = None
+    connector_name: str | None = None
+    path: str
+    parent_id: UUID | None = None
+    size: int | None = None
+    mime_type: str | None = None
+    modified_at: datetime | None = None
+    created_at: datetime | None = None
+    health: MountHealth
+
+
+class SchemaNode(BaseModel):
+    id: UUID
+    connector_id: UUID
+    parent_id: UUID | None = None
+    path: str
+    type: SchemaNodeType
+    name: str
+    data_type: str | None = None
+    livedocs_type: str | None = None
+    description: str | None = None
+    level: int
+    metadata: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class ListPathRequest(BaseModel):
+    node_id: str | None = None
+    schema_node_type: SchemaNodeType | None = None
+
+
+class ListPathResponse(BaseModel):
+    files: list[FileNode]
+    schema_nodes: list[SchemaNode]
 
 
 class DBSaveConfig(TypedDict):
@@ -276,7 +571,7 @@ class DBSaveConfig(TypedDict):
     table_name: str
     table_is_new: bool
     write_mode: Literal["append", "overwrite"]
-    run_settings: List[
+    run_settings: list[
         Literal["edit_mode", "view_mode", "scheduled_runs", "webhook_runs"]
     ]
 
@@ -284,20 +579,36 @@ class DBSaveConfig(TypedDict):
 # Vega Chart Spec
 
 
+class ReferenceLineSettings(TypedDict):
+    label: str | None
+    value: str | None
+    color: str | None
+    labelPosition: (
+        Literal[
+            "none", "outside", "top-left", "top-right", "bottom-left", "bottom-right"
+        ]
+        | None
+    )
+    labelAngle: int | None
+    lineWidth: int | None
+    lineStyle: Literal["solid", "dashed", "dotted"] | None
+
+
 class AxisStyleSettings(TypedDict, total=False):
-    title: Optional[str]
-    format: Optional[str]
-    min: Optional[float]
-    max: Optional[float]
-    ticks: Optional[int]
-    grid: Optional[Literal["solid", "dashed", "none"]]
-    labelAngle: Optional[int]
-    scale: Optional[Literal["linear", "log", "pow", "sqrt"]]
+    title: str | None
+    format: str | None
+    min: float | None
+    max: float | None
+    ticks: int | None
+    grid: Literal["solid", "dashed", "none"] | None
+    labelAngle: int | None
+    scale: Literal["linear", "log", "pow", "sqrt"] | None
+    referenceLines: list[ReferenceLineSettings] | None
 
 
 class LegendSettings(TypedDict, total=False):
-    show: Optional[bool]
-    position: Optional[
+    show: bool | None
+    position: (
         Literal[
             "top",
             "right",
@@ -308,32 +619,44 @@ class LegendSettings(TypedDict, total=False):
             "top-right",
             "bottom-right",
         ]
-    ]
-    title: Optional[str]
+        | None
+    )
+    title: str | None
 
 
 class MarkColorSettings(TypedDict):
-    hex: List[Dict[str, str]]
+    hex: list[dict[str, str]]
     mode: Literal["all_fields"]
 
 
 class MarkOpacitySettings(TypedDict):
-    value: List[Dict[str, float]]
+    value: list[dict[str, float]]
     mode: Literal["all_fields", "by_field", "based_on_field"]
 
 
+class MarkDataLabelsSettings(TypedDict):
+    show: bool | None
+    mode: Literal["per_color", "total"] | None
+    position: Literal["inside-top", "center", "outside-top"] | None
+    color: Literal["auto", "white", "black"] | None
+    angle: int | None
+    fontSize: int | None
+
+
 class MarkSettings(TypedDict):
-    color: Optional[MarkColorSettings]
-    opacity: Optional[MarkOpacitySettings]
+    color: MarkColorSettings | None
+    opacity: MarkOpacitySettings | None
+    dataLabels: MarkDataLabelsSettings | None
 
 
 class StyleSettings(TypedDict, total=False):
-    fontSize: Optional[int]
-    tooltip: Optional[bool]
-    legend: Optional[LegendSettings]
-    markSettings: Optional[Dict[str, MarkSettings]]
-    xAxis: Optional[AxisStyleSettings]
-    yAxis: Optional[AxisStyleSettings]
+    fontSize: int | None
+    tooltip: bool | None
+    legend: LegendSettings | None
+    markSettings: dict[str, MarkSettings] | None
+    xAxis: AxisStyleSettings | None
+    yAxis: AxisStyleSettings | None
+    mode: Literal["light", "dark"] | None
 
 
 class ColorBy(TypedDict):
@@ -349,7 +672,7 @@ class YAxisSeries(TypedDict):
     mark: str
     type: str
     color_by: ColorBy
-    name: Optional[str]
+    name: str | None
 
 
 class XAxis(TypedDict):
@@ -359,8 +682,8 @@ class XAxis(TypedDict):
 
 
 class YAxis(TypedDict):
-    primary: List[YAxisSeries]
-    secondary: Optional[List[YAxisSeries]]
+    primary: list[YAxisSeries]
+    secondary: list[YAxisSeries] | None
 
 
 class LivedocsChartSpec(TypedDict):
@@ -402,13 +725,37 @@ class HistogramSpec(TypedDict):
     binBy: HistogramBinBy
 
 
+class HorizontalSubplotSettings(TypedDict):
+    field: str | None
+    sort: Literal["ascending", "descending"] | None
+    wrap: bool | None
+    columns: int | None
+    bin: bool | None
+    bin_count: int | None
+
+
+class VerticalSubplotSettings(TypedDict):
+    field: str | None
+    sort: Literal["ascending", "descending"] | None
+    linkYAxis: bool | None
+    bin: bool | None
+    bin_count: int | None
+
+
+class SubplotSettings(TypedDict):
+    horizontal: HorizontalSubplotSettings
+    vertical: VerticalSubplotSettings
+
+
 class Spec(TypedDict):
     chartType: Literal["main", "histogram", "swapped_main", "pie"]
-    styleSettings: Optional[StyleSettings]
-    chartSettings: Optional[LivedocsChartSpec]
-    swappedChartSettings: Optional[LivedocsSwappedChartSpec]
-    histogramSettings: Optional[HistogramSpec]
-    pieSettings: Optional[PieChartSpec]
+    styleSettings: StyleSettings | None
+    chartSettings: LivedocsChartSpec | None
+    swappedChartSettings: LivedocsSwappedChartSpec | None
+    histogramSettings: HistogramSpec | None
+    pieSettings: PieChartSpec | None
+    colorGroups: dict[str, dict[str, str] | str] | None
+    subplots: SubplotSettings | None
 
 
 __all__ = [
@@ -419,8 +766,16 @@ __all__ = [
     "DataframeInfo",
     "FileInfo",
     "ElementDataSource",
+    "FileConnectorType",
     "Schema",
     "LivedocsChartSpec",
     "Spec",
     "DBSaveConfig",
+    "JsonDisplay",
+    "SchemaNode",
+    "SchemaNodeType",
+    "ListPathRequest",
+    "ListPathResponse",
+    "SDKContext",
+    "TableMetadata",
 ]

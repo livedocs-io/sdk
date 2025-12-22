@@ -1,9 +1,15 @@
 import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import os
 
 app = Flask(__name__)
 CORS(app, origins=["*"])
+
+os.environ["FLASK_DEBUG"] = "1"
+os.environ["LIVEDOCS_FILES_PATH"] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "livedocs_files"
+)
 
 
 @app.route("/test-set-datasource", methods=["POST", "OPTIONS"])

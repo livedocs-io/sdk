@@ -5,12 +5,13 @@ import json
 import logging
 import threading
 import time
+from typing import Any
 
 import polars as pl
 import requests
 
 from livedocs.types import ElementDataSource, GCSBucketType
-from livedocs.utils.common import _fetch_file_manifest
+from livedocs.utils.lib.internals import livedocs_internal_fetch_file_manifest
 
 
 class QueryCache:
@@ -29,11 +30,13 @@ class QueryCache:
             max_workers (int): Maximum number of threads for parallel operations. Defaults to 2.
         """
         self.cache = {}
-        self.ttl = ttl
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self.lock = threading.Lock()
-        self.report_id = report_id
-        self.token = token
+        self.ttl: int = ttl
+        self.executor: concurrent.futures.ThreadPoolExecutor = (
+            concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        )
+        self.lock: threading.Lock = threading.Lock()
+        self.report_id: str = report_id
+        self.token: str = token
 
     def generate_cache_id(self, query: str, datasource: ElementDataSource) -> str:
         """
@@ -72,7 +75,7 @@ class QueryCache:
 
     def get(
         self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
+    ) -> tuple[pl.DataFrame, dict] | None:
         """
         Retrieves a cached entry for a given query and datasource if available and not expired.
 
@@ -91,7 +94,12 @@ class QueryCache:
             del self.cache[key]
         return None
 
-    def set(self, query: str, datasource: str, result: tuple[pl.DataFrame, dict]):
+    def set(
+        self,
+        query: str,
+        datasource: ElementDataSource,
+        result: tuple[pl.DataFrame, dict[str, Any]],
+    ):
         """
         Caches the result of a query for a given query string and datasource.
 
@@ -108,6 +116,22 @@ class QueryCache:
         Clears the cache by removing all entries.
         """
         self.cache.clear()
+
+    def pop(self, key: str) -> bool:
+        """
+        Removes a cache entry by key if it exists.
+
+        Args:
+            key (str): The cache key to remove
+
+        Returns:
+            bool: True if the key was found and removed, False otherwise
+        """
+        with self.lock:
+            if key in self.cache:
+                del self.cache[key]
+                return True
+            return False
 
     def _write_to_parquet(self, key: str, df: pl.DataFrame):
         """
@@ -132,12 +156,12 @@ class QueryCache:
                 raise ValueError("Parquet file exceeds 32MB limit")
 
             # Get signed URL for upload
-            upload_url = _fetch_file_manifest(
-                f"{key}.parquet",
+            upload_url = livedocs_internal_fetch_file_manifest(
                 self.report_id,
                 self.token,
                 "write",
                 GCSBucketType.CACHE_ARTIFACTS,
+                file_id=f"{key}.parquet",
             )["signed_url"]
 
             # Upload the Parquet file to GCS

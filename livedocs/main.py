@@ -2,64 +2,85 @@ import base64
 import gzip
 import json
 import os
-import tempfile
-from typing import Dict, List
+from dataclasses import dataclass
+from datetime import datetime
+from functools import lru_cache
+from typing import Any, Callable, Literal, cast
 
-import pandas as pd
+import duckdb
 import polars as pl
 import requests
-import sentry_sdk
-from duckdb import CatalogException
 from jinja2 import Template
 
-from livedocs.cache import QueryCache
-from livedocs.manager.duckdb import DuckDBSingleton
+from livedocs.datasources.googledrive import (
+    GoogleDriveDatasourceConnector,
+)
+from livedocs.datasources.s3 import S3DatasourceConnector
+from livedocs.manager.credentials import CredentialStore
+from livedocs.manager.datasources import DatasourceManager
+from livedocs.manager.duckdb import get_duckdb_connection
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
-    DatabaseType,
+    ChartResult,
+    DatabaseConnection,
     DBSaveConfig,
     ElementDataSource,
     ElementDatasourceType,
+    FileAction,
+    FileConnectorType,
+    FileNode,
     GCSBucketType,
-    LivedocsChartSpec,
+    GoogleDriveConnectorInfo,
+    JsonDisplay,
+    ListPathResponse,
     LivedocsResult,
     MsgPackDisplay,
     QueryResult,
     QueryResultMetadata,
-    Schema,
+    S3ConnectorInfo,
+    SDKContext,
+    SchemaNode,
+    SourceType,
+    Spec,
+    TableMetadata,
+    VegaSpec,
+    WorkspaceSecret,
 )
+from livedocs.utils.cells.chart_helpers import (
+    _LIVEDOCS_PROTECTED_VARS,
+    apply_chart_filters,
+)
+from livedocs.utils.cells.single_value_helpers import process_single_value
+from livedocs.utils.cells.table_helpers import apply_table_operations
 from livedocs.utils.common import (
-    PROTECTED_VARS,
-    _capture_exceptions,
-    _fetch_credentials,
-    _fetch_file_manifest,
-    _get_dataframe_schema,
-    _persist_built_in_vars,
-    get_run_context,
+    _download_file,
+    _setup_dirs,
+    get_query_for_datasource,
+    middleman_debug,
+    serializer,
 )
-from livedocs.utils.postgres import (
-    create_postgres_connection_url,
-    process_postgres_schema,
-    write_df_to_table,
+from livedocs.utils.lib.cache import QueryCache
+from livedocs.utils.lib.internals import (
+    livedocs_internal_fetch_file_manifest,
+    livedocs_internal_file_operation,
+    livedocs_internal_list_files,
+    livedocs_internal_persist_built_in_vars,
 )
-from livedocs.utils.serialize import _json_serializer
-from livedocs.vega import _get_altair_datasource_query, create_vega_spec
+from livedocs.utils.lib.vega import create_vega_spec
+from livedocs.utils.runtime_fs import (
+    list_runtime_files_in_path,
+    list_runtime_files_top_level,
+)
 
 
-def _setup_sentry():
-    """
-    Initializes Sentry for error tracking and performance monitoring.
-    """
-    try:
-        sentry_sdk.init(
-            dsn=os.getenv("VMLIB_SENTRY_DSN"),
-            traces_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            profiles_sample_rate=1 if os.getenv("APP_ENV") != "prd" else 0.2,
-            environment=os.getenv("APP_ENV"),
-        )
-    except Exception as e:
-        raise f"Failed to initialize Sentry: {e}"
+@dataclass(frozen=True)
+class LivedocsConfig:
+    """Runtime configuration hooks that make Livedocs more testable and tunable."""
+
+    credential_store_factory: Callable[[str, str], CredentialStore] = CredentialStore
+    query_cache_factory: Callable[[str, str], QueryCache] = QueryCache
+    template_cache_size: int = 256
 
 
 class Livedocs:
@@ -71,50 +92,75 @@ class Livedocs:
     livedocs.initialize(report_id, session_token)
     """
 
-    def __init__(self):
+    def __init__(self, config: LivedocsConfig | None = None):
         """
-        Initializes the Livedocs instance, setting up necessary components and configurations.
+        Creates the Livedocs instance, setting up necessary components and configurations.
         """
-        _setup_sentry()
-        self._duckdb = DuckDBSingleton()
-        self._file_dir = tempfile.mkdtemp()
-        self._file_manifests: Dict[str, str] = {}
-        self._secrets = {}
-        self._built_in_vars = {}
-        self.is_initialized = False
+        _setup_dirs()
 
-    """
-    Called when the pod is initialized. Fetches the credentials and sets the 
-    is_initialized flag to True. The /v1/credentials endpoint is called to fetch the
-    DB connection credentials and secrets for the report.
-    """
+        self._config: LivedocsConfig = config or LivedocsConfig()
 
-    def initialize(self, report_id: str, token: str) -> tuple[object, dict]:
+        files_path = os.getenv("LIVEDOCS_FILES_PATH", None)
+        if files_path is None:
+            raise ValueError("LIVEDOCS_FILES_PATH environment variable is not set.")
+
+        self._duckdb_conn: duckdb.DuckDBPyConnection = get_duckdb_connection(
+            file_search_path=[files_path] if files_path is not None else []
+        )
+        self._report_id: str | None = None
+        self._token: str | None = None
+        self._credential_store: CredentialStore | None = None
+        self._secrets: dict[str, WorkspaceSecret] = {}
+        self._built_in_vars: dict[str, str] = {}
+
+        self._template_factory: Callable[[str], Template] = lru_cache(
+            maxsize=self._config.template_cache_size
+        )(Template)
+        self._query_cache: QueryCache | None = None
+        self.is_initialized: bool = False
+        self.sdk_context: SDKContext = SDKContext.IPYTHON
+
+    def initialize(
+        self, report_id: str, token: str, client_id_token: str | None = None
+    ) -> None:
         """
         Initializes the Livedocs instance with the given report ID and token.
+        Called when the pod is initialized. If an optional client ID token is provided,
+        it will be used to initialize the SDK without needing to fetch anything from the backend.
 
         Args:
             report_id (str): The report ID.
             token (str): The session token.
+            client_id_token (str, optional): The client ID token.
         """
-        with sentry_sdk.start_transaction(op="task", name="initialize vm-lib"):
-            sentry_sdk.set_tag("report_id", report_id)
+        if not client_id_token:
             self._report_id = report_id
             self._token = token
-            span = sentry_sdk.start_span(name="fetch credentials")
-            self._credentials = _fetch_credentials(report_id, token)
-            span.finish()
+            self._credential_store = self._config.credential_store_factory(
+                report_id, token
+            )
+            bundle = self._credential_store.load()
             self.is_initialized = True
 
-            secrets = self._credentials.get("workspace_secrets", {})
-            secrets_dict = {
-                key: secret_info["value"] for key, secret_info in secrets.items()
+            self._secrets = {
+                key: secret for key, secret in bundle.workspace_secrets.items()
             }
-            self._secrets = secrets_dict
-            self._built_in_vars = {**self._credentials.get("built_in_vars", "{}")}
-            self._query_cache = QueryCache(report_id=report_id, token=token)
+            self._built_in_vars = {
+                key: str(value)
+                for key, value in bundle.built_in_vars.items()
+                if value is not None
+            }
+            self._query_cache = self._config.query_cache_factory(report_id, token)
+        else:
+            self.is_initialized = True
+            self.sdk_context = SDKContext.RELAY
 
-    @_capture_exceptions
+    """
+    #########################################################
+    # PYTHON CELL HELPER FUNCTIONS
+    #########################################################
+    """
+
     def set_var(self, key: str, value: str):
         """
         Sets a built-in variable.
@@ -124,10 +170,11 @@ class Livedocs:
             value (str): The variable value.
         """
         self._built_in_vars[key] = value
-        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        _ = livedocs_internal_persist_built_in_vars(
+            self._report_id, self._token, self._built_in_vars
+        )
 
-    @_capture_exceptions
-    def get_var(self, key: str) -> str:
+    def get_var(self, key: str) -> str | None:
         """
         Gets the value of a built-in variable.
 
@@ -138,11 +185,10 @@ class Livedocs:
             str: The variable value.
         """
         if key == "run_context":
-            return os.getenv("RUN_CONTEXT")
+            return os.getenv("LIVEDOCS_RUN_CONTEXT")
 
         return self._built_in_vars.get(key, None)
 
-    @_capture_exceptions
     def unset_var(self, key: str):
         """
         Unsets a built-in variable.
@@ -150,58 +196,150 @@ class Livedocs:
         Args:
             key (str): The variable key.
         """
-        if key not in PROTECTED_VARS:
-            self._built_in_vars.pop(key, None)
-            _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        if key not in _LIVEDOCS_PROTECTED_VARS:
+            _ = self._built_in_vars.pop(key, None)
+            _ = livedocs_internal_persist_built_in_vars(
+                self._report_id, self._token, self._built_in_vars
+            )
 
-    @_capture_exceptions
     def clear_vars(self):
         """
         Clears all built-in variables.
         """
         protected_values = {
-            k: v for k, v in self._built_in_vars.items() if k in PROTECTED_VARS
+            k: v
+            for k, v in self._built_in_vars.items()
+            if k in _LIVEDOCS_PROTECTED_VARS
         }
         self._built_in_vars = protected_values
-        _persist_built_in_vars(self._report_id, self._token, self._built_in_vars)
+        _ = livedocs_internal_persist_built_in_vars(
+            self._report_id, self._token, self._built_in_vars
+        )
 
-    @_capture_exceptions
-    def secrets(self, key, default_value="") -> str:
+    def secrets(self, key: str, default_value: str = "") -> str:
         """
-        Accesses user-defined secrets.
-
-        Usage: livedocs.secrets('CLIENT_ID', 'some_value')
+        Access user-defined secrets with default value if not found.
 
         Args:
-            key (str): The secret key.
-            default_value (str, optional): The default value if the secret is not found. Defaults to "".
+            key: The key of the secret to access
+            default_value: Value to return if the secret is not found
 
         Returns:
-            str: The secret value.
+            The secret value or default value if not found
         """
-        if self._secrets.get(key):
-            return self._secrets.get(key)
-        else:
-            result = _fetch_credentials(self._report_id, self._token)
-            secrets = result.get("workspace_secrets", {})
-            secrets_dict = {
-                key: secret_info["value"] for key, secret_info in secrets.items()
-            }
-            self._secrets = secrets_dict
-            return self._secrets.get(key, default_value)
+        if not hasattr(self, "_secrets"):
+            return default_value
 
-    @_capture_exceptions
-    @sentry_sdk.trace
+        if key in self._secrets:
+            return self._secrets[key].value.get_secret_value()
+
+        try:
+            store = self.helper_get_initialized_credentials()
+        except RuntimeError:
+            return default_value
+
+        secret_model = store.get_secret(key)
+        if secret_model is None:
+            secret_model = store.refresh().workspace_secrets.get(key)
+        if secret_model:
+            self._secrets[key] = secret_model
+            return secret_model.value.get_secret_value()
+
+        return default_value
+
+    def download_file(
+        self,
+        file_name: str | None = None,
+        file_id: str | None = None,
+        force_download: bool = False,
+        path: str | None = None,
+    ) -> str:
+        """
+        Downloads a file to a local path based on either its name or ID.
+
+        Parameters:
+            file_name (str | None): The name of the file to download. Must be provided exclusively if file_id is not specified.
+            file_id (str | None): The unique identifier of the file to download. Must be provided exclusively if file_name is not specified.
+            force_download (bool): If True, forces the file to be redownloaded and overwritten if it exists locally.
+            path (str | None): The directory path where the file will be stored.
+                                Defaults to the value of the environment variable 'LIVEDOCS_FILES_PATH'.
+
+        Returns:
+            str: The local file system path where the downloaded file is stored.
+
+        Raises:
+            RuntimeError: If the system is not initialized, or if an unexpected error occurs during the manifest retrieval or download process.
+            ValueError: If neither or both of 'file_name' and 'file_id' are provided, or if multiple files with the same name are found.
+            FileNotFoundError: If the file with the specified 'file_name' or 'file_id' does not exist on the remote server.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Livedocs is not initialized. Call initialize() first.")
+
+        if path is None:
+            path = os.getenv("LIVEDOCS_FILES_PATH")
+
+        if not (file_name or file_id) or (file_name and file_id):
+            raise ValueError("Exactly one of file_name or file_id must be provided.")
+
+        if path is None:
+            raise ValueError("Please provide a valid path to save the file.")
+
+        os.makedirs(path, exist_ok=True)
+
+        manifest_data = livedocs_internal_fetch_file_manifest(
+            report_id=self._report_id,
+            token=self._token,
+            action="read",
+            bucket=GCSBucketType.USER_FILES,
+            file_id=file_id,
+            file_name=file_name,
+        )
+
+        authoritative_file_name = manifest_data.file_name
+        local_file_path = os.path.join(path, authoritative_file_name)
+        file_exists = os.path.exists(local_file_path)
+
+        if not force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' (ID: {manifest_data.file_id}) already exists locally at '{local_file_path}'. \nUse option force_download=True to overwrite."
+            )
+            return local_file_path
+
+        if force_download and file_exists:
+            print(
+                f"File '{authoritative_file_name}' already exists locally at '{local_file_path}'. Overwriting."
+            )
+            os.remove(local_file_path)
+
+        signed_url = manifest_data.signed_url
+        expected_size_bytes = manifest_data.size if manifest_data.size else None
+
+        _download_file(
+            signed_url,
+            local_file_path,
+            file_description=authoritative_file_name,
+            expected_size_bytes=expected_size_bytes,
+        )
+
+        return local_file_path
+
+    """
+    #########################################################
+    # PRIVATE HELPER FUNCTIONS
+    #########################################################
+    """
+
     def query(
         self,
         query: str,
         str_datasource: str,
-        context: dict,
-        dataframe=None,
-        limit=10,
-        offset=0,
-        use_cache=True,
-    ) -> tuple[pl.DataFrame, str]:
+        context: dict[str, str],
+        dataframe: pl.DataFrame | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        use_cache: bool = True,
+        table_metadata: TableMetadata | None = None,
+    ) -> tuple[pl.DataFrame, LivedocsResult]:
         """
         Executes a query on a given datasource and returns the result as a Polars DataFrame and JSON string.
 
@@ -213,60 +351,92 @@ class Livedocs:
             limit (int, optional): The number of rows to return. Defaults to 10.
             offset (int, optional): The offset for the rows to return. Defaults to 0.
             use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
-
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
         Returns:
             tuple[pl.DataFrame, str]: A tuple containing the resulting DataFrame and JSON string.
         """
-        with sentry_sdk.start_transaction(op="task", name="run query"):
-            datasource: ElementDataSource = json.loads(str_datasource)
+        parsed = json.loads(str_datasource)
 
-            # Plug in the Jinja variables
-            final_query = self.add_jinja_vars(query, context)
-
-            # Run the actual queries
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            df: pl.DataFrame = pl.DataFrame()
-            df, schema, cache_info = self._query_with_schema(
-                final_query, datasource, dataframe, use_cache
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError(
+                "No datasource selected. Please choose a datasource from the dropdown before running your query."
             )
-            query_span.finish()
-
-            # Prepare paginated results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            df_slice = df.slice(offset, limit)
-
-            # Compress and encode response
-            result = QueryResult(
-                data=df_slice,
-                metadata=QueryResultMetadata(
-                    limit=limit,
-                    offset=offset,
-                    total_rows=len(df),
-                    cache_info=cache_info,
-                ),
+        if "source_type" not in parsed:
+            raise ValueError(
+                "Invalid datasource: missing 'source_type'. Please choose a datasource from the dropdown before running your query."
             )
-            payload = LivedocsResult(result)
-            post_span.finish()
+        datasource = cast(ElementDataSource, cast(object, parsed))
 
-            return (df, payload)
+        # Plug in the Jinja variables
+        final_query = self.helper_render_jinja_template(query, context)
 
-    @_capture_exceptions
-    @sentry_sdk.trace
+        # For file datasources, materialize the file locally (same pathing as preview)
+        file_path: str | None = None
+        source_type = ElementDatasourceType(datasource["source_type"])
+        if source_type == ElementDatasourceType.file:
+            file_path = self._prepare_file_for_query(datasource)
+
+        # Run the actual queries
+        df: pl.DataFrame = pl.DataFrame()
+
+        # Prepare kwargs for DatasourceManager
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["download_file"] = self.download_file
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+            kwargs["get_s3_connection_details"] = self.helper_get_s3_connection_details
+            kwargs["get_google_drive_connection_details"] = (
+                self.helper_get_google_drive_connection_details
+            )
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["dataframe"] = dataframe
+
+        df, schema, cache_info = DatasourceManager.read(
+            final_query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
+
+        # Apply table operations
+        applied_metadata = None
+        additional_metadata = {}
+        if table_metadata:
+            df, additional_metadata = apply_table_operations(df, table_metadata)
+            applied_metadata = table_metadata
+
+        # Prepare paginated results
+        df_slice = df.slice(offset, limit)
+
+        # Compress and encode response
+        result = QueryResult(
+            data=df_slice,
+            metadata=QueryResultMetadata(
+                limit=limit,
+                offset=offset,
+                total_rows=len(df),
+                cache_info=cache_info,
+                applied_metadata=applied_metadata,
+                calculation_results=additional_metadata.get("calculation_results"),
+            ),
+        )
+        payload = LivedocsResult(result)
+
+        return (df, payload)
+
     def save_to_database(self, dataframe: pl.DataFrame, str_save_config: str):
-        with sentry_sdk.start_transaction(op="task", name="save to database"):
-            save_config: DBSaveConfig = json.loads(str_save_config)
-            if DatabaseType(save_config["database_type"]) == DatabaseType.Postgres:
-                current_run_context = get_run_context()
-                if current_run_context in save_config["run_settings"]:
-                    result = self._write_to_postgres(dataframe, save_config)
-                    return result
-                else:
-                    pass
-            else:
-                raise Exception("Unsupported database type")
+        save_config: DBSaveConfig = json.loads(str_save_config)
+        result = DatasourceManager.write(
+            dataframe, save_config, self.helper_get_database_details
+        )
+        return result
 
-    @_capture_exceptions
-    @sentry_sdk.trace
     def process_raw_text(self, str_src: str, context: dict) -> str:
         """
         Processes raw text by plugging in Jinja variables.
@@ -278,34 +448,21 @@ class Livedocs:
         Returns:
             str: The processed HTML text.
         """
-        with sentry_sdk.start_transaction(op="task", name="run text element"):
-            src = json.loads(str_src)
-            return self.add_jinja_vars(src["html"], context)
+        src = json.loads(str_src)
+        return self.helper_render_jinja_template(src["html"], context)
 
-    @_capture_exceptions
     def enrich_prompt(self, system, user, context: dict):
         enriched_prompt = {
-            "system": self.add_jinja_vars(system, context),
-            "user": self.add_jinja_vars(user, context),
+            "system": self.helper_render_jinja_template(system, context),
+            "user": self.helper_render_jinja_template(user, context),
         }
         return MsgPackDisplay(enriched_prompt)
 
-    def add_jinja_vars(self, text: str, context: dict) -> str:
-        """
-        Adds Jinja variables to the given text.
-
-        Args:
-            text (str): The text to process.
-            context (dict): The context for Jinja variables.
-
-        Returns:
-            str: The processed text with Jinja variables.
-        """
-        template = Template(text)
-        return template.render(context)
-
     def process_dependencies(
-        self, dependencies: str, datasource: dict = None, globals_dict: dict = None
+        self,
+        dependencies: str,
+        datasource: dict | None = None,
+        globals_dict: dict | None = None,
     ) -> dict:
         """
         Process dependencies and serialize DataFrames to dictionaries.
@@ -341,7 +498,7 @@ class Livedocs:
                     if isinstance(value, pl.DataFrame):
                         df = value.to_dicts()
                         ctx[dep_name] = json.dumps(
-                            df, default=_json_serializer, separators=(",", ":")
+                            df, default=serializer, separators=(",", ":")
                         )
                     else:
                         ctx[dep_name] = value
@@ -351,13 +508,157 @@ class Livedocs:
                         f"Unable to find {dep_name}, ensure the element where you declared it "
                         "has been run at least once"
                     ) from e
-
         return ctx
 
-    @_capture_exceptions
-    @sentry_sdk.trace
+    def _prepare_file_for_query(
+        self,
+        datasource: ElementDataSource,
+        download_file: Callable[[str | None, str | None, bool, str | None], str]
+        | None = None,
+        get_s3_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        get_google_drive_connection_details: Callable[
+            [str], tuple[object, dict[str, Any]]
+        ]
+        | None = None,
+    ) -> str | None:
+        """
+        Prepare file for query generation by downloading it if needed.
+        This is used for preview scenarios where we need the file path
+        before generating the query.
+
+        Args:
+            datasource: The datasource configuration
+
+        Returns:
+            Local file path if file was downloaded, None otherwise
+        """
+        source_type = ElementDatasourceType(datasource["source_type"])
+
+        if source_type != ElementDatasourceType.file:
+            return None
+
+        file_info = datasource.get("file_info")
+        if file_info is None:
+            return None
+
+        connector_info = file_info.get("connector_info")
+
+        if self.sdk_context == SDKContext.IPYTHON:
+            _download_file = self.download_file
+            _get_s3_connection_details = self.helper_get_s3_connection_details
+            _get_google_drive_connection_details = (
+                self.helper_get_google_drive_connection_details
+            )
+        else:
+            if download_file is None:
+                raise ValueError("download_file is required")
+            if get_s3_connection_details is None:
+                raise ValueError("get_s3_connection_details is required")
+            if get_google_drive_connection_details is None:
+                raise ValueError("get_google_drive_connection_details is required")
+            _download_file = download_file
+            _get_s3_connection_details = get_s3_connection_details
+            _get_google_drive_connection_details = get_google_drive_connection_details
+
+        files_path_env = os.environ.get("LIVEDOCS_FILES_PATH", "")
+
+        file_name = file_info.get("file_name")
+        file_id = file_info.get("file_id")
+
+        def resolve_runtime_or_workspace(
+            prefer_runtime_path: bool,
+        ) -> str | None:
+            """
+            Handle runtime/workspace files:
+            - Try local path under files_path_env (when set).
+            - For runtime, return constructed path even if missing (DuckDB will error later).
+            - For workspace, try cache then download via _download_file.
+            """
+            if prefer_runtime_path and file_id:
+                if files_path_env:
+                    if file_id.startswith("/"):
+                        return os.path.join(files_path_env, file_id.lstrip("/"))
+                    return os.path.join(files_path_env, file_id)
+                return file_id
+
+            # workspace-style: check cache
+            if files_path_env and file_name:
+                local_path = os.path.join(files_path_env, file_name)
+                if os.path.exists(local_path):
+                    return local_path
+
+            # Try download by name then id
+            if file_name:
+                try:
+                    return _download_file(file_name, None, False, None)
+                except Exception:
+                    pass
+            if file_id:
+                try:
+                    return _download_file(None, file_id, False, None)
+                except Exception:
+                    return None
+            return None
+
+        # Handle files without connector_info (runtime or workspace path/download)
+        if connector_info is None:
+            if file_id is None:
+                return None
+            return resolve_runtime_or_workspace(prefer_runtime_path=True)
+
+        connector_type = connector_info.get("connector_type")
+        connector_id = connector_info.get("connector_id")
+        connector_name = connector_info.get("connector_name")
+
+        # Runtime files (with explicit connector_info)
+        if connector_type == FileConnectorType.runtime.value:
+            return resolve_runtime_or_workspace(prefer_runtime_path=True)
+
+        # Workspace files
+        if connector_type == FileConnectorType.workspace.value:
+            return resolve_runtime_or_workspace(prefer_runtime_path=False)
+
+        if connector_id is None or file_name is None:
+            return None
+
+        # Handle S3 files
+        if connector_type == FileConnectorType.s3bucket.value:
+            s3_connector = S3DatasourceConnector()
+            # Use file_id for the full path within the bucket
+            s3_path = file_id if file_id else file_name
+            local_path = s3_connector.download_file(
+                path=s3_path,
+                connector_id=connector_id,
+                get_connection_details=_get_s3_connection_details,
+                preview=False,  # Download full file for query generation
+                connector_name=connector_name,
+            )
+            return local_path
+
+        # Handle Google Drive files
+        if connector_type == FileConnectorType.googledrive.value:
+            gdrive_connector = GoogleDriveDatasourceConnector()
+            # Use file_id for the full path
+            gdrive_path = file_id if file_id else file_name
+            local_path = gdrive_connector.download_file(
+                file_path=gdrive_path,
+                connector_id=connector_id,
+                get_connection_details=_get_google_drive_connection_details,
+                preview=False,  # Download full file for query generation
+                connector_name=connector_name,
+            )
+            return local_path
+
+        return None
+
     def _get_vega_spec(
-        self, settings_str: str, datasource_str: str, dataframe=None, use_cache=True
+        self,
+        settings_str: str,
+        datasource_str: str,
+        dataframe=None,
+        use_cache=True,
+        chart_metadata=None,
     ) -> dict:
         """
         Gets a Vega specification for a given datasource and settings.
@@ -370,88 +671,204 @@ class Livedocs:
         Returns:
             dict: The Vega specification as a base64 encoded string.
         """
-        with sentry_sdk.start_transaction(op="task", name="run chart element"):
-            settings: LivedocsChartSpec = json.loads(settings_str)
-            datasource: ElementDataSource = json.loads(datasource_str)
+        settings: Spec = json.loads(settings_str)
+        datasource: ElementDataSource = json.loads(datasource_str)
 
-            # Run actual span
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            df, schema, cache_info = self._query_with_schema(
-                _get_altair_datasource_query(datasource),
-                datasource,
-                dataframe,
-                use_cache,
-            )
-            query_span.finish()
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(datasource)
 
-            # Vegafusion
-            vega_span = sentry_sdk.start_span(name="run create_vega_spec (vegafusion)")
-            vega_spec_json_str = create_vega_spec(df, settings, schema, cache_info)
-            vega_span.finish()
+        query = get_query_for_datasource(
+            datasource,
+            50000,
+            file_path=file_path,
+            get_database_details=self.helper_get_database_details,
+        )
 
-            # Post-process the results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
-            post_span.finish()
+        # Prepare kwargs for DatasourceManager
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["download_file"] = self.download_file
+            # Pass file_path if it was already downloaded (Case 2: preview scenario)
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["dataframe"] = dataframe
 
-            return encoded
+        df, schema, cache_info = DatasourceManager.read(
+            query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
 
-    @_capture_exceptions
-    @sentry_sdk.trace
+        df = apply_chart_filters(df, schema, settings, chart_metadata)
+
+        # Find how many data points we have
+        total_data_points = len(df) * len(df.columns)
+        MAX_POINTS = 50000
+        if total_data_points > MAX_POINTS:
+            # Limit the dataframe so that rendered points stay within the cap
+            num_cols = max(1, len(df.columns))
+            max_rows = max(1, MAX_POINTS // num_cols)
+            try:
+                df_limited = df.slice(0, max_rows)
+                # Build a normal spec from the limited data
+                limited_spec_json = create_vega_spec(df_limited, settings, schema)
+                # Change status to signal warning while still rendering the chart
+                limited_spec = json.loads(limited_spec_json)
+                limited_spec["status"] = "OVERLOADED"
+                validated_spec = VegaSpec(**limited_spec)
+                vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
+            except Exception:
+                style_settings = settings.get("styleSettings", {})
+                empty_chart = {
+                    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+                    "usermeta": {
+                        "styleSettings": style_settings,
+                        "chartType": "main",
+                    },
+                }
+                validated_spec = VegaSpec(
+                    **{
+                        "spec": json.dumps(empty_chart, separators=(",", ":")),
+                        "schema": schema,
+                        "status": "OVERLOADED",
+                    }
+                )
+                vega_spec_json_str = validated_spec.model_dump_json(by_alias=True)
+        else:
+            vega_spec_json_str = create_vega_spec(df, settings, schema)
+
+        # Post-process the results
+        compressed = gzip.compress(vega_spec_json_str.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
+
+        result = ChartResult(data=encoded, cache_info=cache_info)
+        payload = LivedocsResult(result)
+
+        return payload
+
     def _get_table_response(
         self,
-        str_datasource: ElementDataSource,
+        str_datasource: str,
         dataframe=None,
         limit=10,
         offset=0,
         use_cache=True,
-    ) -> pl.DataFrame:
+        table_metadata=None,
+        get_database_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        download_file: Callable[[str | None, str | None, bool | None, str | None], str]
+        | None = None,
+        get_s3_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+        get_google_drive_connection_details: Callable[
+            [str], tuple[object, dict[str, Any]]
+        ]
+        | None = None,
+    ) -> LivedocsResult:
         """
         Gets a Polars table for a given datasource.
 
         Args:
-            str_datasource (ElementDataSource): The datasource as a JSON string.
+            str_datasource (str): The ElementDataSource struct as a JSON string.
             dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
+            limit (int, optional): The number of rows to return. Defaults to 10.
+            offset (int, optional): The offset for the rows to return. Defaults to 0.
+            use_cache (bool, optional): Indicates whether to use caching. Defaults to True.
+            table_metadata (dict, optional): Metadata for table operations. Defaults to None.
 
         Returns:
             pl.DataFrame: The resulting Polars DataFrame.
         """
-        with sentry_sdk.start_transaction(op="task", name="run table element"):
-            datasource: ElementDataSource = json.loads(str_datasource)
+        datasource: ElementDataSource = json.loads(str_datasource)
 
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            df, schema, cache_info = self._query_with_schema(
-                _get_altair_datasource_query(datasource),
-                datasource,
-                dataframe,
-                use_cache,
+        if self.sdk_context == SDKContext.IPYTHON:
+            _get_database_details = self.helper_get_database_details
+            _get_s3_connection_details = self.helper_get_s3_connection_details
+            _get_google_drive_connection_details = (
+                self.helper_get_google_drive_connection_details
             )
-            query_span.finish()
+        else:
+            if get_database_details is None:
+                raise ValueError("get_database_details is required")
+            _get_database_details = get_database_details
+            if get_s3_connection_details is None:
+                raise ValueError("get_s3_connection_details is required")
+            _get_s3_connection_details = get_s3_connection_details
+            if get_google_drive_connection_details is None:
+                raise ValueError("get_google_drive_connection_details is required")
+            _get_google_drive_connection_details = get_google_drive_connection_details
 
-            # Prepare paginated results
-            post_span = sentry_sdk.start_span(name="post-processing")
-            df_slice = df.slice(offset, limit)
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(
+            datasource,
+            download_file,
+            _get_s3_connection_details,
+            _get_google_drive_connection_details,
+        )
 
-            # Compress and encode response
-            result = QueryResult(
-                data=df_slice,
-                metadata=QueryResultMetadata(
-                    limit=limit,
-                    offset=offset,
-                    total_rows=len(df),
-                    cache_info=cache_info,
-                ),
-            )
-            payload = LivedocsResult(result)
-            post_span.finish()
+        # Generate query with file_path and get_database_details for Snowflake
+        query = get_query_for_datasource(
+            datasource,
+            limit,
+            file_path=file_path,
+            get_database_details=_get_database_details,
+        )
 
-            return payload
+        # Prepare kwargs for DatasourceManager
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["download_file"] = self.download_file
+            # Pass file_path if it was already downloaded
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["dataframe"] = dataframe
 
-    @_capture_exceptions
-    @sentry_sdk.trace
+        df, schema, cache_info = DatasourceManager.read(
+            query,
+            datasource,
+            _get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
+        # Apply table operations
+        applied_metadata = None
+        additional_metadata = {}
+        if table_metadata:
+            df, additional_metadata = apply_table_operations(df, table_metadata)
+            applied_metadata = table_metadata
+
+        # Prepare paginated results
+        df_slice = df.slice(offset, limit)
+        result = QueryResult(
+            data=df_slice,
+            metadata=QueryResultMetadata(
+                limit=limit,
+                offset=offset,
+                total_rows=len(df),
+                cache_info=cache_info,
+                applied_metadata=applied_metadata,
+                calculation_results=additional_metadata.get("calculation_results"),
+            ),
+        )
+        payload = LivedocsResult(result)
+        return payload
+
     def _get_chart_schema(
-        self, datasource_str: str, dataframe: pl.DataFrame = None
+        self, datasource_str: str, dataframe: pl.DataFrame | None = None
     ) -> dict:
         """
         Returns a dictionary with the schema for a given datasource.
@@ -463,481 +880,1022 @@ class Livedocs:
         Returns:
             dict: The schema as a base64 encoded string.
         """
-        with sentry_sdk.start_transaction(op="task", name="get schema for chart"):
-            datasource: ElementDataSource = json.loads(datasource_str)
+        datasource: ElementDataSource = json.loads(datasource_str)
 
-            query_span = sentry_sdk.start_span(name="run _query_with_schema")
-            match ElementDatasourceType(datasource["source_type"]):
-                case ElementDatasourceType.database_table:
-                    query = f"SELECT * FROM {datasource['database_info']['database_name']}.{datasource['database_table_info']['schema_name']}.{datasource['database_table_info']['table_name']} LIMIT 10"
-                    _, schema = self._query_database_with_schema(query, datasource)
-                    query_span.finish()
-                case ElementDatasourceType.file:
-                    query = (
-                        f"SELECT * FROM {datasource['file_info']['file_name']} LIMIT 10"
-                    )
-                    _, schema = self._query_file_with_schema(query, datasource)
-                    query_span.finish()
-                case ElementDatasourceType.dataframe:
-                    if dataframe is not None and datasource is not None:
-                        self._duckdb.conn.register(
-                            datasource["dataframe_info"]["df_name"], dataframe
-                        )
-                    query = f"SELECT * FROM {datasource['dataframe_info']['df_name']} LIMIT 10"
-                    _, schema = self._query_dataframe_with_schema(query, datasource)
-                    query_span.finish()
-                case _:
-                    query_span.finish()
-                    return "Unknown or unsupported datasource type for chart schema"
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(datasource)
 
-            post_span = sentry_sdk.start_span(name="post-processing")
-            empty_chart = {
-                "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                "usermeta": {
-                    "styleSettings": {},
-                    "chartType": "main",
-                },
-            }
+        # Generate query with file_path and get_database_details for Snowflake
+        # For schema extraction, we only need a small sample (1 row is enough to get all column types)
+        query = get_query_for_datasource(
+            datasource,
+            1,
+            file_path=file_path,
+            get_database_details=self.helper_get_database_details,
+        )
+        if query is None:
+            raise ValueError("Query is required")
 
-            empty_spec_with_schema = json.dumps(
-                {
-                    "spec": json.dumps(empty_chart, separators=(",", ":")),
-                    "schema": schema,
-                    "status": "EMPTY",
-                },
-                separators=(",", ":"),
-            )
-            compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
-            encoded = base64.b64encode(compressed).decode("ascii")
-            post_span.finish()
+        # Prepare kwargs for DatasourceManager based on datasource type
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
 
-            return encoded
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["download_file"] = self.download_file
+            # Pass file_path if it was already downloaded (Case 2: preview scenario)
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            if dataframe is not None and datasource is not None:
+                self._duckdb_conn.register(
+                    datasource["dataframe_info"]["df_name"], dataframe
+                )
 
-    def _query_with_schema(
-        self,
-        query: str,
-        datasource: ElementDataSource,
-        dataframe=None,
-        use_cache=True,
-    ) -> tuple[
-        pl.DataFrame,
-        dict,
-        CacheInfo,
-    ]:
-        """
-        Executes a query on a given datasource with schema handling and optional caching.
-
-        Args:
-            query (str): The SQL query string to execute.
-            datasource (ElementDataSource): The datasource to execute the query on.
-            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'. Defaults to None.
-            use_cache (bool): Indicates whether to use caching. Defaults to True.
-
-        Returns:
-            tuple[pl.DataFrame, dict, CacheMetadata]: A tuple containing the resulting DataFrame,
-            schema as a dict, and info about the cache.
-        """
-
-        cache_info = CacheInfo(
-            id=self._query_cache.generate_cache_id(query, datasource),
-            status=CacheStatus.MISS,
+        # Execute query using DatasourceManager (no caching for schema-only queries)
+        _, schema, _ = DatasourceManager.read(
+            query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=False,
+            query_cache=None,
+            **kwargs,
         )
 
-        # Use cache if enabled and the query is found in the cache
-        if use_cache:
-            cache_result = self._query_cache.get(query, datasource)
-            if cache_result is not None and not cache_result[0].is_empty():
-                cache_info["status"] = CacheStatus.HIT
-                return (*cache_result, cache_info)
+        empty_chart = {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "usermeta": {
+                "styleSettings": {},
+                "chartType": "main",
+            },
+        }
 
-        # Execute query based on datasource type
-        match ElementDatasourceType(datasource["source_type"]):
-            case ElementDatasourceType.database | ElementDatasourceType.database_table:
-                result = self._query_database_with_schema(query, datasource)
-            case ElementDatasourceType.file:
-                result = self._query_file_with_schema(query, datasource)
-            case ElementDatasourceType.dataframe:
-                if dataframe is not None:
-                    self._duckdb.conn.register(
-                        datasource["dataframe_info"]["df_name"], dataframe
+        empty_spec_with_schema = json.dumps(
+            {
+                "spec": json.dumps(empty_chart, separators=(",", ":")),
+                "schema": schema,
+                "status": "EMPTY",
+            },
+            separators=(",", ":"),
+        )
+        compressed = gzip.compress(empty_spec_with_schema.encode("utf-8"))
+        encoded = base64.b64encode(compressed).decode("ascii")
+
+        # Create empty cache info for schema requests
+        empty_cache_info = CacheInfo(id="", status=CacheStatus.MISS)
+        result = ChartResult(data=encoded, cache_info=empty_cache_info)
+        payload = LivedocsResult(result)
+
+        return payload
+
+    def process_single_value(self, config: str, context: dict | None = None):
+        """
+        Process a SingleValue element with formatting and comparison calculations
+
+        Args:
+            config (str): JSON string containing single value configuration
+            context (dict, optional): Context containing variables. Defaults to None.
+
+        Returns:
+            JsonDisplay: Formatted result with main value and comparison data
+        """
+        result = process_single_value(config, context)
+        return JsonDisplay(result)
+
+    """
+    #########################################################
+    #              FILE MANAGEMENT FUNCTIONS
+    #########################################################
+    """
+
+    def list_nodes(
+        self,
+        path_or_parent_id: str | None = None,
+        source_type: SourceType | None = None,
+        source_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+        get_all_s3_connectors: Callable[[], list[S3ConnectorInfo]] | None = None,
+        get_all_google_drive_connectors: Callable[[], list[GoogleDriveConnectorInfo]]
+        | None = None,
+        list_files: Callable[
+            [str | None, str | None, str | None, str | None], ListPathResponse
+        ]
+        | None = None,
+    ):
+        # Initialize result containers
+        s3_nodes = []
+        google_drive_file_nodes = []
+        runtime_file_nodes = []
+        database_nodes = []
+        workspace_file_nodes = []
+
+        if self.sdk_context == SDKContext.IPYTHON:
+            if self._credential_store is None:
+                raise ValueError("Credential store not initialized")
+            if self._report_id is None:
+                raise ValueError("Report ID not initialized")
+            if self._token is None:
+                raise ValueError("Token not initialized")
+
+            _get_all_s3_connectors = self._credential_store.get_all_s3_connectors
+            _get_all_google_drive_connectors = (
+                self._credential_store.get_all_google_drive_connectors
+            )
+            _list_files = livedocs_internal_list_files
+            _list_runtime_files_top_level = list_runtime_files_top_level
+            _list_runtime_files_in_path = list_runtime_files_in_path
+            _get_single_s3_connector = self._credential_store.get_s3_connector
+            _get_single_google_drive_connector = (
+                self._credential_store.get_google_drive_connector
+            )
+            _refresh_google_drive_token = self.refresh_google_drive_token
+            _get_google_drive_connection_details = (
+                self.helper_get_google_drive_connection_details
+            )
+            _get_s3_connection_details = self.helper_get_s3_connection_details
+        else:
+            if get_all_s3_connectors is None:
+                raise ValueError("get_all_s3_connectors is required")
+            if get_all_google_drive_connectors is None:
+                raise ValueError("get_all_google_drive_connectors is required")
+            if list_files is None:
+                raise ValueError("list_files is required")
+            _get_all_s3_connectors = get_all_s3_connectors
+            _get_all_google_drive_connectors = get_all_google_drive_connectors
+            _list_files = list_files
+            _refresh_google_drive_token = refresh_google_drive_token
+
+            def _list_runtime_files_top_level() -> list[FileNode]:
+                return []
+
+            def _list_runtime_files_in_path(path: str) -> list[FileNode]:
+                return []
+
+            def _get_single_s3_connector(connector_id: str) -> S3ConnectorInfo | None:
+                all_connectors = _get_all_s3_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector
+                return None
+
+            def _get_single_google_drive_connector(
+                connector_id: str,
+            ) -> GoogleDriveConnectorInfo | None:
+                all_connectors = _get_all_google_drive_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector
+                return None
+
+            def _get_google_drive_connection_details(
+                connector_id: str,
+            ) -> tuple[object, dict[str, Any]]:
+                all_connectors = _get_all_google_drive_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector, dict(connector)
+                return None, {}
+
+            def _get_s3_connection_details(
+                connector_id: str,
+            ) -> tuple[object, dict[str, Any]]:
+                all_connectors = _get_all_s3_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector, dict(connector)
+                return None, {}
+
+        # FIRST CASE: No params given (all three are None) -> return roots
+        if path_or_parent_id is None and source_type is None and source_id is None:
+            if (
+                self._credential_store
+                and self._report_id
+                and self._token
+                and self.sdk_context == SDKContext.IPYTHON
+            ):
+                for connector_info in _get_all_s3_connectors():
+                    s3_nodes.append(
+                        S3DatasourceConnector.connector_info_to_file_node(
+                            connector_info
+                        )
                     )
-                result = self._query_dataframe_with_schema(query, datasource)
-            case _:
-                return "Unknown ElementDataSource"
 
-        # We always cache the result, so it's available for querying in public mode
-        self._query_cache.set(query, datasource, result)
+                for connector_info in _get_all_google_drive_connectors():
+                    google_drive_file_nodes.append(
+                        GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                            connector_info
+                        )
+                    )
 
-        return (*result, cache_info)
-
-    def _query_database_with_schema(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a database and returns the result as a DataFrame with schema. Currently only supports Postgres.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
-        """
-        match DatabaseType(datasource["database_info"]["database_type"]):
-            case DatabaseType.Postgres:
-                # Get the schema directly from the query
-                schema_query = f"DESCRIBE {query}"
-                _schema = self._query_database(schema_query, datasource)
-                schema = process_postgres_schema(_schema)
-
-                # Execute the original query
-                result = self._query_database(query, datasource)
-                return [result, schema]
-            case _:
-                return "Unknown DatabaseType"
-
-    def _query_database(
-        self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
-        """
-        Queries a database. Currently only supports Postgres.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        match DatabaseType(datasource["database_info"]["database_type"]):
-            case DatabaseType.Postgres:
-                return self._query_postgres(query, datasource)
-            case _:
-                return "Unknown DatabaseType"
-
-    def _query_postgres(
-        self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
-        """
-        Queries a Postgres database. Attaches the database to DuckDB and executes the
-        query under the alias same as the database name.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        try:
-            db_connector_id = datasource["database_info"]["database_connector_id"]
-            # This won't throw an error if the credentials are not found
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
-                credentials = self._credentials["databases"][db_connector_id]
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            parsed_credentials = json.loads(credentials["connection_details"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
-
-        try:
-            if parsed_credentials.get("connect_using") == "url":
-                connection_string = parsed_credentials["connection_url"]
-            else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
-
-        # This is unique to the workspace, so no chance of conflict
-        alias = credentials["db_name"]
-
-        try:
-            self._duckdb.attach_postgres(connection_string, alias)
-        except Exception as e:
-            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
-
-        try:
-            result = self._duckdb.conn.sql(query).pl()
-        except CatalogException as e:
-            raise RuntimeError(
-                "CatalogError: Tablename should be in format 'DatabaseName.Schema.TableName' (schema is probably 'public')"
-            )
-        except Exception as e:
-            raise RuntimeError(f"Error executing query: {e}")
-
-        return result
-
-    def _query_file(self, query: str, datasource: dict) -> pl.DataFrame:
-        """
-        Queries a file. Currently supports CSV and XLSX files only.
-
-        Args:
-            query (str): The query string.
-            datasource (dict): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        try:
-            file_info = datasource["file_info"]
-            file_id = file_info["file_id"]
-            file_type = file_info["file_type"]
-            file_name = file_info["file_name"]
-
-            temp_file_path = os.path.join(self._file_dir, f"{file_name}")
-
-            if not os.path.exists(temp_file_path):
-                signed_url = self._get_signed_url(file_id)
-                self._download_file(signed_url, temp_file_path)
-
-            if file_type == "csv":
-                query_with_path = query.replace(
-                    file_name, f"read_csv_auto('{temp_file_path}')"
+                warehouses_and_files = _list_files(
+                    self._report_id, self._token, None, None
                 )
-            elif file_type in ["xls", "xlsx"]:
-                sheet_name = file_info.get("layer_name", "Sheet1")
-                query_with_path = query.replace(
-                    file_name, f"st_read('{temp_file_path}', layer='{sheet_name}')"
-                )
+
+                workspace_file_nodes = warehouses_and_files.files
+                database_nodes = warehouses_and_files.schema_nodes
+
+                runtime_file_nodes = _list_runtime_files_top_level()
+
+                return {
+                    "s3buckets": s3_nodes,
+                    "googledrive": google_drive_file_nodes,
+                    "runtime": runtime_file_nodes,
+                    "databases": database_nodes,
+                    "workspace_files": workspace_file_nodes,
+                }
             else:
-                raise ValueError(f"Unsupported file type: {file_type}")
+                if self.sdk_context == SDKContext.RELAY:
+                    raise ValueError(
+                        "RelayImplementationError: List nodes is not supported in relay context"
+                    )
+                raise ValueError("Credential store not initialized")
 
-            result = self._duckdb.conn.sql(query_with_path).pl()
-            return result
-
-        except KeyError as e:
-            raise ValueError(f"Missing required information in datasource: {e}")
-        except Exception as e:
-            raise RuntimeError(f"An error occurred while querying the file: {e}")
-
-    def _query_file_with_schema(
-        self, query: str, datasource: dict
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a file with the schema included in the response. Currently supports CSV and XLSX files only.
-
-        Args:
-            query (str): The query string.
-            datasource (dict): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
-        """
-        result = self._query_file(query, datasource)
-        schema = _get_dataframe_schema(result)
-        return [result, schema]
-
-    def _query_dataframe(
-        self, query: str, datasource: ElementDataSource
-    ) -> pl.DataFrame:
-        """
-        Queries a DataFrame. Currently only supports Pandas and Polars DataFrames.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            pl.DataFrame: The resulting DataFrame.
-        """
-        dataframe_info = datasource.get("dataframe_info")
-
-        if dataframe_info is None:
-            raise ValueError("Invalid ElementDataSource")
-
-        try:
-            result = self._duckdb.conn.sql(query).pl()
-        except Exception as e:
-            raise RuntimeError(f"An error occurred while querying the DataFrame: {e}")
-
-        return result
-
-    def _query_dataframe_with_schema(
-        self, query: str, datasource: ElementDataSource
-    ) -> tuple[pl.DataFrame, dict]:
-        """
-        Queries a DataFrame with the schema included in the response. Currently only supports Pandas and Polars DataFrames.
-
-        Args:
-            query (str): The query string.
-            datasource (ElementDataSource): The datasource to execute the query on.
-
-        Returns:
-            tuple[pl.DataFrame, dict]: A tuple containing the resulting DataFrame and schema as a dict.
-        """
-        result = self._query_dataframe(query, datasource)
-        schema = _get_dataframe_schema(result)
-        return [result, schema]
-
-    def _write_to_postgres(self, df: pl.DataFrame, save_config: DBSaveConfig):
-        """
-        Writes a DataFrame to a Postgres database. Attaches the database to DuckDB and executes the
-        write operation under the alias same as the database name.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to write to the database.
-            save_config (DBSaveConfig): The save configuration.
-
-        Returns:
-            Error, Result and Metrics in a tuple
-            Tuple[Result (Dict), Metrics (Dict), Error (str)]
-        """
-        try:
-            db_connector_id = save_config["database_id"]
-            # This won't throw an error if the credentials are not found
-            credentials = self._credentials.get("databases", {}).get(db_connector_id)
-
-            if not credentials:
-                self._credentials = _fetch_credentials(self._report_id, self._token)
-                # This will throw an error if the credentials are not found
-                credentials = self._credentials["databases"][db_connector_id]
-        except KeyError as e:
-            raise ValueError(f"Missing required information: {e}")
-
-        try:
-            parsed_credentials = json.loads(credentials["connection_details"])
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing connection details: {e}")
-
-        try:
-            if parsed_credentials.get("connect_using") == "url":
-                connection_string = parsed_credentials["connection_url"]
-            else:
-                connection_string = create_postgres_connection_url(parsed_credentials)
-        except KeyError as e:
-            raise ValueError(f"Missing required database connection detail: {e}")
-
-        # This is unique to the workspace, so no chance of conflict
-        alias = credentials["db_name"]
-
-        try:
-            self._duckdb.attach_postgres(connection_string, alias)
-        except Exception as e:
-            raise RuntimeError(f"Error attaching PostgreSQL database: {e}")
-
-        try:
-            qualified_table_name = f"{save_config['database_name']}.{save_config['schema_name']}.{save_config['table_name']}"
-            result = write_df_to_table(
-                df,
-                self._duckdb.conn,
-                qualified_table_name,
-                save_config["table_is_new"],
-                save_config["write_mode"],
+        # SECOND CASE: path_or_parent_id and source_type provided
+        # source_id is optional for workspace/database (built-in sources)
+        # source_id is required for s3bucket/googledrive (connector-based sources)
+        elif path_or_parent_id is not None and source_type is not None:
+            # Normalize path_or_parent_id: "/" means root level (None for database_parent_id)
+            effective_parent_id = (
+                None if path_or_parent_id == "/" else path_or_parent_id
             )
 
-            if result["error"]:
-                raise RuntimeError(f"Error writing to PostgreSQL: {result['error']}")
-            else:
-                # Compress and encode response
-                output = QueryResult(
-                    data=result["result"],
-                    metadata=QueryResultMetadata(
-                        limit=50,
-                        offset=0,
-                        total_rows=result["rows_written"],
-                        run_date=result["run_date"],
-                        cache_info=None,
-                    ),
+            # Split into 5 categories based on source_type
+            if (
+                source_type == SourceType.workspace
+                or source_type == SourceType.database
+            ):
+                warehouses_and_files = _list_files(
+                    self._report_id,
+                    self._token,
+                    effective_parent_id,
+                    None,
                 )
-                payload = LivedocsResult(output)
-                return payload
-        except Exception as e:
-            raise RuntimeError(f"DBSave Error: {e}")
+                workspace_file_nodes = warehouses_and_files.files
+                database_nodes = warehouses_and_files.schema_nodes
 
-    def _get_signed_url(self, file_id: str) -> str:
-        """
-        Fetches a signed URL from the /v1/manifest endpoint for a file and returns it.
-        It also stores the signed URL in a dictionary for future use.
-
-        Args:
-            file_id (str): The file ID.
-
-        Returns:
-            str: The signed URL.
-        """
-        if file_id in self._file_manifests:
-            return self._file_manifests[file_id]
-        else:
-            manifest = _fetch_file_manifest(
-                file_id, self._report_id, self._token, "read", GCSBucketType.USER_FILES
-            )
-            self._file_manifests[file_id] = manifest["signed_url"]
-            return manifest["signed_url"]
-
-    def _download_file(self, signed_url, file_path):
-        """
-        Downloads a file from the given signed URL and saves it to the specified file path.
-
-        Args:
-            signed_url (str): The signed URL to download the file from.
-            file_path (str): The path to save the downloaded file.
-        """
-        response = requests.get(signed_url)
-        response.raise_for_status()
-        with open(file_path, "wb") as f:
-            f.write(response.content)
-
-    def _get_dataframe_schema(self, df: pl.DataFrame) -> List[Schema]:
-        """
-        Gets the schema of any given Polars DataFrame.
-
-        Args:
-            df (pl.DataFrame): The DataFrame to get the schema from.
-
-        Returns:
-            List[Schema]: The schema as a list of Schema objects.
-        """
-        schema = []
-
-        if isinstance(df, pd.DataFrame):
-            for column in df.columns:
-                dtype = df[column].dtype
-                if pd.api.types.is_numeric_dtype(dtype):
-                    col_type = "NUMBER"
-                elif pd.api.types.is_datetime64_any_dtype(dtype):
-                    col_type = "DATE"
+            elif source_type == SourceType.runtime:
+                # path_or_parent_id is the path in this case
+                # Runtime doesn't use source_id, path is hashed alone
+                runtime_file_nodes = _list_runtime_files_in_path(
+                    path=path_or_parent_id or "",
+                )
+            elif source_type == SourceType.s3bucket:
+                if source_id is None:
+                    # No source_id: list all S3 connectors as root nodes
+                    for connector_info in _get_all_s3_connectors():
+                        s3_nodes.append(
+                            S3DatasourceConnector.connector_info_to_file_node(
+                                connector_info
+                            )
+                        )
                 else:
-                    col_type = "STRING"
+                    # source_id provided: list files in that connector
+                    connector_info = _get_single_s3_connector(source_id)
+                    if connector_info:
+                        s3_connector = S3DatasourceConnector()
+                        s3_nodes = s3_connector.list(
+                            path=path_or_parent_id,
+                            connector_id=source_id,
+                            get_connection_details=_get_s3_connection_details,
+                        )
+                    else:
+                        s3_nodes = []
+            elif source_type == SourceType.googledrive:
+                if source_id is None:
+                    # No source_id: list all Google Drive connectors as root nodes
+                    for connector_info in _get_all_google_drive_connectors():
+                        google_drive_file_nodes.append(
+                            GoogleDriveDatasourceConnector.connector_info_to_file_node(
+                                connector_info
+                            )
+                        )
+                else:
+                    # source_id provided: list files in that connector
+                    connector_info = _get_single_google_drive_connector(source_id)
+                    if not connector_info:
+                        raise ValueError(f"Connector '{source_id}' not found")
 
-                schema.append(
-                    {"name": column, "livedocs_type": col_type, "children": []}
+                    google_drive_connector = GoogleDriveDatasourceConnector()
+                    google_drive_file_nodes = google_drive_connector.list(
+                        path=path_or_parent_id,
+                        connector_id=source_id,
+                        get_connection_details=_get_google_drive_connection_details,
+                        refresh_token_callback=_refresh_google_drive_token,
+                    )
+
+            else:
+                raise ValueError(f"Unsupported source type: {source_type}")
+
+            return {
+                "workspace_files": workspace_file_nodes,
+                "databases": database_nodes,
+                "runtime": runtime_file_nodes,
+                "s3buckets": s3_nodes,
+                "googledrive": google_drive_file_nodes,
+            }
+
+        else:
+            raise ValueError(
+                "Invalid parameters: path_or_parent_id and source_type are required."
+            )
+
+    def search_nodes(
+        self,
+        query: str,
+        source_type: SourceType | None = None,
+        list_files: Callable[
+            [str | None, str | None, str | None, str | None], ListPathResponse
+        ]
+        | None = None,
+        get_all_s3_connectors: Callable[[], list[S3ConnectorInfo]] | None = None,
+        get_all_google_drive_connectors: Callable[[], list[GoogleDriveConnectorInfo]]
+        | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+        max_results: int = 50,
+    ):
+        """
+        Search across datasources.
+
+        When source_type is None, searches ALL sources (files, databases, S3, Google Drive).
+        When source_type is provided, searches only that specific source type.
+
+        Args:
+            query: Search string to match against file/table names (case-insensitive)
+            source_type: Optional - filter to specific source type.
+                         If None, searches ALL sources.
+
+        Returns:
+            Dict with keys: s3buckets, googledrive, runtime, databases, workspace_files
+            Each key contains a list of matching nodes (FileNode or SchemaNode).
+        """
+        if not query or not query.strip():
+            raise ValueError("Search query cannot be empty")
+
+        # Initialize result containers
+        s3_nodes: list[FileNode] = []
+        google_drive_nodes: list[FileNode] = []
+        runtime_nodes: list[FileNode] = []
+        database_nodes: list[SchemaNode] = []
+        workspace_nodes: list[FileNode] = []
+
+        # Determine which sources to search
+        search_all = source_type is None
+
+        if self.sdk_context == SDKContext.IPYTHON:
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+            if not self._report_id:
+                raise ValueError("Report ID not initialized")
+            if not self._token:
+                raise ValueError("Token not initialized")
+            _get_all_s3_connectors = self._credential_store.get_all_s3_connectors
+            _get_all_google_drive_connectors = (
+                self._credential_store.get_all_google_drive_connectors
+            )
+            _list_files = livedocs_internal_list_files
+            _list_runtime_files_in_path = list_runtime_files_in_path
+            _refresh_google_drive_token = self.refresh_google_drive_token
+            _get_google_drive_connection_details = (
+                self.helper_get_google_drive_connection_details
+            )
+            _get_s3_connection_details = self.helper_get_s3_connection_details
+        else:
+            if list_files is None:
+                raise ValueError("list_files is required")
+            if get_all_s3_connectors is None:
+                raise ValueError("get_all_s3_connectors is required")
+            if get_all_google_drive_connectors is None:
+                raise ValueError("get_all_google_drive_connectors is required")
+            if refresh_google_drive_token is None:
+                raise ValueError("refresh_google_drive_token is required")
+
+            _get_all_s3_connectors = get_all_s3_connectors
+            _get_all_google_drive_connectors = get_all_google_drive_connectors
+            _list_files = list_files
+            _refresh_google_drive_token = refresh_google_drive_token
+
+            def _list_runtime_files_in_path(
+                path: str, search_string: str | None = None, max_depth: int = 3
+            ) -> list[FileNode]:
+                return []
+
+            def _get_s3_connection_details(
+                connector_id: str,
+            ) -> tuple[object, dict[str, Any]]:
+                all_connectors = _get_all_s3_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector, dict(connector)
+                return None, {}
+
+            def _get_google_drive_connection_details(
+                connector_id: str,
+            ) -> tuple[object, dict[str, Any]]:
+                all_connectors = _get_all_google_drive_connectors()
+                for connector in all_connectors:
+                    if connector["connector_id"] == connector_id:
+                        return connector, dict(connector)
+                return None, {}
+
+        # Search S3
+        if search_all or source_type == SourceType.s3bucket:
+            for connector_info in _get_all_s3_connectors():
+                s3_connector = S3DatasourceConnector()
+                nodes = s3_connector.search(
+                    search_query=query,
+                    connector_id=connector_info["connector_id"],
+                    get_connection_details=_get_s3_connection_details,
+                    max_results=max_results,
+                )
+                s3_nodes.extend(nodes)
+
+        # Search Google Drive
+        if search_all or source_type == SourceType.googledrive:
+            for connector_info in _get_all_google_drive_connectors():
+                gdrive_connector = GoogleDriveDatasourceConnector()
+                nodes = gdrive_connector.search(
+                    search_query=query,
+                    connector_id=connector_info["connector_id"],
+                    get_connection_details=_get_google_drive_connection_details,
+                    refresh_token_callback=_refresh_google_drive_token,
+                    max_results=max_results,
+                )
+                google_drive_nodes.extend(nodes)
+
+        # Search workspace files and databases (via Core API)
+        if search_all or source_type in (SourceType.workspace, SourceType.database):
+            result = _list_files(self._report_id, self._token, None, query)
+            if search_all or source_type == SourceType.workspace:
+                workspace_nodes = result.files
+            if search_all or source_type == SourceType.database:
+                database_nodes = result.schema_nodes
+
+        # Search runtime files
+        if search_all or source_type == SourceType.runtime:
+            runtime_nodes = _list_runtime_files_in_path(
+                path="", search_string=query, max_depth=3
+            )
+
+        nodes = {
+            "s3buckets": s3_nodes,
+            "googledrive": google_drive_nodes,
+            "runtime": runtime_nodes,
+            "databases": database_nodes,
+            "workspace_files": workspace_nodes,
+        }
+
+        return nodes
+
+    def get_file_url(
+        self,
+        source_type: SourceType,
+        source_id: str | None = None,
+        path: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+    ):
+        """
+        Get a file from the specified connector.
+
+        If file_id is provided, downloads the file using download_file() and returns the local path.
+        Otherwise, returns a download URL (signed URL for S3, download link for Google Drive).
+
+        Args:
+            connector_type: Type of file connector (runtime, s3bucket, or googledrive)
+            file_id: File ID (if provided, file will be downloaded and path returned, ignoring other params)
+            path: Path to the file (required when file_id is not provided)
+            connector_id: Connector ID (required for s3bucket and googledrive when getting URLs)
+
+        Returns:
+            Local file path (if file_id provided) or download URL (if path provided)
+        """
+        # If file_id is provided, use download_file and return the path (ignore everything else)
+        if source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace file operations")
+
+            if not self._credential_store or not self._report_id or not self._token:
+                raise ValueError("Credential store not initialized")
+
+            if self.sdk_context == SDKContext.IPYTHON:
+                manifest_data = livedocs_internal_fetch_file_manifest(
+                    report_id=self._report_id,
+                    token=self._token,
+                    action="read",
+                    bucket=GCSBucketType.USER_FILES,
+                    file_id=source_id,
                 )
 
-        elif isinstance(df, pl.DataFrame):
-            for column in df.columns:
-                dtype = df[column].dtype
-                if isinstance(
-                    dtype,
-                    (
-                        pl.Int8,
-                        pl.Int16,
-                        pl.Int32,
-                        pl.Int64,
-                        pl.UInt8,
-                        pl.UInt16,
-                        pl.UInt32,
-                        pl.UInt64,
-                        pl.Float32,
-                        pl.Float64,
-                    ),
+                return manifest_data.signed_url
+            else:
+                raise ValueError(
+                    "RelayImplementationError: Get file URL in workspace is not supported in relay context"
+                )
+        # If no file_id, return download URL/link based on connector_type
+        if source_type == SourceType.runtime:
+            if self.sdk_context == SDKContext.RELAY:
+                raise ValueError(
+                    "RelayImplementationError: Get file URL in runtime is not supported in relay context"
+                )
+
+            # For runtime, file is already local - just return the path
+            if not path:
+                raise ValueError("path is required for runtime connector type")
+
+            if not os.path.exists(path):
+                raise ValueError(f"File not found: {path}")
+            return path
+
+        # For S3 and Google Drive, we need connector_id and path
+        if not source_id:
+            raise ValueError("connector_id is required for S3 operations")
+        if not path:
+            raise ValueError("path is required for S3 operations")
+
+        if source_type == SourceType.s3bucket:
+            if self.sdk_context == SDKContext.IPYTHON and not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            s3_connector = S3DatasourceConnector()
+            signed_url = s3_connector.get_signed_url(
+                file_path=path,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_s3_connection_details
+                if self.sdk_context == SDKContext.IPYTHON
+                else get_connection_details,
+            )
+            if signed_url is None:
+                raise ValueError(f"Failed to generate signed URL for path: {path}")
+            return signed_url
+
+        elif source_type == SourceType.googledrive:
+            if self.sdk_context == SDKContext.IPYTHON and not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            google_drive_connector = GoogleDriveDatasourceConnector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
+
+            download_url = google_drive_connector.get_signed_url(
+                file_path=path,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_google_drive_connection_details
+                if self.sdk_context == SDKContext.IPYTHON
+                else get_connection_details,
+                refresh_token_callback=refresh_callback,
+            )
+
+            if download_url is None:
+                raise ValueError(f"Failed to get download URL for path: {path}")
+            return download_url
+
+        else:
+            raise ValueError(f"Unsupported source type: {source_type}")
+
+    def upload_runtime_file(
+        self,
+        path: str,
+        destination_type: Literal[
+            SourceType.googledrive, SourceType.s3bucket, SourceType.workspace
+        ],
+        destination_id: str | None = None,
+        destination_path: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+        get_connection_details: Callable[[str], tuple[object, dict[str, Any]]]
+        | None = None,
+    ):
+        """
+        Upload a local file to the specified connector (S3 or Google Drive).
+
+        Args:
+            file_path: Local file path to upload (must exist on filesystem)
+            connector_type: Type of file connector (s3bucket or googledrive)
+            connector_id: Connector ID (required)
+            destination_path: Destination path in the connector. For S3, relative to path_prefix.
+                              For Google Drive, folder path. If None, uses filename and uploads to root.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not os.path.exists(path):
+            raise ValueError(f"Local file not found: {path}")
+
+        match destination_type:
+            case SourceType.s3bucket:
+                if not destination_id:
+                    raise ValueError("destination_id is required for S3 operations")
+
+                if (
+                    self.sdk_context == SDKContext.IPYTHON
+                    and not self._credential_store
                 ):
-                    col_type = "NUMBER"
-                elif isinstance(dtype, (pl.Date, pl.Datetime, pl.Time)):
-                    col_type = "DATE"
-                else:
-                    col_type = "STRING"
+                    raise ValueError("Credential store not initialized")
 
-                schema.append(
-                    {"name": column, "livedocs_type": col_type, "children": []}
+                s3_connector = S3DatasourceConnector()
+                return s3_connector.upload_file_to_s3(
+                    file_path=path,
+                    connector_id=destination_id,
+                    s3_path=destination_path,
+                    get_connection_details=self.helper_get_s3_connection_details
+                    if self.sdk_context == SDKContext.IPYTHON
+                    else get_connection_details,
+                )
+            case SourceType.googledrive:
+                if not destination_id:
+                    raise ValueError(
+                        "destination_id is required for Google Drive operations"
+                    )
+                if (
+                    self.sdk_context == SDKContext.IPYTHON
+                    and not self._credential_store
+                ):
+                    raise ValueError("Credential store not initialized")
+
+                google_drive_connector = GoogleDriveDatasourceConnector()
+                refresh_callback = (
+                    refresh_google_drive_token
+                    if refresh_google_drive_token
+                    else self.refresh_google_drive_token
+                )
+                return google_drive_connector.upload_file_to_googledrive(
+                    file_path=path,
+                    connector_id=destination_id,
+                    drive_path=destination_path,
+                    get_connection_details=self.helper_get_google_drive_connection_details
+                    if self.sdk_context == SDKContext.IPYTHON
+                    else get_connection_details,
+                    refresh_token_callback=refresh_callback,
+                )
+            case SourceType.workspace:
+                raise ValueError(
+                    "RelayImplementationError: Upload runtime file to workspace is not supported in relay context"
+                )
+
+    def delete_file(
+        self,
+        source_type: SourceType,
+        path: str | None = None,
+        source_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+    ):
+        """
+        Delete a file from the specified connector.
+
+        Args:
+            file_path: Path to the file to delete
+            connector_type: Type of file connector (s3bucket, googledrive, or runtime)
+            connector_id: Connector ID (required for s3bucket and googledrive)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if source_type == SourceType.runtime:
+            # Local file system operation
+            if not path:
+                raise ValueError("path is required for runtime connector type")
+
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    return True
+                return False
+            except Exception:
+                return False
+
+        elif source_type == SourceType.s3bucket:
+            if not source_id or not path:
+                raise ValueError("connector_id and path are required for S3 operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            s3_connector = S3DatasourceConnector()
+            return s3_connector.delete_file(
+                file_path=path,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+
+        elif source_type == SourceType.googledrive:
+            if not source_id or not path:
+                raise ValueError(
+                    "connector_id and path are required for Google Drive operations"
+                )
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            google_drive_connector = GoogleDriveDatasourceConnector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
+            return google_drive_connector.delete_file(
+                file_path=path,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=refresh_callback,
+            )
+
+        elif source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace file operations")
+
+            if self.sdk_context == SDKContext.IPYTHON:
+                if not self._credential_store or not self._report_id or not self._token:
+                    raise ValueError("Credential store not initialized")
+
+                return livedocs_internal_file_operation(
+                    report_id=self._report_id,
+                    token=self._token,
+                    file_id=source_id,
+                    action=FileAction.DELETE,
+                )
+            else:
+                raise ValueError(
+                    "RelayImplementationError: Delete file in workspace is not supported in relay context"
                 )
 
         else:
-            raise ValueError("Input must be a pandas DataFrame or a polars DataFrame")
+            raise ValueError(f"Unsupported source type: {source_type}")
 
-        return json.dumps(schema, default=str, separators=(",", ":"))
+    def rename_file(
+        self,
+        source_type: SourceType,
+        new_name: str,
+        path: str | None = None,
+        source_id: str | None = None,
+        refresh_google_drive_token: Callable[
+            [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
+        ]
+        | None = None,
+    ):
+        """
+        Rename a file in the specified connector.
+
+        Args:
+            file_path: Current path to the file
+            new_name: New name for the file (just the filename, not full path)
+            connector_type: Type of file connector (s3bucket, googledrive, or runtime)
+            connector_id: Connector ID (required for s3bucket and googledrive)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if source_type == SourceType.runtime:
+            # Local file system operation
+            if not path:
+                raise ValueError("path is required for runtime connector type")
+
+            try:
+                # Construct new path by replacing the filename
+                parent_path = os.path.dirname(path)
+                if parent_path:
+                    new_path = os.path.join(parent_path, new_name)
+                else:
+                    new_path = new_name
+
+                if os.path.exists(path):
+                    os.rename(path, new_path)
+                    return True
+                return False
+            except Exception:
+                return False
+
+        elif source_type == SourceType.s3bucket:
+            if not source_id or not path:
+                raise ValueError("connector_id and path are required for S3 operations")
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            s3_connector = S3DatasourceConnector()
+            return s3_connector.rename_file(
+                file_path=path,
+                new_name=new_name,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_s3_connection_details,
+            )
+
+        elif source_type == SourceType.googledrive:
+            if not source_id or not path:
+                raise ValueError(
+                    "connector_id and path are required for Google Drive operations"
+                )
+            if not self._credential_store:
+                raise ValueError("Credential store not initialized")
+
+            google_drive_connector = GoogleDriveDatasourceConnector()
+            refresh_callback = (
+                refresh_google_drive_token
+                if refresh_google_drive_token
+                else self.refresh_google_drive_token
+            )
+            return google_drive_connector.rename_file(
+                file_path=path,
+                new_name=new_name,
+                connector_id=source_id,
+                get_connection_details=self.helper_get_google_drive_connection_details,
+                refresh_token_callback=refresh_callback,
+            )
+
+        elif source_type == SourceType.workspace:
+            if not source_id:
+                raise ValueError("source_id is required for workspace file operations")
+
+            if self.sdk_context == SDKContext.IPYTHON:
+                if not self._credential_store or not self._report_id or not self._token:
+                    raise ValueError("Credential store not initialized")
+
+                return livedocs_internal_file_operation(
+                    report_id=self._report_id,
+                    token=self._token,
+                    file_id=source_id,
+                    action=FileAction.RENAME,
+                    new_name=new_name,
+                )
+            else:
+                raise ValueError(
+                    "RelayImplementationError: Rename file in workspace is not supported in relay context"
+                )
+        else:
+            raise ValueError(f"Unsupported source type: {source_type}")
+
+    """
+    #########################################################
+    # HELPER TOP LEVEL FUNCTIONS
+    #########################################################
+    """
+
+    def helper_get_initialized_credentials(self) -> CredentialStore:
+        if not self._credential_store:
+            raise RuntimeError(
+                "Livedocs is not initialized with report_id and token. Call initialize() with report_id and token first."
+            )
+        return self._credential_store
+
+    def helper_get_database_connection(self, connector_id: str) -> DatabaseConnection:
+        store = self.helper_get_initialized_credentials()
+        db = store.get_database(connector_id)
+        if db is None:
+            db = store.refresh().databases.get(connector_id)
+        if db is None:
+            raise ValueError(f"Database connector '{connector_id}' not found")
+        return db
+
+    def helper_get_database_details(
+        self, connector_id: str
+    ) -> tuple[DatabaseConnection, dict[str, str]]:
+        model = self.helper_get_database_connection(connector_id)
+        try:
+            parsed = cast(
+                dict[str, str], json.loads(model.connection_details.get_secret_value())
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing connection details: {e}")
+        return model, parsed
+
+    def helper_get_s3_connection_details(
+        self, connector_id: str
+    ) -> tuple[object, dict[str, Any]]:
+        """Get S3 connector details for use with S3DatasourceConnector."""
+        store = self.helper_get_initialized_credentials()
+        connector_info = store.get_s3_connector(connector_id)
+        if connector_info is None:
+            connector_info = store.refresh().s3_connectors.get(connector_id)
+        if connector_info is None:
+            raise ValueError(f"S3 connector '{connector_id}' not found")
+        # Return tuple matching the expected format: (object, dict)
+        # Convert TypedDict to regular dict for the second element
+        return connector_info, dict(connector_info)
+
+    def refresh_google_drive_token(
+        self, connector_info: GoogleDriveConnectorInfo
+    ) -> GoogleDriveConnectorInfo:
+        """
+        Refresh Google Drive token callback.
+
+        Calls the backend API to refresh the Google Drive token and updates
+        the credential store with the new credentials.
+
+        Args:
+            connector_info: The Google Drive connector info dictionary
+
+        Returns:
+            The updated connector_info dictionary with refreshed tokens
+        """
+        if not self._report_id or not self._token:
+            raise RuntimeError(
+                "Livedocs is not initialized with report_id and token. Call initialize() with report_id and token first."
+            )
+
+        if not self._credential_store:
+            raise RuntimeError("Credential store not initialized")
+
+        CORE_URL = os.getenv("LIVEDOCS_CORE_BASE_URL")
+        if not CORE_URL:
+            raise ValueError("LIVEDOCS_CORE_BASE_URL environment variable not set")
+
+        connector_id = connector_info["connector_id"]
+
+        # Call the refresh endpoint
+        response = requests.post(
+            f"{CORE_URL}/v1/drive-connectors/refresh/{self._report_id}",
+            json={"connector_id": connector_id},
+            headers={"authorization": self._token, "Content-Type": "application/json"},
+        )
+
+        if response.status_code != 200:
+            error_text = response.text
+            raise Exception(
+                f"Failed to refresh Google Drive token. Status code: {response.status_code}, Error: {error_text}"
+            )
+
+        # Parse the response
+        response_data = response.json()
+
+        # Parse token_expiry from ISO string to datetime
+        token_expiry_str = response_data.get("token_expiry")
+        if isinstance(token_expiry_str, str):
+            # Parse ISO format datetime string (handles both 'Z' and timezone offsets)
+            try:
+                # Replace 'Z' with '+00:00' for compatibility with older Python versions
+                token_expiry = datetime.fromisoformat(
+                    token_expiry_str.replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError) as e:
+                raise ValueError(
+                    f"Invalid token_expiry format: {token_expiry_str}"
+                ) from e
+        elif isinstance(token_expiry_str, datetime):
+            token_expiry = token_expiry_str
+        else:
+            raise ValueError(f"Invalid token_expiry format: {token_expiry_str}")
+
+        # Create updated connector info
+        updated_connector_info: GoogleDriveConnectorInfo = {
+            "connector_id": response_data["connector_id"],
+            "name": response_data["name"],
+            "provider": response_data["provider"],
+            "email": response_data["email"],
+            "access_token": response_data["access_token"],
+            "refresh_token": response_data["refresh_token"],
+            "token_expiry": token_expiry,
+            "scopes": response_data["scopes"],
+        }
+
+        # Update the credential store's bundle
+        with self._credential_store._lock:
+            if self._credential_store._bundle:
+                self._credential_store._bundle.google_drive_connectors[connector_id] = (
+                    updated_connector_info
+                )
+
+        return updated_connector_info
+
+    def helper_get_google_drive_connection_details(
+        self, connector_id: str
+    ) -> tuple[object, dict[str, Any]]:
+        """Get Google Drive connector details for use with GoogleDriveDatasourceConnector."""
+        store = self.helper_get_initialized_credentials()
+        connector_info = store.get_google_drive_connector(connector_id)
+        if connector_info is None:
+            connector_info = store.refresh().google_drive_connectors.get(connector_id)
+        if connector_info is None:
+            raise ValueError(f"Google Drive connector '{connector_id}' not found")
+        # Return tuple matching the expected format: (object, dict)
+        # Convert TypedDict to regular dict for the second element
+        return connector_info, dict(connector_info)
+
+    def helper_render_jinja_template(self, text: str, context: dict[str, str]) -> str:
+        """
+        Adds Jinja variables to the given text.
+
+        Args:
+            text (str): The text to process.
+            context (dict[str, str]): The context for Jinja variables.
+
+        Returns:
+            str: The processed text with Jinja variables.
+        """
+        template = self._template_factory(text)
+        return template.render(context)

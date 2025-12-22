@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      DEPLOY_ENV: ${{ github.ref_name == 'main' && 'PRODUCTION' || 'STAGING' }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Semantic Release
+        id: semantic_release
+        uses: cycjimmy/semantic-release-action@v5
+        with:
+          semantic_version: 25
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Build wheel with release version
+        if: steps.semantic_release.outputs.new_release_published == 'true'
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.semantic_release.outputs.new_release_version }}
+        run: |
+          rm -rf dist
+          uv run --frozen --with build python -m build
+
+      - name: Select branch secrets
+        id: env_secrets
+        if: steps.semantic_release.outputs.new_release_published == 'true'
+        run: |
+          if [[ "${DEPLOY_ENV}" == "PRODUCTION" ]]; then
+            PROJECT_ID='${{ secrets.PRODUCTION_GCP_PROJECT_ID }}'
+            CREDENTIALS_JSON='${{ secrets.PRODUCTION_RELEASE_MANAGER_CREDENTIALS }}'
+            GAR_LOCATION='${{ secrets.PRODUCTION_PY_RELEASES_LOCATION }}'
+            GAR_REPOSITORY='${{ secrets.PRODUCTION_PY_RELEASES_REPO }}'
+          else
+            PROJECT_ID='${{ secrets.STAGING_GCP_PROJECT_ID }}'
+            CREDENTIALS_JSON='${{ secrets.STAGING_RELEASE_MANAGER_CREDENTIALS }}'
+            GAR_LOCATION='${{ secrets.STAGING_PY_RELEASES_LOCATION }}'
+            GAR_REPOSITORY='${{ secrets.STAGING_PY_RELEASES_REPO }}'
+          fi
+
+          {
+            echo "GCP_PROJECT_ID=${PROJECT_ID}"
+            echo "GAR_LOCATION=${GAR_LOCATION}"
+            echo "GAR_REPOSITORY=${GAR_REPOSITORY}"
+            echo "GCP_RELEASE_MANAGER_KEY<<EOF"
+            printf '%s\n' "${CREDENTIALS_JSON}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        if: steps.semantic_release.outputs.new_release_published == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ steps.env_secrets.outputs.GCP_RELEASE_MANAGER_KEY }}
+
+      - name: Set up Cloud SDK
+        if: steps.semantic_release.outputs.new_release_published == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ steps.env_secrets.outputs.GCP_PROJECT_ID }}
+
+      - name: Upload wheel to Artifact Registry
+        if: steps.semantic_release.outputs.new_release_published == 'true'
+        env:
+          GAR_UPLOAD_URL: https://${{ steps.env_secrets.outputs.GAR_LOCATION }}-python.pkg.dev/${{ steps.env_secrets.outputs.GCP_PROJECT_ID }}/${{ steps.env_secrets.outputs.GAR_REPOSITORY }}/
+        run: |
+          ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          uv run --frozen --with twine python -m twine upload \
+            --repository-url "${GAR_UPLOAD_URL}" \
+            --username "oauth2accesstoken" \
+            --password "${ACCESS_TOKEN}" \
+            dist/*
+
+      - name: Attach wheel to GitHub release
+        if: steps.semantic_release.outputs.new_release_published == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.semantic_release.outputs.new_release_version }}
+          files: dist/*.whl
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
