@@ -455,6 +455,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information in datasource: {e}")
         except Exception as e:
+            middleman_debug("ERROR in Google Drive read:", e, "error")
             raise RuntimeError(
                 sanitize_sensitive_data(
                     f"An error occurred while querying the Google Drive file: {e}"
@@ -480,7 +481,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         """
         result = QueryResult(
             data=pl.DataFrame(),
-            metadata=QueryResultMetadata(),  # type: ignore[typeddict-item]
+            metadata=QueryResultMetadata(),
         )
         return LivedocsResult(result)
 
@@ -494,7 +495,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             [GoogleDriveConnectorInfo], GoogleDriveConnectorInfo
         ]
         | None = None,
-        max_depth: int = 2,
     ) -> List[FileNode]:
         """
         List files and directories in Google Drive at the given path.
@@ -507,7 +507,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 Receives GoogleDriveConnectorInfo and returns updated one.
 
         Returns:
-            List of FileNode objects representing files and directories
+            List of FileNode objects representing immediate children at the path
         """
         if connector_id is None or path is None or get_connection_details is None:
             return []
@@ -538,30 +538,20 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
 
             # Convert path to folder ID
             folder_id = self._get_folder_id_from_path(service, normalized_path)
+            # List immediate children of the folder (non-recursive)
+            query = f"'{folder_id}' in parents and trashed=false"
 
-            file_list: list[dict[str, Any]] = []
-
-            def bfs_collect(start_id: str, depth: int):
-                if depth > max_depth:
-                    return
-                query = f"'{start_id}' in parents and trashed=false"
-                results = (
-                    service.files()
-                    .list(
-                        q=query,
-                        fields="files(id, name, mimeType, modifiedTime, createdTime, size)",
-                        pageSize=1000,
-                    )
-                    .execute()
+            results = (
+                service.files()
+                .list(
+                    q=query,
+                    fields="files(id, name, mimeType, modifiedTime, createdTime, size)",
+                    pageSize=1000,
                 )
-                files = results.get("files", [])
-                file_list.extend(files)
-                if depth < max_depth:
-                    for it in files:
-                        if it.get("mimeType") == "application/vnd.google-apps.folder":
-                            bfs_collect(it["id"], depth + 1)
+                .execute()
+            )
 
-            bfs_collect(folder_id, 0)
+            file_list = results.get("files", [])
 
             for file_item in file_list:
                 title = file_item.get("name", "")
@@ -580,8 +570,6 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 # Skip if this is the listing path itself (a directory with same name)
                 if relative_path == normalized_path and is_directory:
                     continue
-
-                parent_path = self._get_parent_path(relative_path)
 
                 # Generate deterministic UUIDs using Google Drive's file ID for uniqueness
                 # This ensures files with the same name get different IDs
@@ -659,6 +647,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 )
 
         except Exception as e:
+            middleman_debug("ERROR in Google Drive list:", e, "error")
             # On error, return nodes found so far with error health status
             error_health = MountHealth(
                 status=MountHealthStatus.error,
@@ -869,6 +858,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                     break
 
         except Exception as e:
+            middleman_debug("ERROR in Google Drive search:", e, "error")
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
