@@ -153,7 +153,7 @@ def get_query_for_datasource(
         ValueError: If required datasource information is missing or invalid
     """
     # Determine limit clause for query. Default to 100,000 if no limit is specified.
-    limit_clause = f" LIMIT {limit}" if limit is not None else "LIMIT 100000"
+    limit_clause = f" LIMIT {limit}" if limit is not None else " LIMIT 100000"
     supported_exts = get_duckdb_supported_file_extensions()
 
     match datasource["source_type"]:

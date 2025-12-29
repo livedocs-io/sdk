@@ -817,7 +817,7 @@ class Livedocs:
         # Generate query with file_path and get_database_details for Snowflake
         query = get_query_for_datasource(
             datasource,
-            limit,
+            None,
             file_path=file_path,
             get_database_details=_get_database_details,
         )
