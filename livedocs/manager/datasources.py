@@ -139,17 +139,23 @@ class DatasourceManager:
             status=CacheStatus.MISS,
         )
 
+        # Prepare kwargs for datasource-specific dependencies
+        source_type = ElementDatasourceType(datasource["source_type"])
+
+        # Skip caching for dataframe datasources - the underlying dataframe content
+        # can change when upstream cells re-run, but the cache key (based on query
+        # and datasource config) would remain the same, causing stale cache hits.
+        # Since dataframes are already in-memory, DuckDB queries are fast anyway.
+        should_cache = use_cache and source_type != ElementDatasourceType.dataframe
+
         # Handle caching if enabled
-        if use_cache and query_cache is not None:
+        if should_cache and query_cache is not None:
             cache_info["id"] = query_cache.generate_cache_id(query, datasource)
             cache_result = query_cache.get(query, datasource)
             if cache_result is not None and not cache_result[0].is_empty():
                 cache_info["status"] = CacheStatus.HIT
                 # Return cached result with cache info
                 return (*cache_result, cache_info)
-
-        # Prepare kwargs for datasource-specific dependencies
-        source_type = ElementDatasourceType(datasource["source_type"])
 
         # Handle dataframe registration if needed
         if source_type == ElementDatasourceType.dataframe:
@@ -195,7 +201,7 @@ class DatasourceManager:
             result = (result_df, schema_dict)
 
         # Cache the result if caching is enabled (cache only df and schema, not cache_info)
-        if use_cache and query_cache is not None:
+        if should_cache and query_cache is not None:
             # Cache expects (df, schema) tuple, not (df, schema, cache_info)
             query_cache.set(query, datasource, (result[0], result[1]))
 
