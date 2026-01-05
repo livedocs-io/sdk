@@ -159,9 +159,9 @@ class DatabricksConnectionCredentials(BaseModel):
         if v == "localhost":
             return v
 
-        # Valid hostname pattern: alphanumeric, dots, hyphens, underscores
-        # Must start and end with alphanumeric
-        hostname_pattern = r"^[a-zA-Z0-9]([a-zA-Z0-9\-_.]{0,61}[a-zA-Z0-9])?$"
+        # Valid FQDN pattern: each label 1-63 chars, alphanumeric with hyphens (not at start/end)
+        # Total length up to 253 chars. Supports multi-part hostnames like cloud provider URLs.
+        hostname_pattern = r"^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
 
         # IPv4 pattern
         ipv4_pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
