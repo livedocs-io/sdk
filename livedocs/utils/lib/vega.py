@@ -1139,7 +1139,7 @@ def main_chart(
                     )
                 )
 
-                points = lines.mark_point().transform_filter(nearest)
+                points = lines.mark_point(size=100).transform_filter(nearest)
 
                 rules = (
                     alt.Chart(df)
