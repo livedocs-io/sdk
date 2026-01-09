@@ -1091,7 +1091,7 @@ def main_chart(
                     )
                 ).add_params(select)
 
-                points = lines.mark_point().transform_filter(nearest)
+                points = lines.mark_point(size=100).transform_filter(nearest)
 
                 ## Making tooltip for multiple categories
                 if y_aggregate != "none":
