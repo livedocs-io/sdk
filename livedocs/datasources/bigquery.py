@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import UUID
+
+# Rate limiting for BigQuery API calls
+_BQ_RATE_LIMIT_CALLS_PER_SECOND = 50  # Conservative limit (API allows ~100)
+_BQ_RATE_LIMIT_DELAY = 1.0 / _BQ_RATE_LIMIT_CALLS_PER_SECOND
+
+# Query timeout in seconds
+_BQ_QUERY_TIMEOUT_SECONDS = 300  # 5 minutes
 
 import polars as pl
 from google.cloud import bigquery
@@ -221,10 +229,41 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                 credentials=credentials, project=connection_details.project_id
             )
 
-            query_job = client.query(query)
-            schema = query_job.result().schema
+            # Configure query with timeout
+            job_config = bigquery.QueryJobConfig(
+                use_legacy_sql=False,
+            )
+            query_job = client.query(query, job_config=job_config)
+
+            # Wait for results with timeout
+            result = query_job.result(timeout=_BQ_QUERY_TIMEOUT_SECONDS)
+            schema = result.schema
             df_pointer = query_job.to_dataframe(create_bqstorage_client=True)
+
+            # Convert unsupported types (BIGNUMERIC/Int256) to string before Polars conversion
+            # Polars doesn't support Int256, which BigQuery uses for BIGNUMERIC
+            for col in df_pointer.columns:
+                if df_pointer[col].dtype.name == "object":
+                    # Check if it's a Decimal type (BIGNUMERIC comes as Decimal)
+                    try:
+                        from decimal import Decimal
+
+                        if len(df_pointer[col]) > 0 and isinstance(
+                            df_pointer[col].iloc[0], Decimal
+                        ):
+                            df_pointer[col] = df_pointer[col].astype(str)
+                    except Exception:
+                        pass
+                # Handle pyarrow-backed Int256 types
+                dtype_str = str(df_pointer[col].dtype)
+                if "int256" in dtype_str.lower() or "Int256" in dtype_str:
+                    df_pointer[col] = df_pointer[col].astype(str)
+
             df_polars = pl.from_pandas(df_pointer)
+        except TimeoutError:
+            raise RuntimeError(
+                f"Query timed out after {_BQ_QUERY_TIMEOUT_SECONDS} seconds"
+            )
         except Exception as e:
             raise RuntimeError(sanitize_sensitive_data(f"Error querying BigQuery: {e}"))
 
@@ -659,31 +698,38 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         client = bigquery.Client(credentials=credentials, project=project_id)
 
         try:
-            # Get all datasets
-            datasets_query = f"SELECT schema_name, location FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`;"
-            datasets_job = client.query(datasets_query)
-            bq_dataset_rows = datasets_job.result()
+            # Use Python API instead of INFORMATION_SCHEMA queries
+            # (INFORMATION_SCHEMA requires project-level permissions that may not be granted)
+            dataset_node_info_map: dict[str, dict[str, Any]] = {}
+            _last_api_call_time = 0.0
 
-            if not bq_dataset_rows:
+            # Get all datasets using the API
+            datasets = list(client.list_datasets())
+
+            if not datasets:
                 return nodes
 
-            # Create dataset nodes and map dataset names to their node IDs
-            dataset_node_info_map: dict[str, dict[str, Any]] = {}
+            # Create dataset nodes
+            for dataset_ref in datasets:
+                schema_name = dataset_ref.dataset_id
 
-            for ds_row in bq_dataset_rows:
-                schema_name = ds_row.schema_name
-                location = ds_row.location
+                # Rate limiting for get_dataset call
+                elapsed = time.time() - _last_api_call_time
+                if elapsed < _BQ_RATE_LIMIT_DELAY:
+                    time.sleep(_BQ_RATE_LIMIT_DELAY - elapsed)
+                _last_api_call_time = time.time()
 
-                # Get dataset metadata
+                # Get full dataset metadata
                 description = f"Dataset: {schema_name}"
+                location = "US"  # Default location
                 try:
-                    dataset = client.dataset(schema_name)
-                    metadata = dataset.get_metadata()
+                    dataset = client.get_dataset(dataset_ref.reference)
+                    location = dataset.location or "US"
                     description = (
-                        metadata.description or metadata.friendly_name or description
+                        dataset.description or dataset.friendly_name or description
                     )
                 except Exception:
-                    pass  # Use default description if metadata fetch fails
+                    pass  # Use defaults if metadata fetch fails
 
                 dataset_node_id = uuid.uuid4()
                 dataset_path = f"{project_path}/{schema_name}"
@@ -710,146 +756,92 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                     "location": location,
                 }
 
-            # Group datasets by region for regional INFORMATION_SCHEMA calls
-            unique_regions = list(
-                set(
-                    ds_row.location
-                    for ds_row in client.query(
-                        f"SELECT DISTINCT location FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`;"
-                    ).result()
-                )
-            )
-
-            all_table_rows: list[dict[str, Any]] = []
-            all_column_rows: list[dict[str, Any]] = []
-
-            for region in unique_regions:
-                # Get datasets in this region
-                datasets_in_region_query = f"""
-                    SELECT schema_name
-                    FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`
-                    WHERE location = '{region}';
-                """
-                datasets_in_region = [
-                    row.schema_name
-                    for row in client.query(datasets_in_region_query).result()
-                ]
-
-                if not datasets_in_region:
-                    continue
-
-                dataset_filter = ", ".join(f"'{ds}'" for ds in datasets_in_region)
-
-                # Fetch TABLES for the region
-                tables_query = f"""
-                    SELECT table_catalog, table_schema, table_name, table_type
-                    FROM `region-{region}.INFORMATION_SCHEMA.TABLES`
-                    WHERE table_schema IN ({dataset_filter});
-                """
-                regional_table_rows = client.query(tables_query).result()
-                for row in regional_table_rows:
-                    all_table_rows.append(
-                        {
-                            "table_catalog": row.table_catalog,
-                            "table_schema": row.table_schema,
-                            "table_name": row.table_name,
-                            "table_type": row.table_type,
-                        }
-                    )
-
-                # Fetch COLUMNS for the region
-                columns_query = f"""
-                    SELECT table_catalog, table_schema, table_name, column_name, ordinal_position, data_type
-                    FROM `region-{region}.INFORMATION_SCHEMA.COLUMNS`
-                    WHERE table_schema IN ({dataset_filter})
-                    ORDER BY table_schema, table_name, ordinal_position;
-                """
-                regional_column_rows = client.query(columns_query).result()
-                for row in regional_column_rows:
-                    all_column_rows.append(
-                        {
-                            "table_catalog": row.table_catalog,
-                            "table_schema": row.table_schema,
-                            "table_name": row.table_name,
-                            "column_name": row.column_name,
-                            "ordinal_position": row.ordinal_position,
-                            "data_type": row.data_type,
-                        }
-                    )
-
-            # Process all fetched table and column rows
+            # Get tables for each dataset using the API
             table_node_data_map: dict[str, dict[str, Any]] = {}
 
-            # Create Table/View Nodes (Level 2)
-            for table_row in all_table_rows:
-                dataset_info = dataset_node_info_map.get(table_row["table_schema"])
-                if not dataset_info:
-                    continue
+            for schema_name, dataset_info in dataset_node_info_map.items():
+                # Rate limiting for list_tables call
+                elapsed = time.time() - _last_api_call_time
+                if elapsed < _BQ_RATE_LIMIT_DELAY:
+                    time.sleep(_BQ_RATE_LIMIT_DELAY - elapsed)
+                _last_api_call_time = time.time()
 
-                table_node_id = uuid.uuid4()
-                table_path = f"{dataset_info['path']}/{table_row['table_name']}"
-                node_type = (
-                    SchemaNodeType.VIEW
-                    if table_row["table_type"] in ("VIEW", "MATERIALIZED VIEW")
-                    else SchemaNodeType.TABLE
-                )
+                try:
+                    tables = list(client.list_tables(schema_name))
+                except Exception:
+                    continue  # Skip datasets we can't list tables for
 
-                nodes.append(
-                    SchemaNode(
-                        id=table_node_id,
-                        connector_id=UUID(connector_id),
-                        parent_id=dataset_info["id"],
-                        path=table_path,
-                        type=node_type,
-                        name=table_row["table_name"],
-                        data_type=None,
-                        livedocs_type=None,
-                        description=f"{node_type.value}: {table_row['table_name']}",
-                        level=2,
-                        metadata={
-                            "table_type": table_row["table_type"],
-                            "location": dataset_info["location"],
-                            "database_type": "bigquery",
-                            "schema_name": table_row["table_schema"],
-                            "database_name": project_id,
-                        },
-                        created_at=now,
-                        updated_at=now,
+                for table_ref in tables:
+                    table_node_id = uuid.uuid4()
+                    table_path = f"{dataset_info['path']}/{table_ref.table_id}"
+                    table_type = table_ref.table_type or "TABLE"
+                    node_type = (
+                        SchemaNodeType.VIEW
+                        if table_type in ("VIEW", "MATERIALIZED_VIEW")
+                        else SchemaNodeType.TABLE
                     )
-                )
-                table_node_data_map[
-                    f"{table_row['table_schema']}.{table_row['table_name']}"
-                ] = {
-                    "id": table_node_id,
-                    "path": table_path,
-                    "parentId": dataset_info["id"],
-                }
 
-            # Create Column Nodes (Level 3)
-            for col_row in all_column_rows:
-                table_key = f"{col_row['table_schema']}.{col_row['table_name']}"
-                table_node_info = table_node_data_map.get(table_key)
-
-                if not table_node_info:
-                    continue
-
-                nodes.append(
-                    SchemaNode(
-                        id=uuid.uuid4(),
-                        connector_id=UUID(connector_id),
-                        parent_id=table_node_info["id"],
-                        path=f"{table_node_info['path']}/{col_row['column_name']}",
-                        type=SchemaNodeType.COLUMN,
-                        name=col_row["column_name"],
-                        data_type=col_row["data_type"],
-                        livedocs_type=self._get_livedocs_type(col_row["data_type"]),
-                        description=None,
-                        level=3,
-                        metadata={},
-                        created_at=now,
-                        updated_at=now,
+                    nodes.append(
+                        SchemaNode(
+                            id=table_node_id,
+                            connector_id=UUID(connector_id),
+                            parent_id=dataset_info["id"],
+                            path=table_path,
+                            type=node_type,
+                            name=table_ref.table_id,
+                            data_type=None,
+                            livedocs_type=None,
+                            description=f"{node_type.value}: {table_ref.table_id}",
+                            level=2,
+                            metadata={
+                                "table_type": table_type,
+                                "location": dataset_info["location"],
+                                "database_type": "bigquery",
+                                "schema_name": schema_name,
+                                "database_name": project_id,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
                     )
-                )
+                    table_node_data_map[f"{schema_name}.{table_ref.table_id}"] = {
+                        "id": table_node_id,
+                        "path": table_path,
+                        "parentId": dataset_info["id"],
+                        "full_table_id": f"{project_id}.{schema_name}.{table_ref.table_id}",
+                    }
+
+            # Get columns for each table using the API
+            for table_key, table_info in table_node_data_map.items():
+                # Rate limiting for get_table call
+                elapsed = time.time() - _last_api_call_time
+                if elapsed < _BQ_RATE_LIMIT_DELAY:
+                    time.sleep(_BQ_RATE_LIMIT_DELAY - elapsed)
+                _last_api_call_time = time.time()
+
+                try:
+                    table = client.get_table(table_info["full_table_id"])
+                except Exception:
+                    continue  # Skip tables we can't get schema for
+
+                for field in table.schema:
+                    nodes.append(
+                        SchemaNode(
+                            id=uuid.uuid4(),
+                            connector_id=UUID(connector_id),
+                            parent_id=table_info["id"],
+                            path=f"{table_info['path']}/{field.name}",
+                            type=SchemaNodeType.COLUMN,
+                            name=field.name,
+                            data_type=field.field_type,
+                            livedocs_type=self._get_livedocs_type(field.field_type),
+                            description=field.description,
+                            level=3,
+                            metadata={},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
 
         except Exception as e:
             raise RuntimeError(
