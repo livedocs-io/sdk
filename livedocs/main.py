@@ -57,10 +57,10 @@ from livedocs.utils.common import (
     _download_file,
     _setup_dirs,
     get_query_for_datasource,
-    middleman_debug,
     serializer,
 )
 from livedocs.utils.lib.cache import QueryCache
+from livedocs.utils.logging import configure_logging
 from livedocs.utils.lib.internals import (
     livedocs_internal_fetch_file_manifest,
     livedocs_internal_file_operation,
@@ -136,6 +136,7 @@ class Livedocs:
         if not client_id_token:
             self._report_id = report_id
             self._token = token
+            self.sdk_context = SDKContext.IPYTHON
             self._credential_store = self._config.credential_store_factory(
                 report_id, token
             )
@@ -154,6 +155,9 @@ class Livedocs:
         else:
             self.is_initialized = True
             self.sdk_context = SDKContext.RELAY
+
+        # Configure logging based on SDK context
+        configure_logging(self.sdk_context)
 
     """
     #########################################################
