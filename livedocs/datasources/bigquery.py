@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from threading import Semaphore
 from typing import Any, Callable
 from uuid import UUID
-
-# Rate limiting for BigQuery API calls
-_BQ_RATE_LIMIT_CALLS_PER_SECOND = 50  # Conservative limit (API allows ~100)
-_BQ_RATE_LIMIT_DELAY = 1.0 / _BQ_RATE_LIMIT_CALLS_PER_SECOND
-
-# Query timeout in seconds
-_BQ_QUERY_TIMEOUT_SECONDS = 300  # 5 minutes
 
 import polars as pl
 from google.cloud import bigquery
@@ -37,6 +33,15 @@ from livedocs.types import (
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+
+logger = logging.getLogger(__name__)
+
+# Rate limiting for BigQuery API calls
+# Google docs: 100 requests/sec per user per method, 300 concurrent requests per user
+_BQ_RATE_LIMIT_CALLS_PER_SECOND = 100
+_BQ_RATE_LIMIT_DELAY = 1.0 / _BQ_RATE_LIMIT_CALLS_PER_SECOND
+_BQ_MAX_CONCURRENT_REQUESTS = 50
+_BQ_QUERY_TIMEOUT_SECONDS = 300  # 5 minutes
 
 
 class BigQueryServiceAccountKey(BaseModel):
@@ -642,6 +647,9 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         """
         Fetch schema information from BigQuery and return as list of schema nodes.
 
+        Uses INFORMATION_SCHEMA queries for fast schema retrieval (single query).
+        Falls back to parallelized API calls if INFORMATION_SCHEMA access is denied.
+
         Args:
             connector_id: The connector ID to use for schema nodes
             connection_details: Dictionary containing connection details
@@ -649,9 +657,6 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
         Returns:
             List of SchemaNode objects
         """
-        nodes: list[SchemaNode] = []
-        now = datetime.now(timezone.utc)
-
         # Validate connection details using Pydantic
         try:
             validated_connection_details = BigQueryConnectionDetails(
@@ -667,7 +672,43 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
 
         project_id = validated_connection_details.project_id
 
-        # Create project node (level 0) - BigQuery uses projects as the top level
+        # Initialize BigQuery client
+        service_account_key = (
+            validated_connection_details.get_parsed_service_account_key()
+        )
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_key.model_dump()
+        )
+        client = bigquery.Client(credentials=credentials, project=project_id)
+
+        # Try parallel API first (faster for large databases), fall back to INFORMATION_SCHEMA
+        try:
+            logger.info(f"Attempting parallel API fetch for {project_id}")
+            return self._get_schema_via_api_parallel(client, connector_id, project_id)
+        except Exception as e:
+            logger.warning(
+                f"Parallel API failed for {project_id}, falling back to INFORMATION_SCHEMA: {e}"
+            )
+            return self._get_schema_via_information_schema(
+                client, connector_id, project_id
+            )
+
+    def _get_schema_via_information_schema(
+        self,
+        client: bigquery.Client,
+        connector_id: str,
+        project_id: str,
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema using INFORMATION_SCHEMA queries (fastest method).
+
+        This requires bigquery.jobs.create permission at project level.
+        If the service account doesn't have this permission, this will raise an exception.
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        # Create project node (level 0)
         project_node_id = uuid.uuid4()
         project_path = project_id
         nodes.append(
@@ -688,51 +729,190 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
             )
         )
 
-        # Initialize BigQuery client
-        service_account_key = (
-            validated_connection_details.get_parsed_service_account_key()
+        # Get all datasets first to know which regions to query
+        datasets = list(client.list_datasets())
+        if not datasets:
+            return nodes
+
+        # Query INFORMATION_SCHEMA for each dataset
+        # (BigQuery INFORMATION_SCHEMA is per-dataset, not project-wide)
+        for dataset_ref in datasets:
+            dataset_id = dataset_ref.dataset_id
+
+            # Create dataset node
+            dataset_node_id = uuid.uuid4()
+            dataset_path = f"{project_path}/{dataset_id}"
+
+            nodes.append(
+                SchemaNode(
+                    id=dataset_node_id,
+                    connector_id=UUID(connector_id),
+                    parent_id=project_node_id,
+                    path=dataset_path,
+                    type=SchemaNodeType.SCHEMA,
+                    name=dataset_id,
+                    data_type=None,
+                    livedocs_type=None,
+                    description=f"Dataset: {dataset_id}",
+                    level=1,
+                    metadata={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+            # Query tables and columns from INFORMATION_SCHEMA
+            # This single query gets all tables and columns for the dataset
+            query = f"""
+                SELECT
+                    t.table_name,
+                    t.table_type,
+                    c.column_name,
+                    c.data_type,
+                    c.is_nullable,
+                    c.ordinal_position
+                FROM `{project_id}.{dataset_id}.INFORMATION_SCHEMA.TABLES` t
+                LEFT JOIN `{project_id}.{dataset_id}.INFORMATION_SCHEMA.COLUMNS` c
+                    ON t.table_name = c.table_name
+                ORDER BY t.table_name, c.ordinal_position
+            """
+
+            try:
+                query_job = client.query(query)
+                results = query_job.result(timeout=60)
+
+                current_table: str | None = None
+                current_table_node_id: UUID | None = None
+
+                for row in results:
+                    table_name = row.table_name
+                    table_type = row.table_type
+
+                    # Create table node if we're on a new table
+                    if table_name != current_table:
+                        current_table = table_name
+                        current_table_node_id = uuid.uuid4()
+
+                        table_path = f"{dataset_path}/{table_name}"
+                        node_type = (
+                            SchemaNodeType.VIEW
+                            if table_type in ("VIEW", "MATERIALIZED VIEW")
+                            else SchemaNodeType.TABLE
+                        )
+
+                        nodes.append(
+                            SchemaNode(
+                                id=current_table_node_id,
+                                connector_id=UUID(connector_id),
+                                parent_id=dataset_node_id,
+                                path=table_path,
+                                type=node_type,
+                                name=table_name,
+                                data_type=None,
+                                livedocs_type=None,
+                                description=f"{node_type.value}: {table_name}",
+                                level=2,
+                                metadata={
+                                    "table_type": table_type,
+                                    "database_type": "bigquery",
+                                    "schema_name": dataset_id,
+                                    "database_name": project_id,
+                                },
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
+
+                    # Create column node (if column info exists)
+                    if row.column_name and current_table_node_id:
+                        column_path = f"{dataset_path}/{table_name}/{row.column_name}"
+                        nodes.append(
+                            SchemaNode(
+                                id=uuid.uuid4(),
+                                connector_id=UUID(connector_id),
+                                parent_id=current_table_node_id,
+                                path=column_path,
+                                type=SchemaNodeType.COLUMN,
+                                name=row.column_name,
+                                data_type=row.data_type,
+                                livedocs_type=self._get_livedocs_type(row.data_type),
+                                description=None,
+                                level=3,
+                                metadata={},
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
+
+            except Exception as e:
+                # If query fails for this dataset, raise to trigger fallback
+                raise RuntimeError(
+                    f"INFORMATION_SCHEMA query failed for dataset {dataset_id}: {e}"
+                )
+
+        logger.info(
+            f"INFORMATION_SCHEMA fetch complete: {len(nodes)} nodes for {project_id}"
         )
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_key.model_dump()
+        return nodes
+
+    def _get_schema_via_api_parallel(
+        self,
+        client: bigquery.Client,
+        connector_id: str,
+        project_id: str,
+    ) -> list[SchemaNode]:
+        """
+        Fetch schema using parallelized API calls (fallback method).
+
+        Uses ThreadPoolExecutor to parallelize get_table() calls,
+        which are the main bottleneck in large databases.
+        """
+        nodes: list[SchemaNode] = []
+        now = datetime.now(timezone.utc)
+
+        # Create project node (level 0)
+        project_node_id = uuid.uuid4()
+        project_path = project_id
+        nodes.append(
+            SchemaNode(
+                id=project_node_id,
+                connector_id=UUID(connector_id),
+                parent_id=None,
+                path=project_path,
+                type=SchemaNodeType.DATABASE,
+                name=project_id,
+                data_type=None,
+                livedocs_type=None,
+                description=f"BigQuery Project: {project_id}",
+                level=0,
+                metadata={"database_type": "bigquery"},
+                created_at=now,
+                updated_at=now,
+            )
         )
-        client = bigquery.Client(credentials=credentials, project=project_id)
+
+        # Rate limiting semaphore
+        rate_semaphore = Semaphore(_BQ_MAX_CONCURRENT_REQUESTS)
+
+        def rate_limited_call(func: Callable[[], Any]) -> Any:
+            """Execute a function with rate limiting."""
+            with rate_semaphore:
+                time.sleep(_BQ_RATE_LIMIT_DELAY)
+                return func()
 
         try:
-            # Use Python API instead of INFORMATION_SCHEMA queries
-            # (INFORMATION_SCHEMA requires project-level permissions that may not be granted)
-            dataset_node_info_map: dict[str, dict[str, Any]] = {}
-            _last_api_call_time = 0.0
-
-            # Get all datasets using the API
+            # Get all datasets
             datasets = list(client.list_datasets())
-
             if not datasets:
                 return nodes
 
-            # Create dataset nodes
+            # Create dataset nodes (fast, no parallelization needed)
+            dataset_node_info_map: dict[str, dict[str, Any]] = {}
             for dataset_ref in datasets:
                 schema_name = dataset_ref.dataset_id
-
-                # Rate limiting for get_dataset call
-                elapsed = time.time() - _last_api_call_time
-                if elapsed < _BQ_RATE_LIMIT_DELAY:
-                    time.sleep(_BQ_RATE_LIMIT_DELAY - elapsed)
-                _last_api_call_time = time.time()
-
-                # Get full dataset metadata
-                description = f"Dataset: {schema_name}"
-                location = "US"  # Default location
-                try:
-                    dataset = client.get_dataset(dataset_ref.reference)
-                    location = dataset.location or "US"
-                    description = (
-                        dataset.description or dataset.friendly_name or description
-                    )
-                except Exception:
-                    pass  # Use defaults if metadata fetch fails
-
                 dataset_node_id = uuid.uuid4()
                 dataset_path = f"{project_path}/{schema_name}"
+
                 nodes.append(
                     SchemaNode(
                         id=dataset_node_id,
@@ -743,9 +923,9 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                         name=schema_name,
                         data_type=None,
                         livedocs_type=None,
-                        description=description,
+                        description=f"Dataset: {schema_name}",
                         level=1,
-                        metadata={"location": location},
+                        metadata={},
                         created_at=now,
                         updated_at=now,
                     )
@@ -753,95 +933,117 @@ class BigQueryDatasourceConnector(BaseDatasourceConnector):
                 dataset_node_info_map[schema_name] = {
                     "id": dataset_node_id,
                     "path": dataset_path,
-                    "location": location,
                 }
 
-            # Get tables for each dataset using the API
-            table_node_data_map: dict[str, dict[str, Any]] = {}
+            # Collect all tables across all datasets
+            table_refs: list[tuple[str, Any, dict[str, Any]]] = []
 
             for schema_name, dataset_info in dataset_node_info_map.items():
-                # Rate limiting for list_tables call
-                elapsed = time.time() - _last_api_call_time
-                if elapsed < _BQ_RATE_LIMIT_DELAY:
-                    time.sleep(_BQ_RATE_LIMIT_DELAY - elapsed)
-                _last_api_call_time = time.time()
-
                 try:
-                    tables = list(client.list_tables(schema_name))
+                    tables = list(
+                        rate_limited_call(lambda sn=schema_name: client.list_tables(sn))
+                    )
+                    for table_ref in tables:
+                        table_refs.append((schema_name, table_ref, dataset_info))
                 except Exception:
-                    continue  # Skip datasets we can't list tables for
+                    continue
 
-                for table_ref in tables:
-                    table_node_id = uuid.uuid4()
-                    table_path = f"{dataset_info['path']}/{table_ref.table_id}"
-                    table_type = table_ref.table_type or "TABLE"
-                    node_type = (
-                        SchemaNodeType.VIEW
-                        if table_type in ("VIEW", "MATERIALIZED_VIEW")
-                        else SchemaNodeType.TABLE
-                    )
+            # Create table nodes and prepare for parallel column fetch
+            table_node_data_list: list[dict[str, Any]] = []
 
-                    nodes.append(
-                        SchemaNode(
-                            id=table_node_id,
-                            connector_id=UUID(connector_id),
-                            parent_id=dataset_info["id"],
-                            path=table_path,
-                            type=node_type,
-                            name=table_ref.table_id,
-                            data_type=None,
-                            livedocs_type=None,
-                            description=f"{node_type.value}: {table_ref.table_id}",
-                            level=2,
-                            metadata={
-                                "table_type": table_type,
-                                "location": dataset_info["location"],
-                                "database_type": "bigquery",
-                                "schema_name": schema_name,
-                                "database_name": project_id,
-                            },
-                            created_at=now,
-                            updated_at=now,
-                        )
+            for schema_name, table_ref, dataset_info in table_refs:
+                table_node_id = uuid.uuid4()
+                table_path = f"{dataset_info['path']}/{table_ref.table_id}"
+                table_type = table_ref.table_type or "TABLE"
+                node_type = (
+                    SchemaNodeType.VIEW
+                    if table_type in ("VIEW", "MATERIALIZED_VIEW")
+                    else SchemaNodeType.TABLE
+                )
+
+                nodes.append(
+                    SchemaNode(
+                        id=table_node_id,
+                        connector_id=UUID(connector_id),
+                        parent_id=dataset_info["id"],
+                        path=table_path,
+                        type=node_type,
+                        name=table_ref.table_id,
+                        data_type=None,
+                        livedocs_type=None,
+                        description=f"{node_type.value}: {table_ref.table_id}",
+                        level=2,
+                        metadata={
+                            "table_type": table_type,
+                            "database_type": "bigquery",
+                            "schema_name": schema_name,
+                            "database_name": project_id,
+                        },
+                        created_at=now,
+                        updated_at=now,
                     )
-                    table_node_data_map[f"{schema_name}.{table_ref.table_id}"] = {
+                )
+                table_node_data_list.append(
+                    {
                         "id": table_node_id,
                         "path": table_path,
-                        "parentId": dataset_info["id"],
                         "full_table_id": f"{project_id}.{schema_name}.{table_ref.table_id}",
                     }
+                )
 
-            # Get columns for each table using the API
-            for table_key, table_info in table_node_data_map.items():
-                # Rate limiting for get_table call
-                elapsed = time.time() - _last_api_call_time
-                if elapsed < _BQ_RATE_LIMIT_DELAY:
-                    time.sleep(_BQ_RATE_LIMIT_DELAY - elapsed)
-                _last_api_call_time = time.time()
-
+            # Parallel fetch of table schemas (columns) - the main bottleneck
+            def fetch_table_columns(
+                table_info: dict[str, Any],
+            ) -> list[SchemaNode]:
+                """Fetch columns for a single table."""
+                column_nodes: list[SchemaNode] = []
                 try:
-                    table = client.get_table(table_info["full_table_id"])
-                except Exception:
-                    continue  # Skip tables we can't get schema for
-
-                for field in table.schema:
-                    nodes.append(
-                        SchemaNode(
-                            id=uuid.uuid4(),
-                            connector_id=UUID(connector_id),
-                            parent_id=table_info["id"],
-                            path=f"{table_info['path']}/{field.name}",
-                            type=SchemaNodeType.COLUMN,
-                            name=field.name,
-                            data_type=field.field_type,
-                            livedocs_type=self._get_livedocs_type(field.field_type),
-                            description=field.description,
-                            level=3,
-                            metadata={},
-                            created_at=now,
-                            updated_at=now,
-                        )
+                    table = rate_limited_call(
+                        lambda: client.get_table(table_info["full_table_id"])
                     )
+                    for field in table.schema:
+                        column_nodes.append(
+                            SchemaNode(
+                                id=uuid.uuid4(),
+                                connector_id=UUID(connector_id),
+                                parent_id=table_info["id"],
+                                path=f"{table_info['path']}/{field.name}",
+                                type=SchemaNodeType.COLUMN,
+                                name=field.name,
+                                data_type=field.field_type,
+                                livedocs_type=self._get_livedocs_type(field.field_type),
+                                description=field.description,
+                                level=3,
+                                metadata={},
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to fetch columns for {table_info['full_table_id']}: {e}"
+                    )
+                return column_nodes
+
+            # Use ThreadPoolExecutor for parallel column fetching
+            logger.info(
+                f"Fetching columns for {len(table_node_data_list)} tables in parallel"
+            )
+            with ThreadPoolExecutor(
+                max_workers=_BQ_MAX_CONCURRENT_REQUESTS
+            ) as executor:
+                futures = {
+                    executor.submit(fetch_table_columns, table_info): table_info
+                    for table_info in table_node_data_list
+                }
+
+                for future in as_completed(futures):
+                    column_nodes = future.result()
+                    nodes.extend(column_nodes)
+
+            logger.info(
+                f"Parallel API fetch complete: {len(nodes)} nodes for {project_id}"
+            )
 
         except Exception as e:
             raise RuntimeError(
