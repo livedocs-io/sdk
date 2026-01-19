@@ -26,11 +26,13 @@ from livedocs.types import (
 from livedocs.utils.common import (
     _get_dataframe_schema,
     get_xlsx_sheet_names,
-    middleman_debug,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+from livedocs.utils.logging import get_logger
+
+logger = get_logger("s3")
 
 
 class S3DatasourceConnector(BaseDatasourceConnector):
@@ -363,7 +365,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                 )
 
         except Exception as e:
-            middleman_debug("ERROR in S3 search:", e, "error")
+            logger.error(f"ERROR in S3 search: {e}")
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
@@ -473,7 +475,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information in datasource: {e}")
         except Exception as e:
-            middleman_debug("ERROR in S3 read:", e, "error")
+            logger.error(f"ERROR in S3 read: {e}")
             raise RuntimeError(
                 sanitize_sensitive_data(
                     f"An error occurred while querying the S3 file: {e}"
@@ -698,7 +700,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
                     )
                 )
         except Exception as e:
-            middleman_debug("ERROR in S3 list:", e, "error")
+            logger.error(f"ERROR in S3 list: {e}")
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
@@ -789,9 +791,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return local_file_path
 
         except Exception as e:
-            middleman_debug(
-                f"S3 download error for path '{path}'", data=e, level="error"
-            )
+            logger.error(f"S3 download error for path '{path}': {e}")
             return None
 
     def upload_file_to_s3(
@@ -886,9 +886,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            middleman_debug(
-                f"S3 delete error for path '{file_path}'", data=e, level="error"
-            )
+            logger.error(f"S3 delete error for path '{file_path}': {e}")
             return False
 
     def rename_file(
@@ -946,9 +944,7 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            middleman_debug(
-                f"S3 rename error for path '{file_path}'", data=e, level="error"
-            )
+            logger.error(f"S3 rename error for path '{file_path}': {e}")
             return False
 
     def get_signed_url(
