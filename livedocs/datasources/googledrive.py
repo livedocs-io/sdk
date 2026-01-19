@@ -29,11 +29,13 @@ from livedocs.types import (
 from livedocs.utils.common import (
     _get_dataframe_schema,
     get_xlsx_sheet_names,
-    middleman_debug,
 )
 from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
+from livedocs.utils.logging import get_logger
+
+logger = get_logger("googledrive")
 
 
 class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
@@ -167,9 +169,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 try:
                     connector_info = refresh_token_callback(connector_info)
                 except Exception as e:
-                    middleman_debug(
-                        f"Token refresh callback failed: {type(e).__name__}", e, "error"
-                    )
+                    logger.error(f"Token refresh callback failed: {type(e).__name__}: {e}")
 
         return connector_info
 
@@ -455,7 +455,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
         except KeyError as e:
             raise ValueError(f"Missing required information in datasource: {e}")
         except Exception as e:
-            middleman_debug("ERROR in Google Drive read:", e, "error")
+            logger.error(f"ERROR in Google Drive read: {e}")
             raise RuntimeError(
                 sanitize_sensitive_data(
                     f"An error occurred while querying the Google Drive file: {e}"
@@ -647,7 +647,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                 )
 
         except Exception as e:
-            middleman_debug("ERROR in Google Drive list:", e, "error")
+            logger.error(f"ERROR in Google Drive list: {e}")
             # On error, return nodes found so far with error health status
             error_health = MountHealth(
                 status=MountHealthStatus.error,
@@ -862,7 +862,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
                     break
 
         except Exception as e:
-            middleman_debug("ERROR in Google Drive search:", e, "error")
+            logger.error(f"ERROR in Google Drive search: {e}")
             error_health = MountHealth(
                 status=MountHealthStatus.error,
                 last_checked=datetime.now(timezone.utc),
@@ -920,9 +920,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            middleman_debug(
-                f"ERROR in delete_file: {type(e).__name__}: {str(e)}", e, "error"
-            )
+            logger.error(f"ERROR in delete_file: {type(e).__name__}: {str(e)}")
             return False
 
     def rename_file(
@@ -976,7 +974,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            middleman_debug(f"ERROR in rename_file: {type(e).__name__}", e, "error")
+            logger.error(f"ERROR in rename_file: {type(e).__name__}: {e}")
             return False
 
     def upload_file_to_googledrive(
@@ -1046,9 +1044,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return True
 
         except Exception as e:
-            middleman_debug(
-                f"ERROR in upload_file_to_googledrive: {type(e).__name__}", e, "error"
-            )
+            logger.error(f"ERROR in upload_file_to_googledrive: {type(e).__name__}: {e}")
             return False
 
     def download_file(
@@ -1161,9 +1157,7 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return local_file_path
 
         except Exception as e:
-            middleman_debug(
-                f"ERROR in download_file: {type(e).__name__}: {str(e)}", e, "error"
-            )
+            logger.error(f"ERROR in download_file: {type(e).__name__}: {str(e)}")
             return None
 
     def get_signed_url(

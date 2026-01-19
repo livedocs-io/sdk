@@ -20,7 +20,10 @@ from livedocs.types import (
     MountHealth,
     MountHealthStatus,
 )
-from livedocs.utils.common import middleman_debug, get_xlsx_sheet_names
+from livedocs.utils.common import get_xlsx_sheet_names
+from livedocs.utils.logging import get_logger
+
+logger = get_logger("internals")
 
 # Regex patterns for sanitizing sensitive data
 _URI_CREDENTIALS_RE = re.compile(
@@ -395,9 +398,7 @@ def _get_xlsx_sheet_nodes_from_path(
             return []
 
     except Exception as e:
-        middleman_debug(
-            f"Error processing xlsx file at path: {xlsx_path}", e, level="error"
-        )
+        logger.error(f"Error processing xlsx file at path: {xlsx_path}: {e}")
         return []
 
     # Create FileNodes for each sheet

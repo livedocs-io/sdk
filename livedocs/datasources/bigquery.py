@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 import traceback
@@ -19,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Literal
 
 from livedocs.datasources.base import BaseDatasourceConnector
+from livedocs.utils.logging import get_logger
 from livedocs.types import (
     CacheInfo,
     CacheStatus,
@@ -34,7 +34,7 @@ from livedocs.utils.lib.internals import (
     livedocs_internal_sanitize_sensitive_data as sanitize_sensitive_data,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger("bigquery")
 
 # Rate limiting for BigQuery API calls
 # Google docs: 100 requests/sec per user per method, 300 concurrent requests per user
