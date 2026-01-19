@@ -268,7 +268,12 @@ def list_runtime_files_in_path(
                     )
                 relative_path = relative_path.replace("\\", "/")
 
-                matches = search_string is None or search_string.lower() in name.lower()
+                # Treat "*" as "list all" - don't filter by search string
+                matches = (
+                    search_string is None
+                    or search_string.strip() == "*"
+                    or search_string.lower() in name.lower()
+                )
 
                 file_id = _generate_file_id(relative_path)
                 parent_path = _get_parent_path(relative_path)
