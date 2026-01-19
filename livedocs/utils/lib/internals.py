@@ -465,8 +465,7 @@ def livedocs_internal_list_files(
     payload: dict[str, Any] = {}
     if database_parent_id:
         payload["parent_node_id"] = database_parent_id
-    # Treat "*" as "list all" - don't filter by search string
-    if search_string and search_string.strip() != "*":
+    if search_string:
         payload["search_string"] = search_string
 
     # Make POST request with report_id in query string

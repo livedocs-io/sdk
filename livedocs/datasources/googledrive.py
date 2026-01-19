@@ -754,8 +754,12 @@ class GoogleDriveDatasourceConnector(BaseDatasourceConnector):
             return []
 
         # Build Drive query: name contains '<query>' and not trashed
-        escaped = search_query.replace("'", "\\'")
-        drive_query = f"name contains '{escaped}' and trashed = false"
+        # Treat "*" as "list all" - skip name filter
+        if search_query.strip() == "*":
+            drive_query = "trashed = false"
+        else:
+            escaped = search_query.replace("'", "\\'")
+            drive_query = f"name contains '{escaped}' and trashed = false"
 
         nodes: list[FileNode] = []
         page_token: str | None = None
