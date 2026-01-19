@@ -273,7 +273,11 @@ class S3DatasourceConnector(BaseDatasourceConnector):
             else:
                 glob_prefix = f"{bucket_name}"
 
-            pattern = f"{glob_prefix}/**/*{search_query}*"
+            # Treat "*" as "list all" - use pattern that matches all files
+            if search_query.strip() == "*":
+                pattern = f"{glob_prefix}/**/*"
+            else:
+                pattern = f"{glob_prefix}/**/*{search_query}*"
             raw = s3_fs.glob(pattern, detail=True, recursive=True)
 
             items: list[tuple[str, Any]] = []
