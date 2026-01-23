@@ -68,6 +68,7 @@ from livedocs.utils.lib.internals import (
     livedocs_internal_persist_built_in_vars,
 )
 from livedocs.utils.lib.vega import create_vega_spec
+from livedocs.utils.cells.canvas_helpers import serialize_canvas_data
 from livedocs.utils.runtime_fs import (
     list_runtime_files_in_path,
     list_runtime_files_top_level,
@@ -966,6 +967,43 @@ class Livedocs:
             JsonDisplay: Formatted result with main value and comparison data
         """
         result = process_single_value(config, context)
+        return JsonDisplay(result)
+
+    def render_canvas(
+        self,
+        html: str,
+        css: str,
+        js: str,
+        context: dict | None = None,
+    ):
+        """
+        Render a Canvas element with data passed via livedocs.data object.
+
+        Args:
+            html (str): HTML content for the canvas
+            css (str): CSS styles for the canvas
+            js (str): JavaScript code - access data via livedocs.data.variableName
+            context (dict, optional): Context containing variables to pass to JS.
+                DataFrames are converted to list of dicts, etc.
+                Example: livedocs.data.dataframe_1 becomes [{"col": "val"}, ...]
+
+        Returns:
+            JsonDisplay: Canvas render payload with HTML/CSS/JS and serialized data
+        """
+        ctx = context or {}
+
+        # Serialize context values to JSON-compatible format for the frontend
+        # DataFrames → list of dicts, Series → list, etc.
+        serialized_data = serialize_canvas_data(ctx)
+
+        result = {
+            "__livedocs_canvas__": True,
+            "html": html,
+            "css": css,
+            "js": js,
+            "data": serialized_data,  # Data passed to frontend, accessible via livedocs.data
+        }
+
         return JsonDisplay(result)
 
     """
