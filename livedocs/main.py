@@ -145,7 +145,7 @@ class Livedocs:
             self.is_initialized = True
 
             self._secrets = {
-                key: secret for key, secret in bundle.workspace_secrets.items()
+                secret.key: secret for secret in bundle.workspace_secrets.values()
             }
             self._built_in_vars = {
                 key: str(value)
@@ -232,9 +232,6 @@ class Livedocs:
         Returns:
             The secret value or default value if not found
         """
-        if not hasattr(self, "_secrets"):
-            return default_value
-
         if key in self._secrets:
             return self._secrets[key].value.get_secret_value()
 
@@ -245,7 +242,8 @@ class Livedocs:
 
         secret_model = store.get_secret(key)
         if secret_model is None:
-            secret_model = store.refresh().workspace_secrets.get(key)
+            store.refresh()
+            secret_model = store.get_secret(key)
         if secret_model:
             self._secrets[key] = secret_model
             return secret_model.value.get_secret_value()

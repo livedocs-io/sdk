@@ -45,7 +45,10 @@ class CredentialStore:
 
     def get_secret(self, key: str) -> WorkspaceSecret | None:
         bundle = self.load()
-        return bundle.workspace_secrets.get(key)
+        for secret in bundle.workspace_secrets.values():
+            if secret.key == key:
+                return secret
+        return None
 
     def get_database(self, connector_id: str) -> DatabaseConnection | None:
         bundle = self.load()
@@ -88,7 +91,10 @@ class StaticCredentialStore(CredentialStore):
         return self._static_bundle
 
     def get_secret(self, key: str) -> WorkspaceSecret | None:
-        return self._static_bundle.workspace_secrets.get(key)
+        for secret in self._static_bundle.workspace_secrets.values():
+            if secret.key == key:
+                return secret
+        return None
 
     def get_database(self, connector_id: str) -> DatabaseConnection | None:
         return self._static_bundle.databases.get(connector_id)
