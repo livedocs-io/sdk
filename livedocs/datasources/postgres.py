@@ -315,7 +315,17 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         )
 
         if rows:
-            result_df = pl.DataFrame(rows)
+            schema_overrides = self._build_read_schema_overrides(
+                schema_rows, column_names
+            )
+            try:
+                result_df = pl.DataFrame(
+                    rows,
+                    schema_overrides=schema_overrides if schema_overrides else None,
+                    strict=False,
+                )
+            except Exception:
+                result_df = pl.DataFrame(rows, infer_schema_length=None)
             if column_names:
                 result_df = result_df.select(column_names)
         elif column_names:
@@ -437,6 +447,63 @@ class PostgresDatasourceConnector(BaseDatasourceConnector):
         if conversions:
             return df.select(conversions)
         return df
+
+    def _build_read_schema_overrides(
+        self, schema_rows: list[dict[str, Any]], column_names: Sequence[str]
+    ) -> dict[str, pl.DataType]:
+        if not schema_rows or not column_names:
+            return {}
+
+        type_by_name: dict[str, str] = {
+            row["column_name"]: row["data_type"]
+            for row in schema_rows
+            if row.get("column_name") and row.get("data_type")
+        }
+
+        overrides: dict[str, pl.DataType] = {}
+        for column_name in column_names:
+            data_type = type_by_name.get(column_name)
+            if not data_type:
+                continue
+            dtype = self._postgres_to_polars_read_type(data_type)
+            if dtype is not None:
+                overrides[column_name] = dtype
+
+        return overrides
+
+    def _postgres_to_polars_read_type(
+        self, type_name: str
+    ) -> (
+        type[pl.Int64]
+        | type[pl.Float64]
+        | type[pl.Boolean]
+        | type[pl.Utf8]
+        | type[pl.Binary]
+        | type[pl.Object]
+        | None
+    ):
+        type_upper = type_name.upper()
+
+        if "JSON" in type_upper:
+            return pl.Object
+        if "UUID" in type_upper:
+            return pl.Utf8
+        if "BYTEA" in type_upper or "BLOB" in type_upper:
+            return pl.Binary
+        if re.search(
+            r"\b(SMALLINT|INTEGER|BIGINT|INT2|INT4|INT8|INT|SERIAL|BIGSERIAL|SMALLSERIAL)\b",
+            type_upper,
+        ):
+            return pl.Int64
+        if any(
+            keyword in type_upper
+            for keyword in ["NUMERIC", "DECIMAL", "DOUBLE", "REAL", "FLOAT"]
+        ):
+            return pl.Float64
+        if "BOOL" in type_upper:
+            return pl.Boolean
+
+        return None
 
     def _validate_connection_details(
         self, parsed_credentials: dict[str, Any]
