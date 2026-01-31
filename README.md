@@ -55,4 +55,3 @@ To test chart functions directly from the client:
    ```bash
    CORE_BASE_URL=http://localhost:4000 flask --app tests.vega-api run
    ```
-* Tighten wording for external/open-source audiences
