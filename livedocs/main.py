@@ -2,6 +2,7 @@ import base64
 import gzip
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -869,6 +870,95 @@ class Livedocs:
         )
         payload = LivedocsResult(result)
         return payload
+
+    def export_table(
+        self,
+        str_datasource: str,
+        format: str = "csv",
+        dataframe=None,
+        use_cache: bool = True,
+        table_metadata=None,
+    ) -> str:
+        """
+        Export the full DataFrame (with filters/sorts applied) to a CSV or Excel file.
+
+        Args:
+            str_datasource (str): The ElementDataSource struct as a JSON string.
+            format (str): Export format - "csv" or "xlsx". Defaults to "csv".
+            dataframe (optional): A DataFrame used if the datasource type is 'dataframe'.
+            use_cache (bool): Whether to use query cache. Defaults to True.
+            table_metadata (dict, optional): Metadata for table operations (filters/sorts).
+
+        Returns:
+            str: The file path of the exported file.
+        """
+        datasource: ElementDataSource = json.loads(str_datasource)
+
+        # Download file if needed for preview
+        file_path = self._prepare_file_for_query(datasource)
+
+        # Generate query with no row limit
+        query = get_query_for_datasource(
+            datasource,
+            None,
+            file_path=file_path,
+            get_database_details=self.helper_get_database_details,
+        )
+
+        # Prepare kwargs for DatasourceManager
+        source_type = ElementDatasourceType(datasource["source_type"])
+        kwargs: dict[str, Any] = {}
+        if source_type == ElementDatasourceType.file:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["download_file"] = self.download_file
+            if file_path is not None:
+                kwargs["file_path"] = file_path
+        elif source_type == ElementDatasourceType.dataframe:
+            kwargs["duckdb_conn"] = self._duckdb_conn
+            kwargs["dataframe"] = dataframe
+
+        df, schema, cache_info = DatasourceManager.read(
+            query,
+            datasource,
+            self.helper_get_database_details,
+            schema=True,
+            use_cache=use_cache,
+            query_cache=self._query_cache,
+            **kwargs,
+        )
+
+        # Apply table operations (filters/sorts)
+        if table_metadata:
+            if isinstance(table_metadata, str):
+                table_metadata = json.loads(table_metadata)
+            df, _ = apply_table_operations(df, table_metadata)
+
+        # Write to temp file
+        export_dir = "/tmp/livedocs_exports"
+        os.makedirs(export_dir, exist_ok=True)
+        filename = f"{uuid.uuid4()}.{format}"
+        filepath = os.path.join(export_dir, filename)
+
+        # Cast nested/unsupported column types to strings for export.
+        # pl.cast(pl.String) fails for List/Struct, so map_elements is needed.
+        export_df = df
+        for col_name, dtype in zip(df.columns, df.dtypes):
+            if isinstance(dtype, (pl.Struct, pl.List, pl.Array, pl.Object)):
+                export_df = export_df.with_columns(
+                    pl.Series(col_name, [str(v) for v in df[col_name].to_list()])
+                )
+
+        if format == "xlsx":
+            pdf = export_df.to_pandas()
+            # Excel doesn't support timezone-aware datetimes — strip tzinfo
+            for col in pdf.columns:
+                if hasattr(pdf[col], "dt") and getattr(pdf[col].dt, "tz", None) is not None:
+                    pdf[col] = pdf[col].dt.tz_localize(None)
+            pdf.to_excel(filepath, index=False, engine="openpyxl")
+        else:
+            export_df.write_csv(filepath)
+
+        return filepath
 
     def _get_chart_schema(
         self, datasource_str: str, dataframe: pl.DataFrame | None = None
