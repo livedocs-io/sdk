@@ -534,6 +534,68 @@ class TestExportTable(unittest.TestCase):
         self.assertTrue(os.path.exists(export_dir))
         self.assertTrue(os.path.exists(filepath))
 
+    def test_export_with_title_uses_title_as_filename(self):
+        """When title is provided, the exported file should use the title as its name."""
+        df = pl.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+        filepath = self.livedocs.export_table(
+            self._datasource_json(), format="csv", dataframe=df, title="Sales Report"
+        )
+
+        self.assertTrue(filepath.endswith("Sales Report.csv"))
+        self.assertTrue(os.path.exists(filepath))
+
+    def test_export_with_empty_title_uses_uuid(self):
+        """When title is empty string, should fall back to UUID filename."""
+        df = pl.DataFrame({"id": [1]})
+        filepath = self.livedocs.export_table(
+            self._datasource_json(), format="csv", dataframe=df, title=""
+        )
+
+        filename = os.path.basename(filepath)
+        # UUID format: 8-4-4-4-12 hex chars + .csv
+        self.assertRegex(filename, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$')
+
+    def test_export_with_none_title_uses_uuid(self):
+        """When title is None (default), should use UUID filename."""
+        df = pl.DataFrame({"id": [1]})
+        filepath = self.livedocs.export_table(
+            self._datasource_json(), format="csv", dataframe=df, title=None
+        )
+
+        filename = os.path.basename(filepath)
+        self.assertRegex(filename, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$')
+
+    def test_export_title_special_characters_sanitized(self):
+        """Special characters in title should be stripped, keeping alphanumeric, spaces, hyphens, underscores."""
+        df = pl.DataFrame({"id": [1]})
+        filepath = self.livedocs.export_table(
+            self._datasource_json(), format="csv", dataframe=df, title="Q1/Q2 <Sales> Report!@#"
+        )
+
+        filename = os.path.basename(filepath)
+        # Should not contain /, <, >, !, @, #
+        self.assertEqual(filename, "Q1Q2 Sales Report.csv")
+
+    def test_export_title_with_xlsx_format(self):
+        """Title should work with xlsx format too."""
+        df = pl.DataFrame({"id": [1, 2]})
+        filepath = self.livedocs.export_table(
+            self._datasource_json(), format="xlsx", dataframe=df, title="Monthly Data"
+        )
+
+        self.assertTrue(filepath.endswith("Monthly Data.xlsx"))
+        self.assertTrue(os.path.exists(filepath))
+
+    def test_export_title_only_special_chars_falls_back_to_uuid(self):
+        """If title becomes empty after sanitization, fall back to UUID."""
+        df = pl.DataFrame({"id": [1]})
+        filepath = self.livedocs.export_table(
+            self._datasource_json(), format="csv", dataframe=df, title="@#$%^&*()"
+        )
+
+        filename = os.path.basename(filepath)
+        self.assertRegex(filename, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$')
+
 
 if __name__ == "__main__":
     unittest.main()
