@@ -2,6 +2,7 @@ import base64
 import gzip
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -878,6 +879,7 @@ class Livedocs:
         dataframe=None,
         use_cache: bool = True,
         table_metadata=None,
+        title: str | None = None,
     ) -> str:
         """
         Export the full DataFrame (with filters/sorts applied) to a CSV or Excel file.
@@ -936,7 +938,11 @@ class Livedocs:
         # Write to temp file
         export_dir = "/tmp/livedocs_exports"
         os.makedirs(export_dir, exist_ok=True)
-        filename = f"{uuid.uuid4()}.{format}"
+        if title:
+            safe_title = re.sub(r'[^\w\s\-]', '', title).strip()[:100]
+            filename = f"{safe_title}.{format}" if safe_title else f"{uuid.uuid4()}.{format}"
+        else:
+            filename = f"{uuid.uuid4()}.{format}"
         filepath = os.path.join(export_dir, filename)
 
         # Cast nested/unsupported column types to strings for export.
